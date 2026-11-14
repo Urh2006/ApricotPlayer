@@ -6,6 +6,7 @@ use std::ffi::c_void;
 
 use apricot_app::{PlayerControlRole, PlayerScreenModel};
 use windows::Win32::UI::Controls::EM_SETSEL;
+use windows::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
@@ -277,6 +278,21 @@ impl PlayerControls {
             self.surface_visible || self.video_host_shared,
         );
         self.details.show(self.surface_visible && !self.fullscreen);
+    }
+
+    /// Renames a control only while it has no focus, so a countdown in its
+    /// name is read when the focus arrives and never while it changes.
+    pub unsafe fn refresh_unfocused_label(&self, id: &str, label: &str) {
+        let Some(native) = self
+            .controls
+            .iter()
+            .find(|native| native.id == id && native.active)
+        else {
+            return;
+        };
+        if GetFocus() != native.window && window_text(native.window) != label {
+            set_text(native.window, label);
+        }
     }
 
     pub unsafe fn set_visible(&mut self, visible: bool) {

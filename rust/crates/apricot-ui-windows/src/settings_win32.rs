@@ -105,6 +105,8 @@ const VK_F24_CODE: usize = 0x87;
 #[derive(Clone, Debug)]
 enum ControlBinding {
     ReadOnly,
+    /// A field of Settings, Recording, saved to recording.json with Save.
+    RecordingField(String, RecordingFieldKind),
     Text(SettingId),
     Integer {
         setting: SettingId,
@@ -152,8 +154,20 @@ struct BoundControl {
     binding: ControlBinding,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordingFieldKind {
+    Text,
+    Choice,
+    Checkbox,
+}
+
 struct SettingsWindowState {
     application: *mut Application,
+    /// The main window's Radio, IPTV and recording state, for Recording.
+    sources: *mut apricot_shell::sources::SourcesController,
+    sources_environment: Option<apricot_shell::sources::SourcesEnvironment>,
+    /// Recording fields changed since the last Save.
+    recording_draft: apricot_shell::FormValues,
     /// The main window, which applies equalizer changes to a running player.
     owner: HWND,
     section_list: HWND,
@@ -190,7 +204,12 @@ pub unsafe fn register() -> Result<()> {
     Ok(())
 }
 
-pub unsafe fn show(owner: HWND, application: &mut Application) -> Result<Option<&'static str>> {
+pub unsafe fn show(
+    owner: HWND,
+    application: &mut Application,
+    sources: &mut apricot_shell::sources::SourcesController,
+    sources_environment: Option<apricot_shell::sources::SourcesEnvironment>,
+) -> Result<Option<&'static str>> {
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
     let model = application.settings_model(SettingsSection::General);
@@ -219,6 +238,8 @@ pub unsafe fn show(owner: HWND, application: &mut Application) -> Result<Option<
     let initial_focus = state.section_list;
     let mut state = state;
     state.owner = owner;
+    state.sources = std::ptr::from_mut(sources);
+    state.sources_environment = sources_environment;
     let state_pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), state_pointer as isize);
     if let Err(error) = render_controls(window) {
@@ -354,6 +375,9 @@ unsafe fn create_base_controls(
     Ok(SettingsWindowState {
         displayed_language: application.settings().language.clone(),
         application,
+        sources: std::ptr::null_mut(),
+        sources_environment: None,
+        recording_draft: apricot_shell::FormValues::new(),
         owner: HWND::default(),
         section_list,
         save,
@@ -449,6 +473,13 @@ unsafe fn render_controls(window: HWND) -> Result<()> {
         );
     }
     let mut model = (&*state.application).settings_model(state.selected_section);
+    if state.selected_section == SettingsSection::Recording && !state.sources.is_null() {
+        let catalog = settings_catalog(state);
+        model.controls = apricot_shell::recording_settings_controls(
+            (*state.sources).recording_form(&catalog),
+            &state.recording_draft,
+        );
+    }
     if state.selected_section == SettingsSection::Cookies {
         let settings = (&*state.application).settings();
         model.replace_choice_options(
@@ -558,14 +589,56 @@ unsafe fn create_bound_control(
             let control = edit(parent, instance, &value, id, true, false)?;
             (Some(label), control, ControlBinding::ReadOnly)
         }
-        // Only `Shell::settings_screen` shows these (macOS); this window
-        // still opens the recording form with its button.
-        SettingsControl::FieldText { label, .. }
-        | SettingsControl::FieldChoice { label, .. }
-        | SettingsControl::FieldCheckbox { label, .. } => {
+        SettingsControl::FieldText {
+            field,
+            label,
+            value,
+        } => {
             let label = static_label(parent, instance, &label)?;
-            let control = edit(parent, instance, "", id, true, false)?;
-            (Some(label), control, ControlBinding::ReadOnly)
+            let control = edit(parent, instance, &value, id, false, false)?;
+            (
+                Some(label),
+                control,
+                ControlBinding::RecordingField(field, RecordingFieldKind::Text),
+            )
+        }
+        SettingsControl::FieldChoice {
+            field,
+            label,
+            options,
+            selected,
+        } => {
+            let label = static_label(parent, instance, &label)?;
+            let control = create_control(
+                parent,
+                instance,
+                w!("COMBOBOX"),
+                PCWSTR::null(),
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+                WINDOW_EX_STYLE::default(),
+                id,
+            )?;
+            for option in &options {
+                add_combo_string(control, option);
+            }
+            SendMessageW(control, CB_SETCURSEL, Some(WPARAM(selected)), None);
+            (
+                Some(label),
+                control,
+                ControlBinding::RecordingField(field, RecordingFieldKind::Choice),
+            )
+        }
+        SettingsControl::FieldCheckbox {
+            field,
+            label,
+            checked,
+        } => {
+            let control = checkbox(parent, instance, &label, id, checked)?;
+            (
+                None,
+                control,
+                ControlBinding::RecordingField(field, RecordingFieldKind::Checkbox),
+            )
         }
         SettingsControl::Text {
             setting,
@@ -2214,6 +2287,12 @@ unsafe fn save_settings(window: HWND) {
         show_error(window, &error.to_string());
         return;
     }
+    // recording.json first: a rejected field keeps every other change
+    // unsaved, as one Save.
+    if let Err(error) = save_recording_draft(state) {
+        show_error(window, &error);
+        return;
+    }
     if !save_and_register_startup(window, state) {
         return;
     }
@@ -2224,6 +2303,22 @@ unsafe fn save_settings(window: HWND) {
     if (*state.application).settings().language != state.displayed_language {
         rebuild_screen(window);
     }
+}
+
+/// Saves the changed Settings, Recording fields to recording.json.
+unsafe fn save_recording_draft(state: &mut SettingsWindowState) -> std::result::Result<(), String> {
+    if state.recording_draft.is_empty() || state.sources.is_null() {
+        return Ok(());
+    }
+    let Some(environment) = state.sources_environment.clone() else {
+        return Ok(());
+    };
+    let catalog = settings_catalog(state);
+    let form = (*state.sources).recording_form(&catalog);
+    let values = apricot_shell::recording_settings_values(&form, &state.recording_draft)?;
+    (*state.sources).apply_recording_values(&environment, &values)?;
+    state.recording_draft.clear();
+    Ok(())
 }
 
 unsafe fn save_and_register_startup(window: HWND, state: &mut SettingsWindowState) -> bool {
@@ -2363,13 +2458,42 @@ unsafe fn sync_all_controls(
     Ok(())
 }
 
+/// Keeps a Settings, Recording field for Save.
+unsafe fn sync_recording_field(
+    state: &mut SettingsWindowState,
+    control: HWND,
+    field: &str,
+    kind: RecordingFieldKind,
+) {
+    let value = match kind {
+        RecordingFieldKind::Choice => {
+            usize::try_from(SendMessageW(control, CB_GETCURSEL, None, None).0)
+                .ok()
+                .map(apricot_shell::FormValue::Choice)
+        }
+        RecordingFieldKind::Checkbox => Some(apricot_shell::FormValue::Checkbox(
+            checkbox_is_checked(control),
+        )),
+        RecordingFieldKind::Text => Some(apricot_shell::FormValue::Text(window_text(control))),
+    };
+    if let Some(value) = value {
+        state.recording_draft.insert(field.to_owned(), value);
+    }
+}
+
+#[allow(clippy::too_many_lines)] // One arm per binding.
 unsafe fn sync_bound_control(
     state: &mut SettingsWindowState,
     bound: &BoundControl,
 ) -> std::result::Result<(), apricot_app::SettingsControllerError> {
+    if let ControlBinding::RecordingField(field, kind) = &bound.binding {
+        sync_recording_field(state, bound.control, field, *kind);
+        return Ok(());
+    }
     let app = &mut *state.application;
     match &bound.binding {
         ControlBinding::ReadOnly
+        | ControlBinding::RecordingField(..)
         | ControlBinding::Command(_)
         | ControlBinding::ShortcutCategoryList(_)
         | ControlBinding::ShortcutSearch

@@ -1181,6 +1181,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == PLAYBACK_TIMER_ID => {
             poll_playback_runtime(window);
+            refresh_sleep_timer_button(window);
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == sources_ui::TIMER => {
@@ -13247,6 +13248,21 @@ unsafe fn hide_player_details_for_back(window: HWND) -> bool {
     true
 }
 
+/// The Sleep timer button tells the timer's state; it follows the
+/// countdown only while it has no focus.
+unsafe fn refresh_sleep_timer_button(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    if state.view != MainView::Player {
+        return;
+    }
+    let label = state.application.sleep_timer_button_label();
+    state
+        .player_controls
+        .refresh_unfocused_label("sleep_timer", &label);
+}
+
 /// Python `player_back`: on the player page Escape hides the details, then
 /// leaves full screen, and then leaves the player. From the player and its
 /// buttons it returns one screen and continues playback when background
@@ -13262,16 +13278,23 @@ unsafe fn player_back_shortcut(window: HWND) {
         navigate_back(window);
         return;
     }
+    let source_ids = sources_ui::player_source_ids(window);
     let background = state.application.settings().enable_background_playback;
     if background {
         navigate_back_preserving_player(window);
     } else {
         navigate_back(window);
     }
+    // Radio and IPTV lists are dialogs, not routes: the player started from
+    // one goes back to it, over the screen below.
+    if self::state(window).is_some_and(|state| state.view != MainView::Player) {
+        sources_ui::resume_after_player(window, source_ids);
+    }
 }
 
 /// Python `leave_player_to_main_menu`.
 unsafe fn leave_player_to_main_menu(window: HWND, force_keep_playing: bool) {
+    sources_ui::forget_player_return(window);
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -19029,6 +19052,9 @@ unsafe fn announce_unavailable_feature(window: HWND, feature: &str) {
 unsafe fn open_settings(window: HWND) {
     remember_menu_item(window, "settings");
     stop_controlled_repeat(window);
+    // Settings, Recording shows the saved recording choices in place.
+    sources_ui::ensure_loaded(window);
+    let sources_environment = sources_ui::environment(window);
     let spotify_before;
     let settings_result = {
         let Some(state) = state_mut(window) else {
@@ -19040,7 +19066,12 @@ unsafe fn open_settings(window: HWND) {
         spotify_before = state.application.saved_spotify_settings();
         state.settings_open = true;
         state.modal_open = true;
-        crate::settings_win32::show(window, &mut state.application)
+        crate::settings_win32::show(
+            window,
+            &mut state.application,
+            &mut state.source_tools,
+            sources_environment,
+        )
     };
     let Some(state) = state_mut(window) else {
         return;

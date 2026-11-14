@@ -368,46 +368,10 @@ impl Shell {
     /// showing changes that are not saved yet.
     #[must_use]
     pub fn settings_recording_controls(&self) -> Vec<SettingsControl> {
-        let draft = &self.settings_window.recording_draft;
-        self.sources
-            .recording_form(&self.catalog())
-            .fields
-            .into_iter()
-            .filter_map(|field| {
-                let changed = draft.get(&field.id);
-                Some(match field.kind {
-                    FormFieldKind::Choice { options, selected } => SettingsControl::FieldChoice {
-                        selected: changed.and_then(FormValue::choice).unwrap_or(selected),
-                        field: field.id,
-                        label: field.label,
-                        options,
-                    },
-                    FormFieldKind::Checkbox { checked } => SettingsControl::FieldCheckbox {
-                        checked: changed.and_then(FormValue::checked).unwrap_or(checked),
-                        field: field.id,
-                        label: field.label,
-                    },
-                    FormFieldKind::Text { value, .. } | FormFieldKind::File { value, .. } => {
-                        SettingsControl::FieldText {
-                            value: changed
-                                .and_then(FormValue::text)
-                                .map_or(value, str::to_owned),
-                            field: field.id,
-                            label: field.label,
-                        }
-                    }
-                    FormFieldKind::Number { value, .. } => SettingsControl::FieldText {
-                        value: changed.and_then(FormValue::text).map_or_else(
-                            || crate::feature_form::format_number(value),
-                            str::to_owned,
-                        ),
-                        field: field.id,
-                        label: field.label,
-                    },
-                    FormFieldKind::ReadOnly { .. } => return None,
-                })
-            })
-            .collect()
+        recording_settings_controls(
+            self.sources.recording_form(&self.catalog()),
+            &self.settings_window.recording_draft,
+        )
     }
 
     /// Saves changed recording fields; nothing to do without changes.
@@ -416,45 +380,7 @@ impl Shell {
             return Ok(());
         }
         let form = self.sources.recording_form(&self.catalog());
-        let mut values = crate::FormValues::new();
-        for field in &form.fields {
-            let value = self
-                .settings_window
-                .recording_draft
-                .get(&field.id)
-                .cloned()
-                .or_else(|| match &field.kind {
-                    FormFieldKind::Choice { selected, .. } => Some(FormValue::Choice(*selected)),
-                    FormFieldKind::Checkbox { checked } => Some(FormValue::Checkbox(*checked)),
-                    FormFieldKind::Text { value, .. } | FormFieldKind::File { value, .. } => {
-                        Some(FormValue::Text(value.clone()))
-                    }
-                    FormFieldKind::Number { value, .. } => Some(FormValue::Number(*value)),
-                    FormFieldKind::ReadOnly { .. } => None,
-                });
-            if let Some(value) = value {
-                values.insert(field.id.clone(), value);
-            }
-        }
-        // The form's own check names the field and its range.
-        let values = form.validate(&values).map_err(|label| {
-            form.fields
-                .iter()
-                .find(|field| field.label == label)
-                .map_or_else(
-                    || form.invalid_value.replace("{field}", &label),
-                    |field| match field.kind {
-                        FormFieldKind::Number {
-                            minimum, maximum, ..
-                        } => form
-                            .number_range
-                            .replace("{field}", &label)
-                            .replace("{minimum}", &crate::feature_form::format_number(minimum))
-                            .replace("{maximum}", &crate::feature_form::format_number(maximum)),
-                        _ => form.invalid_value.replace("{field}", &label),
-                    },
-                )
-        })?;
+        let values = recording_settings_values(&form, &self.settings_window.recording_draft)?;
         let environment = self.sources_environment();
         self.sources.apply_recording_values(&environment, &values)?;
         self.settings_window.recording_draft.clear();
@@ -1032,6 +958,96 @@ impl Shell {
             self.activate_action(ui, action_id);
         }
     }
+}
+
+/// The fields of the recording defaults form as Settings controls, with
+/// the unsaved changes in `draft` (both native Settings windows).
+#[must_use]
+pub fn recording_settings_controls(
+    form: crate::FeatureForm,
+    draft: &crate::FormValues,
+) -> Vec<SettingsControl> {
+    form.fields
+        .into_iter()
+        .filter_map(|field| {
+            let changed = draft.get(&field.id);
+            Some(match field.kind {
+                FormFieldKind::Choice { options, selected } => SettingsControl::FieldChoice {
+                    selected: changed.and_then(FormValue::choice).unwrap_or(selected),
+                    field: field.id,
+                    label: field.label,
+                    options,
+                },
+                FormFieldKind::Checkbox { checked } => SettingsControl::FieldCheckbox {
+                    checked: changed.and_then(FormValue::checked).unwrap_or(checked),
+                    field: field.id,
+                    label: field.label,
+                },
+                FormFieldKind::Text { value, .. } | FormFieldKind::File { value, .. } => {
+                    SettingsControl::FieldText {
+                        value: changed
+                            .and_then(FormValue::text)
+                            .map_or(value, str::to_owned),
+                        field: field.id,
+                        label: field.label,
+                    }
+                }
+                FormFieldKind::Number { value, .. } => SettingsControl::FieldText {
+                    value: changed
+                        .and_then(FormValue::text)
+                        .map_or_else(|| crate::feature_form::format_number(value), str::to_owned),
+                    field: field.id,
+                    label: field.label,
+                },
+                FormFieldKind::ReadOnly { .. } => return None,
+            })
+        })
+        .collect()
+}
+
+/// The complete values of the recording form with the changes in `draft`,
+/// checked by the form itself.
+///
+/// # Errors
+///
+/// Returns the sentence that names the rejected field and its range.
+pub fn recording_settings_values(
+    form: &crate::FeatureForm,
+    draft: &crate::FormValues,
+) -> Result<crate::FormValues, String> {
+    let mut values = crate::FormValues::new();
+    for field in &form.fields {
+        let value = draft.get(&field.id).cloned().or_else(|| match &field.kind {
+            FormFieldKind::Choice { selected, .. } => Some(FormValue::Choice(*selected)),
+            FormFieldKind::Checkbox { checked } => Some(FormValue::Checkbox(*checked)),
+            FormFieldKind::Text { value, .. } | FormFieldKind::File { value, .. } => {
+                Some(FormValue::Text(value.clone()))
+            }
+            FormFieldKind::Number { value, .. } => Some(FormValue::Number(*value)),
+            FormFieldKind::ReadOnly { .. } => None,
+        });
+        if let Some(value) = value {
+            values.insert(field.id.clone(), value);
+        }
+    }
+    form.validate(&values).map_err(|label| {
+        form.fields
+            .iter()
+            .find(|field| field.label == label)
+            .map_or_else(
+                || form.invalid_value.replace("{field}", &label),
+                |field| match field.kind {
+                    FormFieldKind::Number {
+                        minimum, maximum, ..
+                    } => form
+                        .number_range
+                        .replace("{field}", &label)
+                        .replace("{minimum}", &crate::feature_form::format_number(minimum))
+                        .replace("{maximum}", &crate::feature_form::format_number(maximum)),
+                    _ => form.invalid_value.replace("{field}", &label),
+                },
+            )
+    })
 }
 
 #[cfg(test)]

@@ -62,7 +62,7 @@ impl SourcesUi for Ui {
         unsafe { super::ask_yes_no(self.window, message) }
     }
 }
-unsafe fn environment(window: HWND) -> Option<SourcesEnvironment> {
+pub(super) unsafe fn environment(window: HWND) -> Option<SourcesEnvironment> {
     let state = state(window)?;
     let settings = state.application.settings();
     let directory = state.application.settings_file().parent()?.to_owned();
@@ -112,6 +112,70 @@ pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
         SetTimer(Some(window), TIMER, 50, None);
     }
     handled
+}
+/// The station or channel of the player, before it closes.
+pub(super) unsafe fn player_source_ids(window: HWND) -> (Option<String>, Option<String>) {
+    let Some(state) = state(window) else {
+        return (None, None);
+    };
+    let session = state.application.player_session();
+    let id = |key: &str| {
+        session
+            .current_item()
+            .and_then(|item| item.metadata.get(key))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    (id("radio_station_id"), id("iptv_channel_id"))
+}
+/// One step back from a player started in Radio or IPTV: the list it was
+/// played from, over the screen below. `true` when that list opened.
+pub(super) unsafe fn resume_after_player(
+    window: HWND,
+    (station, channel): (Option<String>, Option<String>),
+) -> bool {
+    let Some(environment) = environment(window) else {
+        return false;
+    };
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    let mut controller = std::mem::take(&mut state.source_tools);
+    let resumed = controller.resume_after_player(
+        &mut Ui { window },
+        &environment,
+        station.as_deref(),
+        channel.as_deref(),
+    );
+    let busy = controller.is_busy();
+    if let Some(state) = state_mut(window) {
+        state.source_tools = controller;
+    }
+    if busy {
+        SetTimer(Some(window), TIMER, 50, None);
+    }
+    resumed
+}
+/// Reads the Radio, IPTV and recording files once, for Settings; a damaged
+/// file is reported as when Radio opens.
+pub(super) unsafe fn ensure_loaded(window: HWND) {
+    let Some(environment) = environment(window) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let mut controller = std::mem::take(&mut state.source_tools);
+    controller.ensure_loaded(&mut Ui { window }, &environment);
+    if let Some(state) = state_mut(window) {
+        state.source_tools = controller;
+    }
+}
+/// The player went to the main menu: nothing to go back to.
+pub(super) unsafe fn forget_player_return(window: HWND) {
+    if let Some(state) = state_mut(window) {
+        state.source_tools.forget_player_return();
+    }
 }
 pub(super) unsafe fn poll(window: HWND) {
     let Some(environment) = environment(window) else {
