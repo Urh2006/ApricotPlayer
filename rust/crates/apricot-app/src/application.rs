@@ -790,6 +790,14 @@ impl Application {
         self.state.favorites.remove_item(item)
     }
 
+    /// 2.1: makes `items` the playing list, as a folder opened with a file.
+    pub fn set_player_sequence_items(&mut self, items: &[MediaItem], item: &MediaItem) {
+        let _ = self
+            .state
+            .player_sequence
+            .set(PlaybackSequenceSource::Collection, items, item);
+    }
+
     pub fn prepare_favorite_playback(&mut self, index: usize) -> Option<MediaItem> {
         let item = self.state.favorites.items().get(index)?.clone();
         if !is_library_collection(&item) {

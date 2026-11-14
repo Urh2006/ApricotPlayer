@@ -134,7 +134,11 @@ impl Shell {
                 }
                 ActivationRequest::OpenFile(path) => {
                     ui.restore();
-                    self.play_local_file(ui, &path);
+                    self.application.record_recent_file(&path);
+                    match crate::file_tools::opened_file_playback(&mut self.application, &path) {
+                        Some(item) => self.start_sequence_media_item(ui, item, None),
+                        None => self.play_local_file(ui, &path),
+                    }
                 }
             }
         }

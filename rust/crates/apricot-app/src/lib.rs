@@ -32,6 +32,7 @@ pub mod playback_sequence;
 pub mod player_information;
 pub mod player_model;
 pub mod player_session;
+pub mod recents;
 pub mod result_columns;
 pub mod rss_feed_controller;
 pub mod search_session;

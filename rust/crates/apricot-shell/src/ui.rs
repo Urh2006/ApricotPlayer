@@ -179,6 +179,27 @@ pub trait ShellUi {
     /// Copies text to the clipboard; `true` on success.
     fn copy_text(&mut self, text: &str) -> bool;
 
+    /// 2.1: files and folders on the clipboard, copied in the file manager
+    /// or as text.
+    fn clipboard_paths(&mut self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
+    /// 2.1: puts files on the clipboard as the file manager copies them.
+    fn copy_files_to_clipboard(&mut self, _paths: &[std::path::PathBuf]) -> bool {
+        false
+    }
+
+    /// 2.1: shows the file selected in its folder (Explorer, Finder).
+    fn reveal_file(&mut self, _path: &std::path::Path) -> bool {
+        false
+    }
+
+    /// 2.1: the system's properties of the file (Get Info on a Mac).
+    fn show_file_properties(&mut self, _path: &std::path::Path) -> bool {
+        false
+    }
+
     /// The window title (Windows `SetWindowTextW` on the main window).
     fn set_window_title(&mut self, title: &str);
 

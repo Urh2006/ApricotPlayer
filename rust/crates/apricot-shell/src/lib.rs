@@ -20,6 +20,7 @@ mod downloads;
 mod equalizer_dialog;
 mod feature_form;
 pub mod file_manager;
+pub mod file_tools;
 pub mod global_shortcuts;
 pub mod integrations;
 mod keyboard;
@@ -618,6 +619,21 @@ impl Shell {
             }
             "open_global_shortcuts" => {
                 self.edit_global_shortcuts(ui);
+                return;
+            }
+            "open_recents" => {
+                self.open_recents(ui);
+                return;
+            }
+            "rename_file" => {
+                self.rename_active_file(ui);
+                return;
+            }
+            "open_from_clipboard"
+            | "copy_file_to_clipboard"
+            | "show_in_folder"
+            | "file_properties" => {
+                self.native_file_action(ui, action_id);
                 return;
             }
             "download_with_options" => {

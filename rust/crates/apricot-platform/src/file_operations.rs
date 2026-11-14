@@ -138,6 +138,58 @@ pub fn delete_permanently(path: &Path) -> Result<(), String> {
     fs::remove_file(path).map_err(|error| error.to_string())
 }
 
+/// Why a file could not be renamed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RenameError {
+    Empty,
+    /// The name has a character no file name may contain.
+    Invalid,
+    /// Another file in the folder already has the name.
+    Exists,
+    /// The system's message, for example while another program uses it.
+    Failed(String),
+}
+
+/// Renames `path` to `name` in the same folder. A name without an
+/// extension keeps the current one.
+///
+/// # Errors
+///
+/// Returns why the new name was refused or the rename failed.
+pub fn rename_file(path: &Path, name: &str) -> Result<PathBuf, RenameError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(RenameError::Empty);
+    }
+    if name.chars().any(|character| {
+        matches!(
+            character,
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+        )
+    }) || name == "."
+        || name == ".."
+    {
+        return Err(RenameError::Invalid);
+    }
+    let mut name = name.to_owned();
+    if Path::new(&name).extension().is_none()
+        && let Some(extension) = path.extension()
+    {
+        name.push('.');
+        name.push_str(&extension.to_string_lossy());
+    }
+    let target = path.with_file_name(&name);
+    if target == path {
+        return Ok(target);
+    }
+    // A change of letter case names the same file on Windows and macOS.
+    if target.exists() && !same_file(path, &target) {
+        return Err(RenameError::Exists);
+    }
+    fs::rename(path, &target).map_err(|error| RenameError::Failed(error.to_string()))?;
+    Ok(target)
+}
+
 /// The path `source` gets in `directory`.
 #[must_use]
 pub fn target_in(source: &Path, directory: &Path) -> Option<PathBuf> {
@@ -219,6 +271,25 @@ pub fn transfer(
         }
     }
     Ok(TransferOutcome::Done(target))
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::*;
+
+    #[test]
+    fn rename_keeps_the_extension_and_refuses_taken_or_bad_names() {
+        let root = tempfile::tempdir().expect("folder");
+        let song = root.path().join("song.mp3");
+        fs::write(&song, b"x").expect("song");
+        fs::write(root.path().join("other.mp3"), b"x").expect("other");
+        assert_eq!(rename_file(&song, "  "), Err(RenameError::Empty));
+        assert_eq!(rename_file(&song, "a/b"), Err(RenameError::Invalid));
+        assert_eq!(rename_file(&song, "other"), Err(RenameError::Exists));
+        let renamed = rename_file(&song, "new name").expect("renamed");
+        assert_eq!(renamed, root.path().join("new name.mp3"));
+        assert!(renamed.is_file() && !song.exists());
+    }
 }
 
 #[cfg(test)]

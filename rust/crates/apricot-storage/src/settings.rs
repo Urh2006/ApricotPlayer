@@ -91,6 +91,9 @@ pub struct SettingsDocument {
     pub seek_seconds: f64,
     /// 2.1: the seek amount Shift+C selects, in seconds.
     pub custom_seek_seconds: i64,
+    /// 2.1: a file opened from the system plays alone ("file"), with its
+    /// folder ("folder") or with its folder and subfolders.
+    pub open_file_mode: String,
     pub volume_step: i64,
     pub default_volume: i64,
     pub volume_boost_by_default: bool,
@@ -217,6 +220,7 @@ impl Default for SettingsDocument {
             audio_quality: "0".to_owned(),
             seek_seconds: 5.0,
             custom_seek_seconds: 15,
+            open_file_mode: "file".to_owned(),
             volume_step: 5,
             default_volume: 100,
             volume_boost_by_default: false,
@@ -371,6 +375,12 @@ impl SettingsDocument {
         };
         self.seek_seconds = finite_or(self.seek_seconds, 5.0).clamp(0.1, 600.0);
         self.custom_seek_seconds = self.custom_seek_seconds.clamp(1, 600);
+        if !matches!(
+            self.open_file_mode.as_str(),
+            "file" | "folder" | "folder_and_subfolders"
+        ) {
+            "file".clone_into(&mut self.open_file_mode);
+        }
         self.speed_step = finite_or(self.speed_step, 0.01).clamp(0.01, 0.25);
         self.pitch_step = finite_or(self.pitch_step, 0.01).clamp(0.01, 0.25);
         self.speed_pitch_hold_delay_ms = self.speed_pitch_hold_delay_ms.clamp(50, 1_000);

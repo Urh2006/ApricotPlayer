@@ -839,6 +839,17 @@ fn playback_controls(
             600,
             catalog,
         ),
+        choice_labeled(
+            SettingId::OpenFileMode,
+            "open_file_mode",
+            &settings.open_file_mode,
+            &[
+                ("file", "open_file_mode_file"),
+                ("folder", "open_file_mode_folder"),
+                ("folder_and_subfolders", "open_file_mode_subfolders"),
+            ],
+            catalog,
+        ),
         choice_raw(
             SettingId::VolumeStep,
             "volume_step",
@@ -1981,9 +1992,10 @@ mod tests {
             ),
             // 19 Python items, Spotify, the four 2.1 entries and the reset button.
             (SettingsSection::MainMenu, 25),
-            // 2.1 adds "Custom seek amount" and appends "Audio processing"
-            // and "Playback transitions".
-            (SettingsSection::Playback, 38),
+            // 2.1 adds "Custom seek amount" and "Open a file from the
+            // system with" and appends "Audio processing" and "Playback
+            // transitions".
+            (SettingsSection::Playback, 39),
             // 2.1 appends "Bass boost intensity".
             (SettingsSection::Equalizer, 4),
             // 2.1 appends "Converter options".

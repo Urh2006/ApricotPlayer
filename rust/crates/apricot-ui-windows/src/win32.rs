@@ -13755,6 +13755,12 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "converter_options" => edit_converter_options(window),
         "open_integrations" => edit_integrations(window),
         "open_global_shortcuts" => edit_global_shortcuts(window),
+        "open_recents" => open_recents(window),
+        "rename_file" => rename_active_file(window),
+        "open_from_clipboard" => open_from_clipboard(window),
+        "copy_file_to_clipboard" | "show_in_folder" | "file_properties" => {
+            active_file_action(window, action_id);
+        }
         "settings_export" => backups::run(window, apricot_shell::backups::Backup::ExportSettings),
         "settings_import" => backups::run(window, apricot_shell::backups::Backup::ImportSettings),
         "bookmarks_export" => backups::run(window, apricot_shell::backups::Backup::ExportBookmarks),
@@ -16035,6 +16041,154 @@ fn typed_global_shortcuts(
         }
     }
     settings
+}
+
+/// Recently opened files and folders.
+unsafe fn open_recents(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let recents = state.application.recents();
+    let Some(form) = apricot_shell::file_tools::recents_form(&catalog, &recents) else {
+        set_status(state, catalog.text("recent_none"), true);
+        return;
+    };
+    state.modal_open = true;
+    let values = crate::feature_form_win32::show(window, &form);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    let Some(values) = values else {
+        return;
+    };
+    match apricot_shell::file_tools::recent_choice(&values, &recents) {
+        Some(apricot_shell::file_tools::RecentChoice::File(path)) => {
+            state
+                .application
+                .enqueue_activation(ActivationRequest::OpenFile(path));
+            let _ = PostMessageW(Some(window), WM_PROCESS_ACTIVATION, WPARAM(0), LPARAM(0));
+        }
+        Some(apricot_shell::file_tools::RecentChoice::Folder(path)) => {
+            start_local_folder_scan(window, path);
+        }
+        Some(apricot_shell::file_tools::RecentChoice::Clear) => {
+            state
+                .application
+                .set_recents(&apricot_app::recents::Recents::default());
+            set_status(state, catalog.text("recent_cleared"), true);
+        }
+        None => {}
+    }
+}
+
+/// The selected or playing local file.
+unsafe fn active_local_file(window: HWND) -> Option<PathBuf> {
+    apricot_shell::file_tools::local_file(active_media_item(window).as_ref())
+}
+
+/// Renames the selected or playing local file.
+unsafe fn rename_active_file(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let Some(path) = active_local_file(window) else {
+        set_status(state, catalog.text("local_file_required"), true);
+        return;
+    };
+    state.modal_open = true;
+    let values = crate::feature_form_win32::show(
+        window,
+        &apricot_shell::file_tools::rename_form(&catalog, &path),
+    );
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    let Some(values) = values else {
+        return;
+    };
+    match apricot_shell::file_tools::rename_from_values(&catalog, &path, &values) {
+        Ok(renamed) => {
+            let name = renamed
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            set_status(
+                state,
+                &catalog.text("rename_file_done").replace("{name}", &name),
+                true,
+            );
+            if state.view == MainView::LocalFolder
+                && let Some(folder) = renamed.parent()
+            {
+                start_local_folder_scan(window, folder.to_path_buf());
+            }
+        }
+        Err(error) => show_error_message(window, &error),
+    }
+}
+
+/// Opens the file or folder on the clipboard, as Play file or Play from
+/// folder would.
+unsafe fn open_from_clipboard(window: HWND) {
+    let paths = crate::clipboard_win32::read_paths(window);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    match paths.into_iter().find(|path| path.exists()) {
+        Some(path) if path.is_dir() => start_local_folder_scan(window, path),
+        Some(path) => {
+            state
+                .application
+                .enqueue_activation(ActivationRequest::OpenFile(path));
+            let _ = PostMessageW(Some(window), WM_PROCESS_ACTIVATION, WPARAM(0), LPARAM(0));
+        }
+        None => {
+            let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+            set_status(state, catalog.text("clipboard_no_path"), true);
+        }
+    }
+}
+
+/// Copy as a file, show in Explorer and file properties.
+unsafe fn active_file_action(window: HWND, action: &str) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let Some(path) = active_local_file(window) else {
+        set_status(state, catalog.text("local_file_required"), true);
+        return;
+    };
+    match action {
+        "copy_file_to_clipboard" => {
+            if crate::clipboard_win32::copy_files(window, &[path]).is_ok() {
+                set_status(state, catalog.text("file_copied_to_clipboard"), true);
+            } else {
+                show_error_message(window, catalog.text("file_action_unavailable"));
+            }
+        }
+        "show_in_folder" => {
+            // Explorer opens the folder with the file selected.
+            let mut argument = std::ffi::OsString::from("/select,");
+            argument.push(path.as_os_str());
+            if std::process::Command::new("explorer.exe")
+                .arg(argument)
+                .spawn()
+                .is_err()
+            {
+                show_error_message(window, catalog.text("file_action_unavailable"));
+            }
+        }
+        _ => {
+            if !crate::clipboard_win32::show_properties(window, &path) {
+                show_error_message(window, catalog.text("file_action_unavailable"));
+            }
+        }
+    }
 }
 
 /// A media key event as a window message.
@@ -18953,6 +19107,7 @@ unsafe fn start_local_folder_scan(window: HWND, path: PathBuf) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    state.application.record_recent_folder(&path);
     cancel_local_folder_scan(window, state);
     state.next_local_folder_generation = state.next_local_folder_generation.wrapping_add(1).max(1);
     let generation = state.next_local_folder_generation;
@@ -19313,7 +19468,14 @@ unsafe fn process_pending_activations(window: HWND) {
             }
             ActivationRequest::OpenFile(path) => {
                 restore_from_tray(window);
-                play_local_file(window, &path);
+                let opened = state_mut(window).and_then(|state| {
+                    state.application.record_recent_file(&path);
+                    apricot_shell::file_tools::opened_file_playback(&mut state.application, &path)
+                });
+                match opened {
+                    Some(item) => start_sequence_media_item(window, item, None),
+                    None => play_local_file(window, &path),
+                }
             }
         }
     }

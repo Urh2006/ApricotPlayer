@@ -182,6 +182,7 @@ impl Shell {
 
     /// Windows `start_local_folder_scan`.
     pub fn start_local_folder_scan(&mut self, ui: &mut dyn ShellUi, path: PathBuf) {
+        self.application.record_recent_folder(&path);
         self.cancel_local_folder_scan();
         self.screens.next_scan_generation =
             self.screens.next_scan_generation.wrapping_add(1).max(1);

@@ -116,6 +116,7 @@ const PLAYBACK: &[SettingId] = &[
     SettingId::PitchMode,
     SettingId::SeekSeconds,
     SettingId::CustomSeekSeconds,
+    SettingId::OpenFileMode,
     SettingId::VolumeStep,
     SettingId::DefaultVolume,
     SettingId::VolumeBoostByDefault,
@@ -300,9 +301,9 @@ mod tests {
                 .iter()
                 .flat_map(|section| section.reset_fields)
                 .count(),
-            // 112 Python placements, the 2.1 bass boost intensity and
-            // custom seek amount.
-            114
+            // 112 Python placements and the 2.1 bass boost intensity,
+            // custom seek amount and opened file mode.
+            115
         );
         assert!(
             SETTINGS_SECTIONS
@@ -321,7 +322,7 @@ mod tests {
         {
             *placement_counts.entry(*id).or_default() += 1;
         }
-        assert_eq!(placement_counts.len(), 113);
+        assert_eq!(placement_counts.len(), 114);
         assert_eq!(
             placement_counts.get(&SettingId::AppUpdateNotifications),
             Some(&2)

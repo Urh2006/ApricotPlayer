@@ -368,6 +368,12 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("player_volume_min", "Ctrl+Alt+Down", PLAYER),
     action!("player_name_path", "N", PLAYER),
     action!("player_opened_files", "Alt+Shift+L", PLAYER),
+    action!("open_recents", "Ctrl+Alt+Shift+E", GLOBAL),
+    action!("open_from_clipboard", "Ctrl+Alt+V", GLOBAL),
+    action!("copy_file_to_clipboard", "Alt+Shift+F", LIST_PLAYER),
+    action!("rename_file", "Shift+F2", LIST_PLAYER),
+    action!("show_in_folder", "Alt+Shift+E", LIST_PLAYER),
+    action!("file_properties", "Alt+Enter", LIST_PLAYER),
 ];
 
 /// Number of leading [`ACTIONS`] that mirror the Python 1.0.21 catalog.
@@ -390,7 +396,7 @@ mod tests {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
         // 14 Spotify actions, then the 2.1 additions.
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 116);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 122);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
             ACTIONS[PYTHON_BASELINE_ACTIONS..PYTHON_BASELINE_ACTIONS + 14]

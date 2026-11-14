@@ -297,6 +297,12 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("player_volume_min", "audio"),
     ("player_name_path", "playback"),
     ("player_opened_files", "playback"),
+    ("open_recents", "files"),
+    ("open_from_clipboard", "files"),
+    ("copy_file_to_clipboard", "files"),
+    ("rename_file", "files"),
+    ("show_in_folder", "files"),
+    ("file_properties", "files"),
 ];
 
 /// The category an action is listed under; unknown ids fall back to General.
