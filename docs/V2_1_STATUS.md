@@ -32,7 +32,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 16 | YouTube dodatki | narejeno |
 | 17 | Medijske tipke in Discord | narejeno, Discord čaka na aplikacijo |
 | 18 | Spotify naročnine | narejeno |
-| 19 | Uvoz in izvoz, dokumentacija, izdaja | čaka |
+| 19 | Uvoz in izvoz, dokumentacija, izdaja | narejeno lokalno, objava čaka na Urha |
 
 ## Enota 1
 
@@ -239,3 +239,18 @@ Ročni NVDA preizkus: predvajaj datoteko, pritisni tipko za predvajanje ali prem
 Preverjeno: testi besedil plošče, povzetka in poročil, testi ločenih računov in nespremenjenih poškodovanih podatkov. V živo nisem preverjal, ker potrebuje prijavljen račun Spotify.
 
 Ročni NVDA preizkus: prijavi se v Spotify, Ctrl+Alt+Shift+B: NVDA prebere "Spotify playlist subscriptions". Izberi "Subscribe using a link", prilepi povezavo na tuj seznam, Enter: NVDA pove "Subscribed to the playlist." Ponovno odpri ploščo in izberi "Check now": NVDA pove "Updating Spotify subscriptions." in nato "Spotify subscriptions checked."
+
+## Enota 19
+
+- Export settings (Ctrl+Alt+Shift+F6) shrani shranjene nastavitve v datoteko v obliki `settings.json`, zato jo prebereta obe verziji. Import settings (Ctrl+Alt+Shift+F5) najprej vpraša, nato zamenja vse nastavitve, staro datoteko pa obdrži kot `settings.json.before-import`. Datoteka, ki ni varnostna kopija nastavitev, ne spremeni ničesar. Uvoz deluje tudi, ko trenutnih nastavitev ni bilo mogoče prebrati.
+- Export bookmarks (Ctrl+Alt+Shift+F4) in Import bookmarks (Ctrl+Alt+Shift+F3). Uvoz privzeto doda nove zaznamke in preskoči obstoječe. "Replace all my bookmarks with them" je ločena izbira, ki vpraša s številom trenutnih zaznamkov in obdrži kopijo. Poškodovan vnos ustavi uvoz z njegovo številko.
+- Vsi štirje ukazi so tudi na koncu Settings, General. Skupna logika je v `apricot-shell/src/backups.rs`, Windows ovoj v `backups_win32.rs`, macOS jo uporablja prek skupnega Shell.
+- Odstranjen je ukaz osnutka "local_file_actions" (Alt+F), ki ni imel nobenega vedenja.
+- Vsi moduli, ki se gradijo na Windows, so zdaj v celoti preverjeni s strogim lintom. Oznako osnutka imajo samo še trije moduli za macOS (`recording_macos.rs`, `feature_form.rs` in `sources_browser.rs` v macOS UI), ker jih na Windows ni mogoče preveriti.
+- Verzija je 2.1.0-beta.1, changelog, README in `release-notes/v2.1.0-beta.1.md` so posodobljeni.
+
+Preverjeno v izoliranem namizju: izvoz nastavitev in zaznamkov, uvoz zaznamkov z združevanjem ("No new bookmarks; all of them are already saved."), uvoz nastavitev z odgovorom No (nič se ne spremeni) in Yes (glasnost iz kopije, kopija pred uvozom obstaja), fokus ostane na glavnem meniju.
+
+Ročni NVDA preizkus: Ctrl+Alt+Shift+F6, shrani datoteko: NVDA pove "Settings exported." Ctrl+Alt+Shift+F3, izberi isto datoteko z zaznamki: NVDA prebere "Import bookmarks" in "Imported bookmarks, Add them to my current bookmarks". Enter: NVDA pove rezultat.
+
+Še odprto: objava na GitHubu in gradnja za macOS (GitHub Actions) čakata na Urhovo dovoljenje, Discord čaka na ID aplikacije, macOS koda ni preverjena na Macu.
