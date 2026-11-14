@@ -663,6 +663,8 @@ struct WindowState {
     pending_bpm: Vec<PendingBpmAnalysis>,
     pending_edit_saves: Vec<PendingEditSave>,
     pending_conversions: Vec<Receiver<ConversionMessage>>,
+    /// The Cancel flags of the folder conversions that run.
+    conversion_cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Python `conversion_progress_dialog`.
     conversion_progress_window: Option<crate::converter_win32::ConversionProgressWindow>,
     pending_updates: Vec<Receiver<UpdateMessage>>,
@@ -2178,6 +2180,7 @@ unsafe fn create_controls(
         pending_bpm: Vec::new(),
         pending_edit_saves: Vec::new(),
         pending_conversions: Vec::new(),
+        conversion_cancels: Vec::new(),
         conversion_progress_window: None,
         pending_updates: Vec::new(),
         app_update_check_running: false,
@@ -13633,6 +13636,8 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "clear_podcast_progress" => clear_selected_rss_progress(window),
         "save_podcast_speed_preset" => save_current_podcast_speed_preset(window),
         "copy_diagnostic_report" => copy_diagnostic_report(window),
+        "converter_options" => edit_converter_options(window),
+        "cancel_conversion" => cancel_conversions(window),
         "file_converter" => show_converter(window, false),
         "folder_converter" => show_converter(window, true),
         // Beta 17: they act only on a Spotify song (spotify::transport).
@@ -15706,6 +15711,57 @@ unsafe fn poll_edit_saves(window: HWND) {
     }
 }
 
+/// The converter options from their own shortcut, saved at once.
+unsafe fn edit_converter_options(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let options =
+        apricot_app::converter::ConversionOptions::from_settings(state.application.settings());
+    let form = apricot_shell::converter_options_form(&catalog, &options);
+    state.modal_open = true;
+    let values = crate::feature_form_win32::show(window, &form);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    let Some(values) = values else {
+        return;
+    };
+    let options = apricot_shell::converter_options_from_values(&options, &values);
+    state.application.set_feature_settings(
+        apricot_app::converter::CONVERTER_OPTIONS_KEY,
+        serde_json::json!(options),
+    );
+    match state.application.save_settings() {
+        Ok(()) => set_status(state, catalog.text("converter_options_saved"), true),
+        Err(error) => show_error_message(
+            window,
+            &catalog
+                .text("settings_save_failed")
+                .replace("{error}", &error.to_string()),
+        ),
+    }
+}
+
+/// Stops the folder conversions that run.
+unsafe fn cancel_conversions(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let key = if state.conversion_cancels.is_empty() {
+        "conversion_none_running"
+    } else {
+        for cancel in &state.conversion_cancels {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        "conversion_stopping"
+    };
+    let text = catalog_text(&state.application, key);
+    set_status(state, &text, true);
+}
+
 /// Python `show_file_converter` and `show_folder_converter`.
 unsafe fn show_converter(window: HWND, folder_mode: bool) {
     stop_controlled_repeat(window);
@@ -15713,9 +15769,14 @@ unsafe fn show_converter(window: HWND, folder_mode: bool) {
         return;
     };
     main_state.modal_open = true;
+    let beside_originals =
+        apricot_app::converter::ConversionOptions::from_settings(main_state.application.settings())
+            .folder_destination
+            == apricot_app::converter::FolderDestination::BesideOriginals;
     let options = crate::converter_win32::ConverterDialogOptions {
         catalog: apricot_app::embedded_catalog(&main_state.application.settings().language),
         folder_mode,
+        beside_originals,
         announce: Box::new(move |text: &str| {
             if let Some(state) = state(window) {
                 set_status(state, text, true);
@@ -15751,6 +15812,8 @@ unsafe fn start_conversion(window: HWND, start: crate::converter_win32::Converte
         application_directory().as_deref(),
     );
     let (sender, receiver) = mpsc::channel();
+    let options =
+        apricot_app::converter::ConversionOptions::from_settings(state.application.settings());
     match start {
         ConverterStart::File {
             source,
@@ -15770,9 +15833,9 @@ unsafe fn start_conversion(window: HWND, start: crate::converter_win32::Converte
                 overwrite_confirmed,
                 catalog_text(&state.application, "unsupported_input_format"),
             );
+            let job = FileConversionJob { options, ..job };
             std::thread::spawn(move || {
-                let result =
-                    run_file_conversion(&job, &mut apricot_platform::run_ffmpeg_conversion);
+                let result = run_file_conversion(&job, &apricot_platform::run_ffmpeg_conversion);
                 let _ = sender.send(ConversionMessage::FileFinished(result));
             });
         }
@@ -15783,6 +15846,10 @@ unsafe fn start_conversion(window: HWND, start: crate::converter_win32::Converte
             image,
             replace_originals,
         } => {
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            state
+                .conversion_cancels
+                .push(std::sync::Arc::clone(&cancel));
             let job = FolderConversionJob {
                 ffmpeg,
                 source_folder: source,
@@ -15790,12 +15857,19 @@ unsafe fn start_conversion(window: HWND, start: crate::converter_win32::Converte
                 target,
                 image,
                 replace_originals,
+                options,
+                cancel,
             };
             std::thread::spawn(move || {
                 let events = sender.clone();
+                let cancel = std::sync::Arc::clone(&job.cancel);
                 let result = run_folder_conversion(
                     &job,
-                    &mut apricot_platform::run_ffmpeg_conversion,
+                    &|program, arguments| {
+                        apricot_platform::run_ffmpeg_conversion_cancellable(
+                            program, arguments, &cancel,
+                        )
+                    },
                     &mut |event| {
                         let _ = events.send(ConversionMessage::Folder(event));
                     },
@@ -15839,6 +15913,7 @@ unsafe fn poll_conversions(window: HWND) {
         });
         if state.pending_conversions.is_empty() {
             let _ = KillTimer(Some(window), CONVERSION_TIMER_ID);
+            state.conversion_cancels.clear();
         }
     }
     for message in messages {
@@ -15846,6 +15921,7 @@ unsafe fn poll_conversions(window: HWND) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // One match over the conversion messages.
 unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
     use apricot_app::converter::{
         FolderConversionEvent, FolderConversionOutcome, folder_done_message, progress_message,
@@ -15858,14 +15934,31 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
     match message {
         ConversionMessage::Folder(FolderConversionEvent::Started { total }) => {
             close_conversion_progress(state);
-            state.conversion_progress_window =
-                crate::converter_win32::ConversionProgressWindow::create(
+            let cancel = state.conversion_cancels.last().map(|flag| {
+                crate::converter_win32::ProgressCancel {
+                    flag: std::sync::Arc::clone(flag),
+                    label: catalog.text("cancel").to_owned(),
+                    stopping: catalog.text("conversion_stopping").to_owned(),
+                }
+            });
+            state.conversion_progress_window = match cancel {
+                Some(cancel) => {
+                    crate::converter_win32::ConversionProgressWindow::create_cancellable(
+                        window,
+                        catalog.text("conversion_progress_title"),
+                        &progress_message(&catalog, "", 0, total),
+                        total,
+                        cancel,
+                    )
+                }
+                None => crate::converter_win32::ConversionProgressWindow::create(
                     window,
                     catalog.text("conversion_progress_title"),
                     &progress_message(&catalog, "", 0, total),
                     total,
-                )
-                .ok();
+                ),
+            }
+            .ok();
         }
         ConversionMessage::Folder(FolderConversionEvent::FileStarted { index, total, name }) => {
             let text = format!(
@@ -15905,11 +15998,25 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
         ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::Done {
             converted,
             failed,
+            failures,
+            cancelled,
         })) => {
-            let text = folder_done_message(&catalog, converted, failed);
+            let text = if cancelled {
+                catalog
+                    .text("conversion_stopped")
+                    .replace("{count}", &converted.to_string())
+            } else {
+                folder_done_message(&catalog, converted, failed)
+            };
             set_status(state, &text, false);
             close_conversion_progress(state);
             finish_conversion_message(window, &text);
+            if !failures.is_empty() {
+                show_error_message(
+                    window,
+                    &apricot_app::converter::failures_message(&catalog, &failures),
+                );
+            }
         }
         ConversionMessage::FileFinished(Err(error))
         | ConversionMessage::FolderFinished(Err(error)) => {

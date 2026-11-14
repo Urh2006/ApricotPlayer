@@ -139,6 +139,62 @@ pub fn run_ffmpeg_conversion(ffmpeg: &Path, arguments: &[OsString]) -> Result<()
     }
 }
 
+/// `run_ffmpeg_conversion` that stops `FFmpeg` as soon as `cancel` is set.
+///
+/// # Errors
+/// Returns the same text as `run_ffmpeg_conversion`, or an empty text when
+/// it was cancelled.
+pub fn run_ffmpeg_conversion_cancellable(
+    ffmpeg: &Path,
+    arguments: &[OsString],
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    use std::io::Read as _;
+
+    let mut command = Command::new(ffmpeg);
+    command
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut stderr) = stderr {
+            let _ = stderr.read_to_end(&mut bytes);
+        }
+        String::from_utf8_lossy(&bytes).trim().to_owned()
+    });
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break Some(status);
+        }
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let text = reader.join().unwrap_or_default();
+    match status {
+        None => Err(String::new()),
+        Some(status) if status.success() => Ok(()),
+        Some(status) => Err(program_error_tail(
+            &ProgramOutput {
+                success: false,
+                code: status.code(),
+                text,
+            },
+            "FFmpeg",
+            900,
+        )),
+    }
+}
+
 /// Python `error[-600:]`, or "<program> exited with code N".
 fn program_error(output: &ProgramOutput, program: &str) -> String {
     program_error_tail(output, program, 600)

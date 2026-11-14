@@ -1452,6 +1452,7 @@ impl SettingsWindow {
         match command {
             SettingsCommand::AudioProcessing => self.edit_audio_processing(),
             SettingsCommand::PlaybackTransitions => self.edit_playback_transitions(),
+            SettingsCommand::ConverterOptions => self.edit_converter_options(),
             SettingsCommand::RecordingSettings => self.defer_global_action("recording_settings"),
             SettingsCommand::OpenIntegrations => self.defer_global_action("open_integrations"),
             SettingsCommand::ResetShortcut
@@ -2015,6 +2016,29 @@ impl SettingsWindow {
     }
 
     /// Windows `edit_playback_transitions`.
+    fn edit_converter_options(&self) {
+        let Some((catalog, options)) = self.with_shell(|shell, _| {
+            let application = &shell.application;
+            (
+                apricot_app::embedded_catalog(&application.settings().language),
+                apricot_app::converter::ConversionOptions::from_settings(application.settings()),
+            )
+        }) else {
+            return;
+        };
+        let form = apricot_shell::converter_options_form(&catalog, &options);
+        let Some(values) = crate::feature_form::show(self.mtm(), &form) else {
+            return;
+        };
+        let options = apricot_shell::converter_options_from_values(&options, &values);
+        self.with_shell(|shell, _| {
+            shell.application.set_feature_settings(
+                apricot_app::converter::CONVERTER_OPTIONS_KEY,
+                serde_json::json!(options),
+            );
+        });
+    }
+
     fn edit_playback_transitions(&self) {
         let Some((catalog, settings)) = self.with_shell(|shell, _| {
             let application = &shell.application;

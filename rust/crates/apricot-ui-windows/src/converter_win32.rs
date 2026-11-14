@@ -33,16 +33,17 @@ use windows::{
                 CB_ADDSTRING, CB_GETCURSEL, CB_GETDROPPEDSTATE, CB_RESETCONTENT, CB_SETCURSEL,
                 CBS_DROPDOWNLIST, CW_USEDEFAULT, CreateDialogIndirectParamW, CreateWindowExW,
                 DLGTEMPLATE, DS_CENTER, DS_MODALFRAME, DefWindowProcW, DestroyWindow,
-                DispatchMessageW, ES_AUTOHSCROLL, GWLP_USERDATA, GetClientRect, GetMessageW,
-                GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, HMENU,
-                IDC_ARROW, IsChild, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer,
-                LoadCursorW, MB_ICONWARNING, MB_OK, MSG, MessageBoxW, MoveWindow, PostQuitMessage,
-                RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOMOVE, SWP_NOZORDER, SendMessageW,
-                SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-                ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE,
-                WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_TIMER, WNDCLASSW,
-                WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
-                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                DispatchMessageW, ES_AUTOHSCROLL, GWL_STYLE, GWLP_USERDATA, GetClientRect,
+                GetMessageW, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+                GetWindowTextW, HMENU, IDC_ARROW, IsChild, IsDialogMessageW, IsWindow,
+                IsWindowVisible, KillTimer, LoadCursorW, MB_ICONWARNING, MB_OK, MSG, MessageBoxW,
+                MoveWindow, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOMOVE,
+                SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+                SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_KEYDOWN,
+                WM_NCDESTROY, WM_SETFONT, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CHILD,
+                WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+                WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -102,6 +103,8 @@ pub enum ConverterStart {
 pub struct ConverterDialogOptions {
     pub catalog: TranslationCatalog,
     pub folder_mode: bool,
+    /// A converted folder goes next to its originals instead of asking.
+    pub beside_originals: bool,
     /// Python `announce_player`.
     pub announce: Box<dyn Fn(&str)>,
 }
@@ -687,7 +690,7 @@ unsafe fn convert(window: HWND, state: &mut DialogState) {
     }
     let replace = state.checked(REPLACE);
     let start = if state.options.folder_mode {
-        let output_folder = if replace {
+        let output_folder = if replace || state.options.beside_originals {
             source.clone()
         } else {
             let focus = GetFocus();
@@ -809,12 +812,21 @@ const PROGRESS_BAR: i32 = 2452;
 const PROGRESS_TIMES: i32 = 2453;
 const PROGRESS_TIMER: usize = 1;
 
+/// A Cancel button and the flag it sets.
+pub struct ProgressCancel {
+    pub flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub label: String,
+    /// Shown once Cancel was pressed while the running files stop.
+    pub stopping: String,
+}
+
 struct ProgressState {
     owner: HWND,
     previous_focus: HWND,
     message: HWND,
     bar: HWND,
     times: HWND,
+    cancel: Option<(HWND, ProgressCancel)>,
     total: usize,
     converted: usize,
     started: Instant,
@@ -836,7 +848,22 @@ impl ConversionProgressWindow {
     /// # Errors
     /// Returns a Windows error if the dialog cannot be created.
     pub unsafe fn create(owner: HWND, title: &str, message: &str, total: usize) -> Result<Self> {
-        Self::create_with_times(owner, title, message, total, true)
+        Self::create_full(owner, title, message, total, true, None)
+    }
+
+    /// The folder conversion dialog with a Cancel button, which Escape also
+    /// presses.
+    ///
+    /// # Errors
+    /// Returns a Windows error if the dialog cannot be created.
+    pub unsafe fn create_cancellable(
+        owner: HWND,
+        title: &str,
+        message: &str,
+        total: usize,
+        cancel: ProgressCancel,
+    ) -> Result<Self> {
+        Self::create_full(owner, title, message, total, true, Some(cancel))
     }
 
     /// Python's update `wx.ProgressDialog` has no remaining time.
@@ -850,8 +877,24 @@ impl ConversionProgressWindow {
         total: usize,
         show_remaining: bool,
     ) -> Result<Self> {
+        Self::create_full(owner, title, message, total, show_remaining, None)
+    }
+
+    #[allow(clippy::too_many_lines)] // Creates the dialog and its controls.
+    unsafe fn create_full(
+        owner: HWND,
+        title: &str,
+        message: &str,
+        total: usize,
+        show_remaining: bool,
+        cancel: Option<ProgressCancel>,
+    ) -> Result<Self> {
         let instance = HINSTANCE(GetModuleHandleW(None)?.0);
-        let template = dialog_template(title);
+        let template = if cancel.is_some() {
+            sized_dialog_template(title, 250, 132, 0)
+        } else {
+            dialog_template(title)
+        };
         let window = CreateDialogIndirectParamW(
             Some(instance),
             template.as_ptr().cast::<DLGTEMPLATE>(),
@@ -908,12 +951,35 @@ impl ConversionProgressWindow {
         let _ = MoveWindow(message, 12, 12, 436, 52, true);
         let _ = MoveWindow(bar, 12, 72, 436, 20, true);
         let _ = MoveWindow(times, 12, 100, 436, 52, true);
+        let previous_focus = GetFocus();
+        let cancel = match cancel {
+            Some(cancel) => match control(
+                w!("BUTTON"),
+                &cancel.label,
+                i32::try_from(IDCANCEL_COMMAND).unwrap_or(2),
+            ) {
+                Ok(button) => {
+                    let style = GetWindowLongPtrW(button, GWL_STYLE);
+                    SetWindowLongPtrW(
+                        button,
+                        GWL_STYLE,
+                        style | isize::try_from(WS_TABSTOP.0).unwrap_or_default(),
+                    );
+                    let _ = MoveWindow(button, 12, 160, 110, 28, true);
+                    Some((button, cancel))
+                }
+                Err(_) => None,
+            },
+            None => None,
+        };
+        let button = cancel.as_ref().map(|(button, _)| *button);
         let state = Box::new(ProgressState {
             owner,
-            previous_focus: GetFocus(),
+            previous_focus,
             message,
             bar,
             times,
+            cancel,
             total: maximum,
             converted: 0,
             started: Instant::now(),
@@ -924,6 +990,9 @@ impl ConversionProgressWindow {
         let _ = SetTimer(Some(window), PROGRESS_TIMER, 1000, None);
         let _ = ShowWindow(window, SW_SHOW);
         let _ = SetForegroundWindow(window);
+        if let Some(button) = button {
+            let _ = SetFocus(Some(button));
+        }
         Ok(Self { window })
     }
 
@@ -1066,9 +1135,22 @@ unsafe extern "system" fn progress_proc(
             update_times(window);
             1
         }
-        // Python's dialog has no abort button and cannot be closed.
+        // Python's dialog has no abort button and cannot be closed; the 2.1
+        // folder conversion has Cancel, which stops it.
         WM_CLOSE => 1,
-        WM_COMMAND if (wparam.0 & 0xffff) == IDCANCEL_COMMAND => 1,
+        WM_COMMAND if (wparam.0 & 0xffff) == IDCANCEL_COMMAND => {
+            if let Some(state) = progress_state(window)
+                && let Some((button, cancel)) = &state.cancel
+            {
+                cancel
+                    .flag
+                    .store(true, std::sync::atomic::Ordering::Release);
+                set_window_text(state.message, &cancel.stopping);
+                let _ = SetFocus(Some(state.message));
+                let _ = EnableWindow(*button, false);
+            }
+            1
+        }
         WM_NCDESTROY => {
             let _ = KillTimer(Some(window), PROGRESS_TIMER);
             let pointer = GetWindowLongPtrW(window, GWLP_USERDATA) as *mut ProgressState;

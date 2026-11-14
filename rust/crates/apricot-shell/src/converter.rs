@@ -74,6 +74,8 @@ pub struct ConverterDialog {
     catalog: TranslationCatalog,
     pub folder_mode: bool,
     targets: Vec<&'static str>,
+    /// A converted folder goes next to its originals instead of asking.
+    beside_originals: bool,
 }
 
 /// Which audio-to-video controls show (Windows
@@ -219,7 +221,7 @@ impl ConverterDialog {
             return None;
         }
         if self.folder_mode {
-            let output_folder = if replace {
+            let output_folder = if replace || self.beside_originals {
                 source.clone()
             } else {
                 let Some(chosen) = view.choose_folder(&self.text("choose_output_folder"), &source)
@@ -291,6 +293,8 @@ enum ConversionMessage {
 #[derive(Default)]
 pub(crate) struct ConversionState {
     pending: Vec<Receiver<ConversionMessage>>,
+    /// The Cancel flags of the folder conversions that run.
+    cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     progress_open: bool,
     clip_exports: Vec<Receiver<Result<PathBuf, String>>>,
 }
@@ -384,10 +388,14 @@ impl Shell {
     /// `show_folder_converter`.
     pub(crate) fn show_converter(&mut self, ui: &mut dyn ShellUi, folder_mode: bool) {
         self.stop_key_repeat(ui);
+        let options =
+            apricot_app::converter::ConversionOptions::from_settings(self.application.settings());
         ui.open_converter(ConverterDialog {
             catalog: self.catalog(),
             folder_mode,
             targets: Vec::new(),
+            beside_originals: options.folder_destination
+                == apricot_app::converter::FolderDestination::BesideOriginals,
         });
     }
 
@@ -411,6 +419,8 @@ impl Shell {
             application_directory().as_deref(),
         );
         let (sender, receiver) = mpsc::channel();
+        let options =
+            apricot_app::converter::ConversionOptions::from_settings(self.application.settings());
         match start {
             ConverterStart::File {
                 source,
@@ -430,9 +440,10 @@ impl Shell {
                     overwrite_confirmed,
                     self.text("unsupported_input_format"),
                 );
+                let job = FileConversionJob { options, ..job };
                 std::thread::spawn(move || {
                     let result =
-                        run_file_conversion(&job, &mut apricot_platform::run_ffmpeg_conversion);
+                        run_file_conversion(&job, &apricot_platform::run_ffmpeg_conversion);
                     let _ = sender.send(ConversionMessage::FileFinished(result));
                 });
             }
@@ -443,6 +454,10 @@ impl Shell {
                 image,
                 replace_originals,
             } => {
+                let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.conversions
+                    .cancels
+                    .push(std::sync::Arc::clone(&cancel));
                 let job = FolderConversionJob {
                     ffmpeg,
                     source_folder: source,
@@ -450,12 +465,19 @@ impl Shell {
                     target,
                     image,
                     replace_originals,
+                    options,
+                    cancel,
                 };
                 std::thread::spawn(move || {
                     let events = sender.clone();
+                    let cancel = std::sync::Arc::clone(&job.cancel);
                     let result = run_folder_conversion(
                         &job,
-                        &mut apricot_platform::run_ffmpeg_conversion,
+                        &|program, arguments| {
+                            apricot_platform::run_ffmpeg_conversion_cancellable(
+                                program, arguments, &cancel,
+                            )
+                        },
                         &mut |event| {
                             let _ = events.send(ConversionMessage::Folder(event));
                         },
@@ -491,6 +513,9 @@ impl Shell {
         for message in messages {
             self.handle_conversion_message(ui, message);
         }
+        if self.conversions.pending.is_empty() {
+            self.conversions.cancels.clear();
+        }
         self.poll_clip_exports(ui);
         !self.conversions.pending.is_empty() || !self.conversions.clip_exports.is_empty()
     }
@@ -502,6 +527,19 @@ impl Shell {
         } else {
             ui.set_status(text, true);
         }
+    }
+
+    /// Stops the folder conversions that run: no further file starts and
+    /// the running `FFmpeg` is stopped.
+    pub(crate) fn cancel_conversions(&mut self, ui: &mut dyn ShellUi) {
+        if self.conversions.cancels.is_empty() {
+            ui.set_status(&self.text("conversion_none_running"), true);
+            return;
+        }
+        for cancel in &self.conversions.cancels {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        ui.set_status(&self.text("conversion_stopping"), true);
     }
 
     /// Windows `close_conversion_progress`.
@@ -559,11 +597,24 @@ impl Shell {
             ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::Done {
                 converted,
                 failed,
+                failures,
+                cancelled,
             })) => {
-                let text = folder_done_message(&catalog, converted, failed);
+                let text = if cancelled {
+                    catalog
+                        .text("conversion_stopped")
+                        .replace("{count}", &converted.to_string())
+                } else {
+                    folder_done_message(&catalog, converted, failed)
+                };
                 ui.set_status(&text, false);
                 self.close_conversion_progress(ui);
                 self.finish_conversion_message(ui, &text);
+                if !failures.is_empty() {
+                    ui.show_error(&apricot_app::converter::failures_message(
+                        &catalog, &failures,
+                    ));
+                }
             }
             ConversionMessage::FileFinished(Err(error))
             | ConversionMessage::FolderFinished(Err(error)) => {
@@ -717,6 +768,215 @@ impl Shell {
     }
 }
 
+const BITRATES: [u32; 7] = [96, 128, 160, 192, 224, 256, 320];
+const OPUS_BITRATES: [u32; 8] = [32, 48, 64, 96, 128, 160, 192, 256];
+const SAMPLE_RATES: [u32; 6] = [0, 22_050, 32_000, 44_100, 48_000, 96_000];
+
+fn bitrate_field(
+    catalog: &TranslationCatalog,
+    id: &str,
+    key: &str,
+    rates: &[u32],
+    value: u32,
+) -> crate::FormField {
+    crate::FormField::choice(
+        id,
+        catalog.text(key),
+        rates.iter().map(|rate| format!("{rate} kbps")).collect(),
+        rates
+            .iter()
+            .position(|rate| *rate == value)
+            .unwrap_or(rates.len() - 1),
+    )
+}
+
+/// The converter's quality and folder options, for Settings and its own
+/// shortcut.
+#[must_use]
+#[allow(clippy::too_many_lines)] // One form with all options.
+pub fn options_form(
+    catalog: &TranslationCatalog,
+    options: &apricot_app::converter::ConversionOptions,
+) -> crate::FeatureForm {
+    use crate::FormField;
+    use apricot_app::converter::{FolderDestination, OpusApplication};
+    crate::FeatureForm::localized(
+        catalog,
+        catalog.text("converter_options"),
+        vec![
+            bitrate_field(
+                catalog,
+                "mp3",
+                "converter_mp3_bitrate",
+                &BITRATES,
+                options.mp3_bitrate,
+            ),
+            bitrate_field(
+                catalog,
+                "aac",
+                "converter_aac_bitrate",
+                &BITRATES,
+                options.aac_bitrate,
+            ),
+            bitrate_field(
+                catalog,
+                "opus",
+                "converter_opus_bitrate",
+                &OPUS_BITRATES,
+                options.opus_bitrate,
+            ),
+            FormField::choice(
+                "opus_application",
+                catalog.text("converter_opus_application"),
+                vec![
+                    catalog.text("converter_opus_music").to_owned(),
+                    catalog.text("converter_opus_speech").to_owned(),
+                    catalog.text("converter_opus_low_delay").to_owned(),
+                ],
+                match options.opus_application {
+                    OpusApplication::Audio => 0,
+                    OpusApplication::Voip => 1,
+                    OpusApplication::LowDelay => 2,
+                },
+            ),
+            FormField::number(
+                "vorbis",
+                catalog.text("converter_vorbis_quality"),
+                f64::from(options.vorbis_quality),
+                0.0,
+                10.0,
+            ),
+            FormField::number(
+                "flac",
+                catalog.text("converter_flac_level"),
+                f64::from(options.flac_level),
+                0.0,
+                12.0,
+            ),
+            bitrate_field(
+                catalog,
+                "other",
+                "converter_other_bitrate",
+                &BITRATES,
+                options.other_bitrate,
+            ),
+            FormField::choice(
+                "rate",
+                catalog.text("converter_sample_rate"),
+                SAMPLE_RATES
+                    .iter()
+                    .map(|rate| {
+                        if *rate == 0 {
+                            catalog.text("converter_keep_original").to_owned()
+                        } else {
+                            format!("{rate} Hz")
+                        }
+                    })
+                    .collect(),
+                SAMPLE_RATES
+                    .iter()
+                    .position(|rate| *rate == options.sample_rate)
+                    .unwrap_or(0),
+            ),
+            FormField::choice(
+                "channels",
+                catalog.text("converter_channels"),
+                vec![
+                    catalog.text("converter_keep_original").to_owned(),
+                    catalog.text("recording_mono").to_owned(),
+                    catalog.text("recording_stereo").to_owned(),
+                ],
+                usize::from(options.channels.min(2)),
+            ),
+            FormField::number(
+                "concurrency",
+                catalog.text("converter_concurrency"),
+                f64::from(options.concurrency.clamp(1, 8)),
+                1.0,
+                8.0,
+            ),
+            FormField::choice(
+                "destination",
+                catalog.text("converter_folder_destination"),
+                vec![
+                    catalog.text("converter_destination_ask").to_owned(),
+                    catalog.text("converter_destination_beside").to_owned(),
+                ],
+                usize::from(options.folder_destination == FolderDestination::BesideOriginals),
+            ),
+        ],
+    )
+}
+
+/// The options chosen in [`options_form`].
+#[must_use]
+pub fn options_from_values(
+    options: &apricot_app::converter::ConversionOptions,
+    values: &crate::FormValues,
+) -> apricot_app::converter::ConversionOptions {
+    use crate::FormValue;
+    use apricot_app::converter::{ConversionOptions, FolderDestination, OpusApplication};
+    let choice = |id: &str| values.get(id).and_then(FormValue::choice).unwrap_or(0);
+    let number = |id: &str, maximum: f64| {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Bounded fields.
+        let value = values
+            .get(id)
+            .and_then(FormValue::number)
+            .unwrap_or(0.0)
+            .clamp(0.0, maximum)
+            .round() as u8;
+        value
+    };
+    let pick =
+        |id: &str, rates: &[u32], fallback: u32| rates.get(choice(id)).copied().unwrap_or(fallback);
+    ConversionOptions {
+        mp3_bitrate: pick("mp3", &BITRATES, options.mp3_bitrate),
+        aac_bitrate: pick("aac", &BITRATES, options.aac_bitrate),
+        opus_bitrate: pick("opus", &OPUS_BITRATES, options.opus_bitrate),
+        opus_application: match choice("opus_application") {
+            1 => OpusApplication::Voip,
+            2 => OpusApplication::LowDelay,
+            _ => OpusApplication::Audio,
+        },
+        vorbis_quality: number("vorbis", 10.0),
+        flac_level: number("flac", 12.0),
+        other_bitrate: pick("other", &BITRATES, options.other_bitrate),
+        sample_rate: pick("rate", &SAMPLE_RATES, 0),
+        channels: u8::try_from(choice("channels").min(2)).unwrap_or(0),
+        concurrency: number("concurrency", 8.0).max(1),
+        folder_destination: if choice("destination") == 1 {
+            FolderDestination::BesideOriginals
+        } else {
+            FolderDestination::Ask
+        },
+    }
+}
+
+impl Shell {
+    /// Its own shortcut edits and saves the converter options at once.
+    pub(crate) fn edit_converter_options(&mut self, ui: &mut dyn ShellUi) {
+        let catalog = self.catalog();
+        let options =
+            apricot_app::converter::ConversionOptions::from_settings(self.application.settings());
+        let Some(values) = ui.feature_form(&options_form(&catalog, &options)) else {
+            return;
+        };
+        let options = options_from_values(&options, &values);
+        self.application.set_feature_settings(
+            apricot_app::converter::CONVERTER_OPTIONS_KEY,
+            serde_json::json!(options),
+        );
+        match self.application.save_settings() {
+            Ok(()) => ui.set_status(catalog.text("converter_options_saved"), true),
+            Err(error) => ui.show_error(
+                &catalog
+                    .text("settings_save_failed")
+                    .replace("{error}", &error.to_string()),
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,7 +1013,44 @@ mod tests {
             catalog: apricot_app::embedded_catalog("en"),
             folder_mode,
             targets: Vec::new(),
+            beside_originals: false,
         }
+    }
+
+    #[test]
+    fn the_options_form_round_trips_every_choice() {
+        use apricot_app::converter::{ConversionOptions, FolderDestination, OpusApplication};
+        let catalog = apricot_app::embedded_catalog("en");
+        let options = ConversionOptions {
+            mp3_bitrate: 192,
+            opus_bitrate: 64,
+            opus_application: OpusApplication::LowDelay,
+            flac_level: 8,
+            sample_rate: 48_000,
+            channels: 2,
+            concurrency: 4,
+            folder_destination: FolderDestination::BesideOriginals,
+            ..ConversionOptions::default()
+        };
+        let form = options_form(&catalog, &options);
+        let values = form
+            .fields
+            .iter()
+            .filter_map(|field| {
+                let value = match &field.kind {
+                    crate::FormFieldKind::Choice { selected, .. } => {
+                        crate::FormValue::Choice(*selected)
+                    }
+                    crate::FormFieldKind::Number { value, .. } => crate::FormValue::Number(*value),
+                    _ => return None,
+                };
+                Some((field.id.clone(), value))
+            })
+            .collect();
+        assert_eq!(
+            options_from_values(&ConversionOptions::default(), &values),
+            options
+        );
     }
 
     #[test]

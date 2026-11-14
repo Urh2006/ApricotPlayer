@@ -1414,10 +1414,29 @@ unsafe fn edit_playback_transitions(window: HWND) {
     app.set_feature_settings("audio_processing_v1", serde_json::json!(settings));
 }
 
+unsafe fn edit_converter_options(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = settings_catalog(state);
+    let app = &mut *state.application;
+    let options = apricot_app::converter::ConversionOptions::from_settings(app.settings());
+    let form = apricot_shell::converter_options_form(&catalog, &options);
+    let Some(values) = crate::feature_form_win32::show(window, &form) else {
+        return;
+    };
+    let options = apricot_shell::converter_options_from_values(&options, &values);
+    app.set_feature_settings(
+        apricot_app::converter::CONVERTER_OPTIONS_KEY,
+        serde_json::json!(options),
+    );
+}
+
 unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
     match command {
         SettingsCommand::AudioProcessing => edit_audio_processing(window),
         SettingsCommand::PlaybackTransitions => edit_playback_transitions(window),
+        SettingsCommand::ConverterOptions => edit_converter_options(window),
         SettingsCommand::RecordingSettings => defer_global_action(window, "recording_settings"),
         SettingsCommand::OpenIntegrations => defer_global_action(window, "open_integrations"),
         SettingsCommand::ResetShortcut

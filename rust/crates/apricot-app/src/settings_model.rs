@@ -66,6 +66,7 @@ pub enum SettingsCommand {
     EditShortcutAlternatives,
     RecordingSettings,
     OpenIntegrations,
+    ConverterOptions,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -336,6 +337,12 @@ impl SettingsScreenModel {
             controls.push(SettingsControl::Command {
                 command: SettingsCommand::OpenIntegrations,
                 label: catalog.text("integrations_settings").to_owned(),
+            });
+        }
+        if selected_section == SettingsSection::Downloads {
+            controls.push(SettingsControl::Command {
+                command: SettingsCommand::ConverterOptions,
+                label: catalog.text("converter_options").to_owned(),
             });
         }
         if selected_section == SettingsSection::Playback {
@@ -1889,7 +1896,8 @@ mod tests {
             // 2.1 appends "Audio processing" and "Playback transitions".
             (SettingsSection::Playback, 37),
             (SettingsSection::Equalizer, 3),
-            (SettingsSection::Downloads, 23),
+            // 2.1 appends "Converter options".
+            (SettingsSection::Downloads, 24),
             (SettingsSection::Library, 7),
             (SettingsSection::Podcasts, 10),
             (SettingsSection::Notifications, 5),

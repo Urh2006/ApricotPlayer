@@ -5,26 +5,202 @@
 
 use std::{
     cmp::Ordering,
+    collections::HashSet,
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
+        mpsc,
+    },
 };
 
 use apricot_core::TranslationCatalog;
+use apricot_storage::SettingsDocument;
+use serde::{Deserialize, Serialize};
 
 use crate::local_edit::temporary_conversion_path;
 
-/// Python `AUDIO_CONVERT_FORMATS`.
-pub const AUDIO_CONVERT_FORMATS: [&str; 12] = [
-    "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "wma", "aiff", "alac", "ac3", "mp2",
+/// Python `AUDIO_CONVERT_FORMATS`, then the 2.1 Matroska and Ogg audio
+/// containers.
+pub const AUDIO_CONVERT_FORMATS: [&str; 14] = [
+    "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "wma", "aiff", "alac", "ac3", "mp2", "mka",
+    "oga",
 ];
+
+/// Settings key of [`ConversionOptions`].
+pub const CONVERTER_OPTIONS_KEY: &str = "converter_options_v1";
+
+/// What Opus is tuned for.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpusApplication {
+    #[default]
+    Audio,
+    Voip,
+    LowDelay,
+}
+
+/// Where a converted folder goes.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderDestination {
+    /// A folder the user chooses each time, as in Python.
+    #[default]
+    Ask,
+    /// The new files next to the originals, which stay.
+    BesideOriginals,
+}
+
+/// Quality and conversion options. The defaults give exactly Python's
+/// encoder settings.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct ConversionOptions {
+    pub mp3_bitrate: u32,
+    /// M4A and AAC.
+    pub aac_bitrate: u32,
+    pub opus_bitrate: u32,
+    pub opus_application: OpusApplication,
+    /// Vorbis quality from 0 to 10.
+    pub vorbis_quality: u8,
+    /// FLAC compression from 0 to 12; 5 is the encoder's own default.
+    pub flac_level: u8,
+    /// WMA, AC3 and MP2.
+    pub other_bitrate: u32,
+    /// 0 keeps the source's sample rate.
+    pub sample_rate: u32,
+    /// 0 keeps the source's channels.
+    pub channels: u8,
+    /// Files of a folder converted at the same time.
+    pub concurrency: u8,
+    pub folder_destination: FolderDestination,
+}
+
+impl Default for ConversionOptions {
+    fn default() -> Self {
+        Self {
+            mp3_bitrate: 320,
+            aac_bitrate: 256,
+            opus_bitrate: 160,
+            opus_application: OpusApplication::Audio,
+            vorbis_quality: 5,
+            flac_level: 5,
+            other_bitrate: 192,
+            sample_rate: 0,
+            channels: 0,
+            concurrency: 1,
+            folder_destination: FolderDestination::Ask,
+        }
+    }
+}
+
+impl ConversionOptions {
+    #[must_use]
+    pub fn from_settings(settings: &SettingsDocument) -> Self {
+        settings
+            .preserved
+            .get(CONVERTER_OPTIONS_KEY)
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default()
+    }
+
+    /// The encoder arguments of an audio target with these options.
+    #[must_use]
+    pub fn audio_arguments(&self, target: &str) -> Vec<String> {
+        let target = target.to_lowercase();
+        let resample = self.sample_rate > 0 || self.channels > 0;
+        let bitrate = |value: u32| format!("{}k", value.clamp(8, 512));
+        let mut arguments: Vec<String> = match target.as_str() {
+            "mp3" => vec![
+                "-c:a".into(),
+                "libmp3lame".into(),
+                "-b:a".into(),
+                bitrate(self.mp3_bitrate.min(320)),
+            ],
+            "opus" => {
+                let mut arguments = vec![
+                    "-c:a".into(),
+                    "libopus".into(),
+                    "-b:a".into(),
+                    bitrate(self.opus_bitrate),
+                ];
+                if self.opus_application != OpusApplication::Audio {
+                    arguments.extend([
+                        "-application".into(),
+                        match self.opus_application {
+                            OpusApplication::Voip => "voip",
+                            _ => "lowdelay",
+                        }
+                        .into(),
+                    ]);
+                }
+                arguments
+            }
+            "ogg" => vec![
+                "-c:a".into(),
+                "libvorbis".into(),
+                "-q:a".into(),
+                self.vorbis_quality.min(10).to_string(),
+            ],
+            "wma" | "ac3" | "mp2" => vec![
+                "-c:a".into(),
+                match target.as_str() {
+                    "wma" => "wmav2",
+                    other => other,
+                }
+                .into(),
+                "-b:a".into(),
+                bitrate(self.other_bitrate),
+            ],
+            "alac" => vec!["-c:a".into(), "alac".into()],
+            "aiff" => vec!["-c:a".into(), "pcm_s16be".into()],
+            "wav" => vec!["-c:a".into(), "pcm_s16le".into()],
+            "flac" | "oga" => self.flac_arguments(),
+            // Matroska takes almost any codec, so the sound is copied unless
+            // it has to be resampled.
+            "mka" if resample => self.flac_arguments(),
+            "mka" => vec!["-c:a".into(), "copy".into()],
+            _ => vec![
+                "-c:a".into(),
+                "aac".into(),
+                "-b:a".into(),
+                bitrate(self.aac_bitrate),
+            ],
+        };
+        arguments.insert(0, "-vn".into());
+        if self.sample_rate > 0 {
+            arguments.extend(["-ar".into(), self.sample_rate.to_string()]);
+        }
+        if self.channels > 0 {
+            arguments.extend(["-ac".into(), self.channels.to_string()]);
+        }
+        arguments
+    }
+
+    fn flac_arguments(&self) -> Vec<String> {
+        let mut arguments = vec!["-c:a".to_owned(), "flac".to_owned()];
+        if self.flac_level != 5 {
+            arguments.extend([
+                "-compression_level".to_owned(),
+                self.flac_level.min(12).to_string(),
+            ]);
+        }
+        arguments
+    }
+
+    fn workers(&self) -> usize {
+        usize::from(self.concurrency.clamp(1, 8))
+    }
+}
 /// Python `VIDEO_CONVERT_FORMATS`.
 pub const VIDEO_CONVERT_FORMATS: [&str; 15] = [
     "mp4", "mkv", "webm", "mov", "avi", "wmv", "m4v", "mpg", "mpeg", "flv", "3gp", "ogv", "ts",
     "m2ts", "asf",
 ];
 /// Python `AUDIO_INPUT_EXTENSIONS` extras beyond the audio target formats.
-const EXTRA_AUDIO_INPUTS: [&str; 4] = ["aif", "aifc", "ape", "mka"];
+const EXTRA_AUDIO_INPUTS: [&str; 3] = ["aif", "aifc", "ape"];
 /// Python `VIDEO_INPUT_EXTENSIONS` extras beyond the video target formats.
 const EXTRA_VIDEO_INPUTS: [&str; 6] = ["asf", "divx", "m2ts", "mts", "ts", "vob"];
 /// Python `CONVERTER_IMAGE_EXTENSIONS`.
@@ -255,6 +431,16 @@ fn same_path(left: &Path, right: &Path) -> bool {
 /// path exists or is the source itself.
 #[must_use]
 pub fn unique_output_path(path: &Path, source: Option<&Path>) -> PathBuf {
+    unique_output_path_excluding(path, source, &HashSet::new())
+}
+
+/// `unique_output_path` that also avoids names already given to other files
+/// of the same folder conversion.
+fn unique_output_path_excluding(
+    path: &Path,
+    source: Option<&Path>,
+    reserved: &HashSet<PathBuf>,
+) -> PathBuf {
     let stem = path
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
@@ -265,7 +451,10 @@ pub fn unique_output_path(path: &Path, source: Option<&Path>) -> PathBuf {
         .unwrap_or_default();
     let mut candidate = path.to_path_buf();
     let mut counter = 2;
-    while candidate.exists() || source.is_some_and(|source| same_path(&candidate, source)) {
+    while candidate.exists()
+        || reserved.contains(&candidate)
+        || source.is_some_and(|source| same_path(&candidate, source))
+    {
         candidate = path.with_file_name(format!("{stem} ({counter}){suffix}"));
         counter += 1;
     }
@@ -400,6 +589,7 @@ pub fn ffmpeg_arguments(
     output: &Path,
     target: &str,
     image: Option<&Path>,
+    options: &ConversionOptions,
 ) -> Option<Vec<OsString>> {
     let source_kind = input_kind(source)?;
     let target = target.to_lowercase();
@@ -407,7 +597,12 @@ pub fn ffmpeg_arguments(
     if AUDIO_CONVERT_FORMATS.contains(&target.as_str()) {
         arguments.push("-i".into());
         arguments.push(source.into());
-        arguments.extend(strings(&audio_codec_arguments(&target)));
+        arguments.extend(
+            options
+                .audio_arguments(&target)
+                .into_iter()
+                .map(OsString::from),
+        );
         arguments.push(output.into());
         return Some(arguments);
     }
@@ -525,7 +720,7 @@ fn patterns(extensions: &[&str]) -> String {
 }
 
 /// Runs one ffmpeg command: Python `run_ffmpeg_conversion`.
-pub type ConversionRunner<'a> = dyn FnMut(&Path, &[OsString]) -> Result<(), String> + 'a;
+pub type ConversionRunner<'a> = dyn Fn(&Path, &[OsString]) -> Result<(), String> + Sync + 'a;
 
 /// What Python `start_file_conversion` hands to `file_conversion_worker`.
 #[derive(Clone, Debug, PartialEq)]
@@ -538,6 +733,7 @@ pub struct FileConversionJob {
     pub replace_original: bool,
     /// Localized "This input format is not supported."
     pub unsupported_message: String,
+    pub options: ConversionOptions,
 }
 
 impl FileConversionJob {
@@ -571,6 +767,7 @@ impl FileConversionJob {
             image,
             replace_original,
             unsupported_message,
+            options: ConversionOptions::default(),
         }
     }
 }
@@ -581,7 +778,7 @@ impl FileConversionJob {
 /// Returns the error text Python shows in "Conversion failed: ...".
 pub fn run_file_conversion(
     job: &FileConversionJob,
-    run: &mut ConversionRunner<'_>,
+    run: &ConversionRunner<'_>,
 ) -> Result<PathBuf, String> {
     let ffmpeg = job
         .ffmpeg
@@ -602,8 +799,14 @@ pub fn run_file_conversion(
     } else {
         job.output.clone()
     };
-    let arguments = ffmpeg_arguments(&job.source, &work_output, &job.target, job.image.as_deref())
-        .ok_or_else(|| job.unsupported_message.clone())?;
+    let arguments = ffmpeg_arguments(
+        &job.source,
+        &work_output,
+        &job.target,
+        job.image.as_deref(),
+        &job.options,
+    )
+    .ok_or_else(|| job.unsupported_message.clone())?;
     let result = run(ffmpeg, &arguments).and_then(|()| {
         if job.replace_original {
             replace_converted_original(&job.source, &work_output, &job.output)
@@ -648,7 +851,7 @@ pub fn replace_converted_original(
 }
 
 /// What Python `start_folder_conversion` hands to `folder_conversion_worker`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct FolderConversionJob {
     pub ffmpeg: Option<PathBuf>,
     pub source_folder: PathBuf,
@@ -656,6 +859,17 @@ pub struct FolderConversionJob {
     pub target: String,
     pub image: Option<PathBuf>,
     pub replace_originals: bool,
+    pub options: ConversionOptions,
+    /// Set to stop: no further file starts and running `FFmpeg` is stopped by
+    /// the runner.
+    pub cancel: Arc<AtomicBool>,
+}
+
+/// One file of a folder that was not converted, with the reason.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FailedConversion {
+    pub file: String,
+    pub error: String,
 }
 
 /// Python `ui_queue` and `wx.CallAfter` messages from the folder worker.
@@ -677,23 +891,115 @@ pub enum FolderConversionEvent {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FolderConversionOutcome {
     /// Python `conversion_no_media_files`.
     NoMediaFiles,
     Done {
         converted: usize,
         failed: usize,
+        failures: Vec<FailedConversion>,
+        /// Stopped before every file was converted.
+        cancelled: bool,
     },
 }
 
-/// Python `folder_conversion_worker`.
+/// One planned file of a folder conversion: the converted file and, when an
+/// original is replaced, the hidden work file written first.
+struct PlannedConversion {
+    source: PathBuf,
+    target: PathBuf,
+    work: PathBuf,
+}
+
+/// Every output name is chosen before any file converts, so files that run
+/// at the same time never pick the same name.
+fn plan_folder_conversion(job: &FolderConversionJob, files: &[PathBuf]) -> Vec<PlannedConversion> {
+    let extension = output_extension(&job.target);
+    let mut reserved = HashSet::new();
+    files
+        .iter()
+        .map(|source| {
+            let (target, work) = if job.replace_originals {
+                let wanted = source.with_extension(extension);
+                let target = if same_path(&wanted, source)
+                    || (!wanted.exists() && !reserved.contains(&wanted))
+                {
+                    wanted
+                } else {
+                    unique_output_path_excluding(&wanted, Some(source), &reserved)
+                };
+                let work = temporary_conversion_path(&target);
+                (target, work)
+            } else {
+                let relative = source.strip_prefix(&job.source_folder).map_or_else(
+                    |_| PathBuf::from(source.file_name().unwrap_or_default()),
+                    Path::to_path_buf,
+                );
+                let target = unique_output_path_excluding(
+                    &job.output_folder.join(relative.with_extension(extension)),
+                    Some(source),
+                    &reserved,
+                );
+                (target.clone(), target)
+            };
+            reserved.insert(target.clone());
+            PlannedConversion {
+                source: source.clone(),
+                target,
+                work,
+            }
+        })
+        .collect()
+}
+
+fn convert_planned(
+    job: &FolderConversionJob,
+    ffmpeg: &Path,
+    run: &ConversionRunner<'_>,
+    planned: &PlannedConversion,
+) -> Result<(), String> {
+    if !job.replace_originals
+        && let Some(parent) = planned.target.parent()
+    {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let result = ffmpeg_arguments(
+        &planned.source,
+        &planned.work,
+        &job.target,
+        job.image.as_deref(),
+        &job.options,
+    )
+    .ok_or_else(String::new)
+    .and_then(|arguments| run(ffmpeg, &arguments))
+    .and_then(|()| {
+        if job.replace_originals {
+            replace_converted_original(&planned.source, &planned.work, &planned.target)
+        } else {
+            Ok(())
+        }
+    });
+    if result.is_err() && (job.replace_originals || job.cancel.load(AtomicOrdering::Acquire)) {
+        // A stopped or failed file leaves no partial output behind.
+        let _ = fs::remove_file(&planned.work);
+    }
+    result
+}
+
+enum WorkerMessage {
+    Started(usize, String),
+    Finished(String, Result<(), String>),
+}
+
+/// Python `folder_conversion_worker`, with up to eight files at a time and
+/// a reason for every file that failed.
 ///
 /// # Errors
 /// Returns the error text Python shows in "Conversion failed: ...".
 pub fn run_folder_conversion(
     job: &FolderConversionJob,
-    run: &mut ConversionRunner<'_>,
+    run: &ConversionRunner<'_>,
     events: &mut dyn FnMut(FolderConversionEvent),
 ) -> Result<FolderConversionOutcome, String> {
     let ffmpeg = job
@@ -709,67 +1015,90 @@ pub fn run_folder_conversion(
     }
     let total = files.len();
     events(FolderConversionEvent::Started { total });
-    let extension = output_extension(&job.target);
+    let plan = plan_folder_conversion(job, &files);
+    let next = AtomicUsize::new(0);
     let mut converted = 0;
-    let mut failed = 0;
-    for (index, source) in files.iter().enumerate() {
-        let (target, work_target) = if job.replace_originals {
-            let target = safe_replaced_output(source, &source.with_extension(extension));
-            let work = temporary_conversion_path(&target);
-            (target, work)
-        } else {
-            let relative = source.strip_prefix(&job.source_folder).map_or_else(
-                |_| PathBuf::from(source.file_name().unwrap_or_default()),
-                Path::to_path_buf,
-            );
-            let target = unique_output_path(
-                &job.output_folder.join(relative.with_extension(extension)),
-                Some(source),
-            );
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            }
-            (target.clone(), target)
-        };
-        let name = source
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        events(FolderConversionEvent::FileStarted {
-            index: index + 1,
-            total,
-            name: name.clone(),
-        });
-        events(FolderConversionEvent::Progress {
-            file: name.clone(),
-            converted,
-            total,
-        });
-        let result = ffmpeg_arguments(source, &work_target, &job.target, job.image.as_deref())
-            .ok_or_else(String::new)
-            .and_then(|arguments| run(ffmpeg, &arguments))
-            .and_then(|()| {
-                if job.replace_originals {
-                    replace_converted_original(source, &work_target, &target)
-                } else {
-                    Ok(())
+    let mut failures = Vec::new();
+    std::thread::scope(|scope| {
+        let (sender, receiver) = mpsc::channel();
+        for _ in 0..job.options.workers().min(total) {
+            let sender = sender.clone();
+            let (next, plan) = (&next, &plan);
+            scope.spawn(move || {
+                while !job.cancel.load(AtomicOrdering::Acquire) {
+                    let index = next.fetch_add(1, AtomicOrdering::AcqRel);
+                    let Some(planned) = plan.get(index) else {
+                        break;
+                    };
+                    let name = planned
+                        .source
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let _ = sender.send(WorkerMessage::Started(index, name.clone()));
+                    let result = convert_planned(job, ffmpeg, run, planned);
+                    let _ = sender.send(WorkerMessage::Finished(name, result));
                 }
             });
-        if result.is_err() {
-            if job.replace_originals {
-                let _ = fs::remove_file(&work_target);
-            }
-            failed += 1;
-            continue;
         }
-        converted += 1;
-        events(FolderConversionEvent::Progress {
-            file: name,
-            converted,
-            total,
-        });
-    }
-    Ok(FolderConversionOutcome::Done { converted, failed })
+        drop(sender);
+        for message in receiver {
+            match message {
+                WorkerMessage::Started(index, name) => {
+                    events(FolderConversionEvent::FileStarted {
+                        index: index + 1,
+                        total,
+                        name: name.clone(),
+                    });
+                    events(FolderConversionEvent::Progress {
+                        file: name,
+                        converted,
+                        total,
+                    });
+                }
+                WorkerMessage::Finished(name, Ok(())) => {
+                    converted += 1;
+                    events(FolderConversionEvent::Progress {
+                        file: name,
+                        converted,
+                        total,
+                    });
+                }
+                WorkerMessage::Finished(name, Err(error)) => {
+                    // A file stopped by Cancel is not a failure.
+                    if !job.cancel.load(AtomicOrdering::Acquire) {
+                        failures.push(FailedConversion { file: name, error });
+                    }
+                }
+            }
+        }
+    });
+    let cancelled = job.cancel.load(AtomicOrdering::Acquire) && converted + failures.len() < total;
+    Ok(FolderConversionOutcome::Done {
+        converted,
+        failed: failures.len(),
+        failures,
+        cancelled,
+    })
+}
+
+/// "These files were not converted:" and one line for each.
+#[must_use]
+pub fn failures_message(catalog: &TranslationCatalog, failures: &[FailedConversion]) -> String {
+    let lines: Vec<_> = failures
+        .iter()
+        .map(|failure| {
+            let reason = failure.error.lines().last().unwrap_or_default().trim();
+            if reason.is_empty() {
+                failure.file.clone()
+            } else {
+                format!("{}: {reason}", failure.file)
+            }
+        })
+        .collect();
+    catalog
+        .text("conversion_failed_files")
+        .replace("{files}", &lines.join("\n"))
 }
 
 /// Python `conversion_progress_message`.
@@ -847,7 +1176,8 @@ mod tests {
         assert_eq!(video.first(), Some(&"mp4"));
         assert_eq!(video.get(15), Some(&"mp3"));
         assert_eq!(format_values(None).first(), Some(&"mp3"));
-        assert_eq!(format_values(Some(InputKind::Audio)).len(), 27);
+        // Python's 27, then the 2.1 MKA and OGA.
+        assert_eq!(format_values(Some(InputKind::Audio)).len(), 29);
         assert_eq!(format_label("alac"), "ALAC (M4A)");
         assert_eq!(format_label("m2ts"), "M2TS");
         assert_eq!(dialog_format_values(false, " \"C:\\a.mkv\" ")[0], "mp4");
@@ -902,10 +1232,17 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One table of Python's arguments.
     fn ffmpeg_arguments_match_python() {
         let audio = text(
-            &ffmpeg_arguments(Path::new("in.flac"), Path::new("out.mp3"), "mp3", None)
-                .expect("audio"),
+            &ffmpeg_arguments(
+                Path::new("in.flac"),
+                Path::new("out.mp3"),
+                "mp3",
+                None,
+                &ConversionOptions::default(),
+            )
+            .expect("audio"),
         );
         assert_eq!(
             audio,
@@ -925,8 +1262,14 @@ mod tests {
             ]
         );
         let black = text(
-            &ffmpeg_arguments(Path::new("in.mp3"), Path::new("out.mp4"), "mp4", None)
-                .expect("black"),
+            &ffmpeg_arguments(
+                Path::new("in.mp3"),
+                Path::new("out.mp4"),
+                "mp4",
+                None,
+                &ConversionOptions::default(),
+            )
+            .expect("black"),
         );
         assert_eq!(
             black[4..11],
@@ -950,6 +1293,7 @@ mod tests {
                 Path::new("out.webm"),
                 "webm",
                 Some(Path::new("cover.png")),
+                &ConversionOptions::default(),
             )
             .expect("image"),
         );
@@ -973,7 +1317,14 @@ mod tests {
         );
         assert!(image.contains(&"libvpx-vp9".to_owned()));
         let video = text(
-            &ffmpeg_arguments(Path::new("in.mkv"), Path::new("out.ts"), "ts", None).expect("video"),
+            &ffmpeg_arguments(
+                Path::new("in.mkv"),
+                Path::new("out.ts"),
+                "ts",
+                None,
+                &ConversionOptions::default(),
+            )
+            .expect("video"),
         );
         assert_eq!(video[4..6], ["-i", "in.mkv"]);
         assert_eq!(video[video.len() - 3..], ["-f", "mpegts", "out.ts"]);
@@ -981,7 +1332,16 @@ mod tests {
             audio_codec_arguments("m4a"),
             ["-vn", "-c:a", "aac", "-b:a", "256k"]
         );
-        assert!(ffmpeg_arguments(Path::new("in.txt"), Path::new("o.mp3"), "mp3", None).is_none());
+        assert!(
+            ffmpeg_arguments(
+                Path::new("in.txt"),
+                Path::new("o.mp3"),
+                "mp3",
+                None,
+                &ConversionOptions::default()
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1063,9 +1423,9 @@ mod tests {
             false,
             "unsupported".to_owned(),
         );
-        let mut calls = Vec::new();
-        let result = run_file_conversion(&job, &mut |program, arguments| {
-            calls.push(program.to_path_buf());
+        let calls = std::sync::Mutex::new(Vec::new());
+        let result = run_file_conversion(&job, &|program, arguments| {
+            calls.lock().expect("calls").push(program.to_path_buf());
             let work = PathBuf::from(arguments.last().expect("output"));
             assert!(
                 work.file_name()
@@ -1076,7 +1436,10 @@ mod tests {
             fs::write(work, b"mp3").map_err(|error| error.to_string())
         });
         assert_eq!(result, Ok(output.clone()));
-        assert_eq!(calls, [PathBuf::from("ffmpeg.exe")]);
+        assert_eq!(
+            calls.into_inner().expect("calls"),
+            [PathBuf::from("ffmpeg.exe")]
+        );
         assert_eq!(fs::read(&output).expect("output"), b"mp3");
         assert!(!source.exists());
     }
@@ -1098,7 +1461,7 @@ mod tests {
         );
         assert_eq!(job.output, folder.path().join("song (2).mp3"));
         assert_eq!(
-            run_file_conversion(&job, &mut |_, _| Ok(())),
+            run_file_conversion(&job, &|_, _| Ok(())),
             Err("FFmpeg was not found".to_owned())
         );
     }
@@ -1121,7 +1484,7 @@ mod tests {
             String::new(),
         );
         assert_eq!(job.output, chosen);
-        let failed = run_file_conversion(&job, &mut |_, arguments| {
+        let failed = run_file_conversion(&job, &|_, arguments| {
             fs::write(PathBuf::from(arguments.last().expect("output")), b"partial")
                 .expect("partial");
             Err("broken".to_owned())
@@ -1129,7 +1492,7 @@ mod tests {
         assert_eq!(failed, Err("broken".to_owned()));
         assert_eq!(fs::read(&chosen).expect("kept"), b"old");
         assert_eq!(fs::read_dir(folder.path()).expect("list").count(), 2);
-        let result = run_file_conversion(&job, &mut |_, arguments| {
+        let result = run_file_conversion(&job, &|_, arguments| {
             fs::write(PathBuf::from(arguments.last().expect("output")), b"new")
                 .map_err(|error| error.to_string())
         });
@@ -1171,7 +1534,7 @@ mod tests {
                 false,
                 String::new(),
             );
-            let result = run_file_conversion(&job, &mut |_, arguments| {
+            let result = run_file_conversion(&job, &|_, arguments| {
                 fs::write(PathBuf::from(arguments.last().expect("output")), b"partial")
                     .expect("partial");
                 Err("broken".to_owned())
@@ -1200,11 +1563,13 @@ mod tests {
             target: "mp3".to_owned(),
             image: None,
             replace_originals: false,
+            options: ConversionOptions::default(),
+            cancel: Arc::default(),
         };
         let mut events = Vec::new();
         let outcome = run_folder_conversion(
             &job,
-            &mut |_, arguments| {
+            &|_, arguments| {
                 let target = PathBuf::from(arguments.last().expect("output"));
                 if target.ends_with("b.mp3") {
                     return Err("broken".to_owned());
@@ -1217,7 +1582,12 @@ mod tests {
             outcome,
             Ok(FolderConversionOutcome::Done {
                 converted: 1,
-                failed: 1
+                failed: 1,
+                failures: vec![FailedConversion {
+                    file: "b.wav".to_owned(),
+                    error: "broken".to_owned()
+                }],
+                cancelled: false
             })
         );
         assert!(output.join("a.mp3").exists());
@@ -1244,7 +1614,7 @@ mod tests {
             ..job
         };
         assert_eq!(
-            run_folder_conversion(&empty, &mut |_, _| Ok(()), &mut |_| {}),
+            run_folder_conversion(&empty, &|_, _| Ok(()), &mut |_| {}),
             Ok(FolderConversionOutcome::NoMediaFiles)
         );
     }
@@ -1261,10 +1631,12 @@ mod tests {
             target: "wav".to_owned(),
             image: None,
             replace_originals: true,
+            options: ConversionOptions::default(),
+            cancel: Arc::default(),
         };
         let outcome = run_folder_conversion(
             &job,
-            &mut |_, arguments| {
+            &|_, arguments| {
                 fs::write(
                     PathBuf::from(arguments.last().expect("output")),
                     b"converted",
@@ -1277,7 +1649,9 @@ mod tests {
             outcome,
             Ok(FolderConversionOutcome::Done {
                 converted: 2,
-                failed: 0
+                failed: 0,
+                failures: Vec::new(),
+                cancelled: false
             })
         );
         assert!(!folder.path().join("song.mp3").exists());
@@ -1311,10 +1685,12 @@ mod tests {
             target: "flac".to_owned(),
             image: None,
             replace_originals: true,
+            options: ConversionOptions::default(),
+            cancel: Arc::default(),
         };
         let outcome = run_folder_conversion(
             &job,
-            &mut |_, arguments| {
+            &|_, arguments| {
                 fs::write(PathBuf::from(arguments.last().expect("output")), b"partial")
                     .map_err(|error| error.to_string())?;
                 Err("failed".to_owned())
@@ -1325,7 +1701,12 @@ mod tests {
             outcome,
             Ok(FolderConversionOutcome::Done {
                 converted: 0,
-                failed: 1
+                failed: 1,
+                failures: vec![FailedConversion {
+                    file: "a.wav".to_owned(),
+                    error: "failed".to_owned()
+                }],
+                cancelled: false
             })
         );
         let names = fs::read_dir(folder.path())
@@ -1333,6 +1714,129 @@ mod tests {
             .map(|entry| entry.expect("entry").file_name())
             .collect::<Vec<_>>();
         assert_eq!(names, [OsString::from("a.wav")]);
+    }
+
+    #[test]
+    fn default_options_give_python_encoder_settings() {
+        let options = ConversionOptions::default();
+        for target in &AUDIO_CONVERT_FORMATS[..12] {
+            assert_eq!(
+                options.audio_arguments(target),
+                audio_codec_arguments(target),
+                "{target}"
+            );
+        }
+        assert_eq!(options.audio_arguments("mka"), ["-vn", "-c:a", "copy"]);
+        assert_eq!(options.audio_arguments("oga"), ["-vn", "-c:a", "flac"]);
+    }
+
+    #[test]
+    fn options_change_quality_rate_and_channels() {
+        let options = ConversionOptions {
+            opus_bitrate: 96,
+            opus_application: OpusApplication::Voip,
+            flac_level: 8,
+            sample_rate: 44_100,
+            channels: 1,
+            ..ConversionOptions::default()
+        };
+        assert_eq!(
+            options.audio_arguments("opus"),
+            [
+                "-vn",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "96k",
+                "-application",
+                "voip",
+                "-ar",
+                "44100",
+                "-ac",
+                "1"
+            ]
+        );
+        // A resampled Matroska file cannot copy the sound.
+        assert_eq!(
+            options.audio_arguments("mka")[..5],
+            ["-vn", "-c:a", "flac", "-compression_level", "8"]
+        );
+    }
+
+    #[test]
+    fn parallel_folder_conversion_never_reuses_a_name() {
+        let folder = tempfile::tempdir().expect("folder");
+        let source = folder.path().join("Music");
+        fs::create_dir_all(&source).expect("source");
+        for name in ["a.flac", "a.wav", "b.wav"] {
+            fs::write(source.join(name), b"x").expect("file");
+        }
+        let output = folder.path().join("out");
+        let job = FolderConversionJob {
+            ffmpeg: Some(PathBuf::from("ffmpeg.exe")),
+            source_folder: source,
+            output_folder: output.clone(),
+            target: "mp3".to_owned(),
+            image: None,
+            replace_originals: false,
+            options: ConversionOptions {
+                concurrency: 3,
+                ..ConversionOptions::default()
+            },
+            cancel: Arc::default(),
+        };
+        let outcome = run_folder_conversion(
+            &job,
+            &|_, arguments| {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                fs::write(PathBuf::from(arguments.last().expect("output")), b"mp3")
+                    .map_err(|error| error.to_string())
+            },
+            &mut |_| {},
+        );
+        assert!(matches!(
+            outcome,
+            Ok(FolderConversionOutcome::Done { converted: 3, .. })
+        ));
+        for name in ["a.mp3", "a (2).mp3", "b.mp3"] {
+            assert!(output.join(name).exists(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_cancelled_folder_starts_no_further_file() {
+        let folder = tempfile::tempdir().expect("folder");
+        fs::write(folder.path().join("a.wav"), b"x").expect("a");
+        fs::write(folder.path().join("b.wav"), b"x").expect("b");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let job = FolderConversionJob {
+            ffmpeg: Some(PathBuf::from("ffmpeg.exe")),
+            source_folder: folder.path().to_path_buf(),
+            output_folder: folder.path().join("out"),
+            target: "mp3".to_owned(),
+            image: None,
+            replace_originals: false,
+            options: ConversionOptions::default(),
+            cancel: Arc::clone(&cancel),
+        };
+        let outcome = run_folder_conversion(
+            &job,
+            &|_, arguments| {
+                cancel.store(true, AtomicOrdering::Release);
+                fs::write(PathBuf::from(arguments.last().expect("output")), b"mp3")
+                    .map_err(|error| error.to_string())
+            },
+            &mut |_| {},
+        );
+        assert_eq!(
+            outcome,
+            Ok(FolderConversionOutcome::Done {
+                converted: 1,
+                failed: 0,
+                failures: Vec::new(),
+                cancelled: true
+            })
+        );
     }
 
     #[test]

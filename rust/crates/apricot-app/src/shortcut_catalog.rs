@@ -211,6 +211,8 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("playlist_edit", "files"),
     ("delete_file_permanently", "files"),
     ("manage_files", "files"),
+    ("converter_options", "files"),
+    ("cancel_conversion", "files"),
     ("local_file_actions", "files"),
     ("open_search", "youtube"),
     ("open_channel", "youtube"),

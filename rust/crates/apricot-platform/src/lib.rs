@@ -51,7 +51,10 @@ pub use download::{
     DownloadError, DownloadEvent, DownloadMode, DownloadOptions, DownloadPhase, DownloadRequest,
     DownloadSummary, VideoDownloadFormat, YtDlpDownloader,
 };
-pub use local_edit::{LocalEditJob, LocalEditRender, run_ffmpeg_conversion, save_local_edit};
+pub use local_edit::{
+    LocalEditJob, LocalEditRender, run_ffmpeg_conversion, run_ffmpeg_conversion_cancellable,
+    save_local_edit,
+};
 pub use local_media::{
     LocalMediaError, MEDIA_EXTENSIONS, scan_local_media_folder, scan_local_media_folder_with_cancel,
 };

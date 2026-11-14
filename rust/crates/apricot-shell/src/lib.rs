@@ -58,7 +58,10 @@ mod youtube;
 pub use audiovault::AudiovaultLogin;
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
 pub use comments::{CommentsCommand, CommentsDialog, CommentsEffect};
-pub use converter::{ConverterDialog, ConverterOptions, ConverterStart, ConverterView};
+pub use converter::{
+    ConverterDialog, ConverterOptions, ConverterStart, ConverterView,
+    options_form as converter_options_form, options_from_values as converter_options_from_values,
+};
 pub use cookies::CookieCommandResult;
 pub use downloads::{DownloadProgress, safe_path_component};
 pub use equalizer_dialog::{EQUALIZER_BUTTONS, EqualizerButton, EqualizerLabels, EqualizerView};
@@ -590,6 +593,14 @@ impl Shell {
             }
             "manage_files" => {
                 self.local_file_operation(ui, None);
+                return;
+            }
+            "converter_options" => {
+                self.edit_converter_options(ui);
+                return;
+            }
+            "cancel_conversion" => {
+                self.cancel_conversions(ui);
                 return;
             }
             "remove_selected" if self.view == View::SpotifyBrowse => {

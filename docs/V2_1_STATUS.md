@@ -28,7 +28,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 12 | Radio | narejeno |
 | 13 | IPTV | narejeno |
 | 14 | Snemanje | narejeno |
-| 15 | Pretvornik | čaka |
+| 15 | Pretvornik | narejeno |
 | 16 | YouTube dodatki | čaka |
 | 17 | Medijske tipke in Discord | čaka |
 | 18 | Spotify naročnine | čaka |
@@ -196,3 +196,14 @@ Ročni NVDA preizkus: dodaj vir s seznamom M3U, Ctrl+Alt+Shift+2, Enter: NVDA pr
 Preverjeno v izoliranem namizju s pravimi napravami: Ctrl+Alt+F9 brez virov odpre seznam (mikrofoni, zvok računalnika, aplikacije), izbira zvoka računalnika takoj začne snemanje, okno pokaže stanje in vir, premor in nadaljevanje, ustavitev in shranjena datoteka FLAC. Zajem aplikacije in macOS sta preverjena samo s prevajanjem in testi.
 
 Ročni NVDA preizkus: Ctrl+Alt+F9: NVDA prebere seznam virov. Izberi "Computer audio: ...", Enter: zasliši se zvok začetka. Ctrl+Alt+Shift+3: prva vrstica pove "Recording since ...". Escape, Ctrl+Alt+F10: "Recording paused.", znova: "Recording resumed.", Ctrl+Alt+F11: "Finishing the recording." in zvok konca.
+
+## Enota 15
+
+- Nova ciljna formata MKA (zvok se prekopira brez izgube, ob spremembi frekvence ali kanalov pa se kodira v FLAC) in OGA (FLAC v Ogg). Vsi obstoječi formati za zvok, video in sliko ostanejo.
+- Converter options (Settings, Downloads ali Ctrl+Alt+Shift+K): bitna hitrost za MP3, M4A in AAC, Opus ter WMA, AC3 in MP2, namen Opus (glasba, govor, majhna zakasnitev), kakovost Ogg Vorbis, stiskanje FLAC, frekvenca vzorčenja in kanali (privzeto ohrani izvirno), število hkrati pretvorjenih datotek mape od 1 do 8 in kam gre pretvorjena mapa (izbrana mapa ali poleg izvirnikov). Privzete vrednosti dajo natanko ukaze Python verzije.
+- Pretvarjanje mape teče vzporedno, imena izhodnih datotek pa se določijo vnaprej, zato se dve hkratni datoteki nikoli ne zapišeta pod isto ime. Okno napredka ima gumb Cancel (tudi Escape), ki ga NVDA prebere ob odprtju. Cancel ustavi tekoči FFmpeg in ne začne novih datotek, ustavljena datoteka ne pusti delnega izhoda. Ctrl+Alt+Shift+X ustavi pretvarjanje tudi brez okna.
+- Na koncu je za vsako neuspelo datoteko izpisan razlog ("These files were not converted:"), po preklicu pa "Conversion stopped. N files were converted."
+
+Preverjeno v izoliranem namizju s pravim FFmpeg: pretvornik mape ponudi MKA in OGA, okno napredka s fokusom na Cancel, dve hkratni pretvorbi in datoteke MKA poleg izvirnikov. Preklic in vzporedna imena sta preverjena s testi.
+
+Ročni NVDA preizkus: v glavnem meniju Folder converter, izberi mapo in MKA, Convert: NVDA prebere "Converting folder", besedilo napredka in gumb Cancel. Escape: "Stopping the conversion.", nato "Conversion stopped. ...". Ctrl+Alt+Shift+K odpre možnosti pretvornika.
