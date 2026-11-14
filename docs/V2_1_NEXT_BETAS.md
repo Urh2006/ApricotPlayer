@@ -5,7 +5,6 @@ Urh se je 14. 11. 2026 odločil, da gredo v beto 2 samo izbira velikosti skoka (
 ## Predvajanje in navigacija
 
 - Bližnjici za največjo in najmanjšo glasnost.
-- Nastavljiv korak za ravnovesje ter za vrtenje in dvig prostorskega zvoka.
 - Možnost, da se ob Previous in Next prebere ime dosežene datoteke.
 - Večkratni pritisk ene tipke: najprej ime, nato pot oziroma naslov toka, nato kopiranje poti.
 - Okno z vsemi odprtimi datotekami (skok na izbrano, podatki o seznamu: število, velikost, skupni, pretečeni in preostali čas).
@@ -31,6 +30,11 @@ Urh se je 14. 11. 2026 odločil, da gredo v beto 2 samo izbira velikosti skoka (
 
 - Razlaga nastavitve na F1, ko je fokus na njej.
 - Dve ravni zgovornosti (polna in kratka) s hitrim preklopom.
-- Pri pretvorniku možnost, da se izvirniki izbrišejo po uspešni pretvorbi.
-- Pri IPTV iskalno polje v seznamu kanalov in možnost HLS za kanale Xtream.
+- Pri IPTV možnost HLS za kanale Xtream (iskanje kanalov že obstaja).
 - Pri equalizerju izbira izhodiščnega profila ob novem profilu ter dodatni profili za slušalke, govor in tiho poslušanje.
+
+## Že obstaja, zato ni v seznamu
+
+- Korak ravnovesja in prostorskega zvoka: okno Audio processing (F5).
+- Brisanje izvirnikov po pretvorbi: "Replace the original files" v pretvorniku.
+- Iskanje kanalov IPTV: ukaz Search v seznamu IPTV.

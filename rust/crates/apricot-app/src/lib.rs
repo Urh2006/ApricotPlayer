@@ -16,6 +16,7 @@ pub mod diagnostic_report;
 pub mod download_controller;
 pub mod equalizer;
 pub mod equalizer_advanced;
+pub mod global_shortcuts;
 pub mod integrations;
 pub mod last_player_session_controller;
 pub mod local_edit;

@@ -57,6 +57,19 @@ pub fn macos_default_shortcut(id: &str) -> Option<&'static str> {
         "add_to_playback_queue" => Some("Ctrl+Shift+Enter"),
         // Command+Option+D turns Dock hiding on and off (beta 17).
         "open_current_downloads" => Some("Ctrl+Alt+J"),
+        // Command+Shift+3 to 6 take screenshots, so the jumps to 15 to 95
+        // percent use Command+Option there.
+        "player_jump_15" => Some("Ctrl+Alt+1"),
+        "player_jump_25" => Some("Ctrl+Alt+2"),
+        "player_jump_35" => Some("Ctrl+Alt+3"),
+        "player_jump_45" => Some("Ctrl+Alt+4"),
+        "player_jump_55" => Some("Ctrl+Alt+5"),
+        "player_jump_65" => Some("Ctrl+Alt+6"),
+        "player_jump_75" => Some("Ctrl+Alt+7"),
+        "player_jump_85" => Some("Ctrl+Alt+8"),
+        "player_jump_95" => Some("Ctrl+Alt+9"),
+        // Command+M minimizes the window.
+        "player_silence_toggle" => Some("Ctrl+Alt+Shift+N"),
         _ => None,
     }
 }
@@ -319,6 +332,38 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("bookmarks_export", "Ctrl+Alt+Shift+F4", GLOBAL),
     action!("settings_import", "Ctrl+Alt+Shift+F5", GLOBAL),
     action!("settings_export", "Ctrl+Alt+Shift+F6", GLOBAL),
+    action!("player_seek_amount_1", "Shift+1", PLAYER),
+    action!("player_seek_amount_2", "Shift+2", PLAYER),
+    action!("player_seek_amount_3", "Shift+3", PLAYER),
+    action!("player_seek_amount_4", "Shift+4", PLAYER),
+    action!("player_seek_amount_5", "Shift+5", PLAYER),
+    action!("player_seek_amount_6", "Shift+6", PLAYER),
+    action!("player_seek_amount_7", "Shift+7", PLAYER),
+    action!("player_seek_amount_8", "Shift+8", PLAYER),
+    action!("player_seek_amount_9", "Shift+9", PLAYER),
+    action!("player_seek_amount_0", "Shift+0", PLAYER),
+    action!("player_seek_amount_custom", "Shift+C", PLAYER),
+    action!("player_jump_10", "Ctrl+1", PLAYER),
+    action!("player_jump_20", "Ctrl+2", PLAYER),
+    action!("player_jump_30", "Ctrl+3", PLAYER),
+    action!("player_jump_40", "Ctrl+4", PLAYER),
+    action!("player_jump_50", "Ctrl+5", PLAYER),
+    action!("player_jump_60", "Ctrl+6", PLAYER),
+    action!("player_jump_70", "Ctrl+7", PLAYER),
+    action!("player_jump_80", "Ctrl+8", PLAYER),
+    action!("player_jump_90", "Ctrl+9", PLAYER),
+    action!("player_jump_15", "Ctrl+Shift+1", PLAYER),
+    action!("player_jump_25", "Ctrl+Shift+2", PLAYER),
+    action!("player_jump_35", "Ctrl+Shift+3", PLAYER),
+    action!("player_jump_45", "Ctrl+Shift+4", PLAYER),
+    action!("player_jump_55", "Ctrl+Shift+5", PLAYER),
+    action!("player_jump_65", "Ctrl+Shift+6", PLAYER),
+    action!("player_jump_75", "Ctrl+Shift+7", PLAYER),
+    action!("player_jump_85", "Ctrl+Shift+8", PLAYER),
+    action!("player_jump_95", "Ctrl+Shift+9", PLAYER),
+    action!("player_silence_toggle", "Ctrl+M", PLAYER),
+    action!("player_spatial_toggle", "Ctrl+Alt+Shift+H", PLAYER),
+    action!("open_global_shortcuts", "Ctrl+Alt+Shift+G", GLOBAL),
 ];
 
 /// Number of leading [`ACTIONS`] that mirror the Python 1.0.21 catalog.
@@ -341,7 +386,7 @@ mod tests {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
         // 14 Spotify actions, then the 2.1 additions.
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 80);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 112);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
             ACTIONS[PYTHON_BASELINE_ACTIONS..PYTHON_BASELINE_ACTIONS + 14]

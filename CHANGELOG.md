@@ -1,11 +1,16 @@
-# v2.1.0-beta.2 - Bass boost intensity and a sleep timer button
+# v2.1.0-beta.2 - Seek amounts, global shortcuts, bass boost intensity and a sleep timer button
 
-**2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This second beta adds two requested features and fixes what was found in the first one. Everything from 2.1.0-beta.1 is still included; its release notes describe every new command and its keys.
+**2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This second beta adds several requested features and fixes what was found in the first one. Everything from 2.1.0-beta.1 is still included; its release notes describe every new command and its keys.
 
 ## Added
 
 - Bass boost intensity in Settings, Equalizer: Low, Medium, High or Extreme. Medium is the bass boost you know and stays the default. High and Extreme raise the deep bass much more while the midrange and treble stay as they are. While something plays with bass boost on (F3), you hear the new intensity as soon as you choose it; Save keeps it.
 - A Sleep timer button in the player, right after Next. It opens the same Sleep timer as the main menu and Ctrl+Alt+T, which also works in the player. The button says whether the timer runs, for example "Sleep timer: Running, 20:05 left, then playback pauses" or "Not running"; it is read when you reach it and never interrupts you while the time counts down.
+
+- Choose how far Left and Right seek while you listen: Shift+1 to Shift+0 select 1, 5, 10, 20 or 30 seconds or 1, 2, 3, 5 or 10 minutes, and Shift+C selects your own amount, set in Settings, Playback, "Custom seek amount". The choice is kept and is the same Seek step that Settings shows.
+- Jump straight to a part of the item: Ctrl+1 to Ctrl+9 go to 10 to 90 percent, Ctrl+Shift+1 to Ctrl+Shift+9 to 15 to 95 percent. In audiobook mode the percentage is of the chapter. On the Mac the 15 to 95 percent jumps use Command+Option with the digit, because Command+Shift with 3 to 6 takes screenshots.
+- Ctrl+M turns silence removal on or off and Ctrl+Alt+Shift+H turns headphone spatialization on or off, without opening Audio processing. On the Mac silence removal uses Command+Option+Shift+N, because Command+M minimizes the window.
+- Global shortcuts (Ctrl+Alt+Shift+G or Settings, General) work while another program is in front: play or pause, seek, volume, previous and next, and starting, pausing and stopping a recording. On Windows they are Win+Ctrl+Alt with Space, the arrows, Page Up and Page Down, F9, F10 and F11. Each one can be changed or turned off, and Apricot tells you if another program already uses one.
 
 ## Changed
 

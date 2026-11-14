@@ -1526,6 +1526,7 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
         SettingsCommand::ConverterOptions => edit_converter_options(window),
         SettingsCommand::RecordingSettings => defer_global_action(window, "recording_settings"),
         SettingsCommand::OpenIntegrations
+        | SettingsCommand::GlobalShortcuts
         | SettingsCommand::ExportSettings
         | SettingsCommand::ImportSettings
         | SettingsCommand::ExportBookmarks

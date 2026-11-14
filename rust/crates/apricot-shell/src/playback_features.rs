@@ -290,6 +290,24 @@ pub fn processing_chain_filter(app: &Application) -> Option<String> {
         .and_then(|settings| settings.filter().ok().flatten())
 }
 
+/// The seek amounts of Shift+1 to Shift+0, in seconds.
+const SEEK_AMOUNTS: [f64; 10] = [1.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 180.0, 300.0, 600.0];
+
+/// "10 seconds", "1 minute"; another amount (the custom one) as a time.
+fn seek_amount_label(catalog: &apricot_core::TranslationCatalog, seconds: f64) -> String {
+    if SEEK_AMOUNTS
+        .iter()
+        .any(|amount| (amount - seconds).abs() < 1e-9)
+    {
+        return catalog
+            .text(&format!("seek_amount_value_{}", seconds.round()))
+            .to_owned();
+    }
+    catalog
+        .text("seek_amount_time")
+        .replace("{time}", &crate::format_duration(seconds))
+}
+
 fn apply_processing(
     app: &mut Application,
     settings: &AudioProcessingSettings,
@@ -883,6 +901,32 @@ pub fn dispatch_playback_feature(
             commands = apply_processing(app, &settings, ui);
             ui.announce(&pan_status(app, settings.pan));
         }
+        "player_silence_toggle" | "player_spatial_toggle" => {
+            let Some(mut settings) = audio_settings(app, ui) else {
+                return Some(commands);
+            };
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let (enabled, on, off) = if action == "player_silence_toggle" {
+                settings.silence.enabled = !settings.silence.enabled;
+                (
+                    settings.silence.enabled,
+                    "silence_removal_on",
+                    "silence_removal_off",
+                )
+            } else {
+                settings.spatial.enabled = !settings.spatial.enabled;
+                (
+                    settings.spatial.enabled,
+                    "spatial_audio_on",
+                    "spatial_audio_off",
+                )
+            };
+            // A failed filter (no SOFA file) is announced and nothing is saved.
+            commands = apply_processing(app, &settings, ui);
+            if !commands.is_empty() {
+                ui.announce(catalog.text(if enabled { on } else { off }));
+            }
+        }
         "player_pan_status" => {
             if let Some(settings) = audio_settings(app, ui) {
                 ui.announce(&pan_status(app, settings.pan));
@@ -1091,6 +1135,49 @@ pub fn dispatch_playback_feature(
         "player_list_info" => {
             let catalog = apricot_app::embedded_catalog(&app.settings().language);
             ui.announce(&list_statistics(app, &catalog));
+        }
+        amount if amount.starts_with("player_seek_amount_") => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let seconds = match &amount["player_seek_amount_".len()..] {
+                "custom" => f64::from(
+                    u32::try_from(app.settings().custom_seek_seconds.clamp(1, 600)).unwrap_or(15),
+                ),
+                digit => SEEK_AMOUNTS[digit.parse::<usize>().map_or(0, |n| (n + 9) % 10)],
+            };
+            let saved = app
+                .set_float_setting(apricot_core::SettingId::SeekSeconds, seconds)
+                .is_ok()
+                && app.save_settings().is_ok();
+            if saved {
+                ui.announce(
+                    &catalog
+                        .text("seek_amount_status")
+                        .replace("{amount}", &seek_amount_label(&catalog, seconds)),
+                );
+            } else {
+                ui.announce(catalog.text("audio_processing_invalid"));
+            }
+        }
+        jump if jump.starts_with("player_jump_") => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let percent = jump["player_jump_".len()..].parse::<f64>().unwrap_or(0.0);
+            // In audiobook mode the percentage is of the chapter.
+            let target = apricot_app::playback_features::chapter_span(app).map_or_else(
+                || {
+                    app.player_session()
+                        .duration_seconds()
+                        .filter(|duration| duration.is_finite() && *duration > 0.0)
+                        .map(|duration| duration * percent / 100.0)
+                },
+                |(start, end)| Some(start + (end - start) * percent / 100.0),
+            );
+            match target {
+                Some(target) => commands.push(PlaybackCommand::SeekAbsolute {
+                    seconds: app.playback_features().ranges.constrain(target),
+                    exact: true,
+                }),
+                None => ui.announce(catalog.text("timing_unavailable")),
+            }
         }
         slot if slot.starts_with("player_slot_set_") || slot.starts_with("player_slot_go_") => {
             let catalog = apricot_app::embedded_catalog(&app.settings().language);

@@ -15,6 +15,7 @@ pub mod clip_export;
 pub mod diagnostics;
 pub mod download;
 pub mod file_operations;
+pub mod global_hotkeys;
 pub mod integrations;
 pub mod iptv;
 pub mod local_edit;

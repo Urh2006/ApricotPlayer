@@ -71,6 +71,7 @@ pub enum SettingsCommand {
     ImportSettings,
     ExportBookmarks,
     ImportBookmarks,
+    GlobalShortcuts,
 }
 
 impl SettingsCommand {
@@ -79,6 +80,7 @@ impl SettingsCommand {
     pub const fn deferred_action(self) -> Option<&'static str> {
         Some(match self {
             Self::OpenIntegrations => "open_integrations",
+            Self::GlobalShortcuts => "open_global_shortcuts",
             Self::ExportSettings => "settings_export",
             Self::ImportSettings => "settings_import",
             Self::ExportBookmarks => "bookmarks_export",
@@ -376,6 +378,10 @@ impl SettingsScreenModel {
             controls.push(SettingsControl::Command {
                 command: SettingsCommand::OpenIntegrations,
                 label: catalog.text("integrations_settings").to_owned(),
+            });
+            controls.push(SettingsControl::Command {
+                command: SettingsCommand::GlobalShortcuts,
+                label: catalog.text("shortcut_open_global_shortcuts").to_owned(),
             });
             for (command, label) in [
                 (SettingsCommand::ExportSettings, "settings_export"),
@@ -824,15 +830,13 @@ fn playback_controls(
             value_type: SettingsValueType::String,
             options: crate::audio_devices::unprobed_device_options(&settings.audio_output_device),
         },
-        choice_raw(
-            SettingId::SeekSeconds,
-            "seek_seconds",
-            &compact_number(settings.seek_seconds),
-            &[
-                "0.1", "0.25", "0.5", "0.75", "1", "1.5", "2", "2.5", "3", "4", "5", "7.5", "10",
-                "15", "20", "30", "45", "60",
-            ],
-            SettingsValueType::Float,
+        seek_amount_choice(settings, catalog),
+        integer(
+            SettingId::CustomSeekSeconds,
+            "custom_seek_seconds",
+            settings.custom_seek_seconds,
+            1,
+            600,
             catalog,
         ),
         choice_raw(
@@ -1668,6 +1672,35 @@ fn integer(
     }
 }
 
+/// The seek step, with the amounts Shift and a digit select (up to ten
+/// minutes) and the current value when it is a custom one.
+fn seek_amount_choice(
+    settings: &SettingsDocument,
+    catalog: &TranslationCatalog,
+) -> SettingsControl {
+    let mut options: Vec<f64> = vec![
+        0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.5, 10.0, 15.0, 20.0, 30.0, 45.0,
+        60.0, 120.0, 180.0, 300.0, 600.0,
+    ];
+    if !options
+        .iter()
+        .any(|option| (option - settings.seek_seconds).abs() < 1e-9)
+    {
+        options.push(settings.seek_seconds);
+        options.sort_by(f64::total_cmp);
+    }
+    let options: Vec<String> = options.into_iter().map(compact_number).collect();
+    let options: Vec<&str> = options.iter().map(String::as_str).collect();
+    choice_raw(
+        SettingId::SeekSeconds,
+        "seek_seconds",
+        &compact_number(settings.seek_seconds),
+        &options,
+        SettingsValueType::Float,
+        catalog,
+    )
+}
+
 fn choice_raw(
     setting: SettingId,
     label_key: &str,
@@ -1802,9 +1835,9 @@ mod tests {
         );
         // macOS adds "Import data from Windows" after "Set default player".
         let mac = usize::from(cfg!(target_os = "macos"));
-        // 2.1 appends "Media controls" and the four import and
-        // export commands.
-        assert_eq!(model.controls.len(), 23 + mac);
+        // 2.1 appends "Media controls", "Global shortcuts" and the four
+        // import and export commands.
+        assert_eq!(model.controls.len(), 24 + mac);
         assert!(matches!(
             &model.controls[0],
             SettingsControl::Choice {
@@ -1944,12 +1977,13 @@ mod tests {
             // 2.1 appends integrations and the four import and export commands.
             (
                 SettingsSection::General,
-                23 + usize::from(cfg!(target_os = "macos")),
+                24 + usize::from(cfg!(target_os = "macos")),
             ),
             // 19 Python items, Spotify, the four 2.1 entries and the reset button.
             (SettingsSection::MainMenu, 25),
-            // 2.1 appends "Audio processing" and "Playback transitions".
-            (SettingsSection::Playback, 37),
+            // 2.1 adds "Custom seek amount" and appends "Audio processing"
+            // and "Playback transitions".
+            (SettingsSection::Playback, 38),
             // 2.1 appends "Bass boost intensity".
             (SettingsSection::Equalizer, 4),
             // 2.1 appends "Converter options".

@@ -73,6 +73,7 @@ define_setting_ids! {
     FilenameTemplate => "filename_template",
     AudioQuality => "audio_quality",
     SeekSeconds => "seek_seconds",
+    CustomSeekSeconds => "custom_seek_seconds",
     VolumeStep => "volume_step",
     DefaultVolume => "default_volume",
     VolumeBoostByDefault => "volume_boost_by_default",
@@ -146,9 +147,9 @@ mod tests {
     use super::SettingId;
 
     #[test]
-    fn baseline_contains_117_unique_settings() {
+    fn baseline_contains_118_unique_settings() {
         let keys: HashSet<_> = SettingId::ALL.iter().map(|id| id.key()).collect();
-        assert_eq!(SettingId::ALL.len(), 117);
+        assert_eq!(SettingId::ALL.len(), 118);
         assert_eq!(keys.len(), SettingId::ALL.len());
     }
 }

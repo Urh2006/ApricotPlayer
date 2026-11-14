@@ -20,6 +20,7 @@ mod downloads;
 mod equalizer_dialog;
 mod feature_form;
 pub mod file_manager;
+pub mod global_shortcuts;
 pub mod integrations;
 mod keyboard;
 mod library;
@@ -613,6 +614,10 @@ impl Shell {
             }
             "open_integrations" => {
                 self.edit_integrations(ui);
+                return;
+            }
+            "open_global_shortcuts" => {
+                self.edit_global_shortcuts(ui);
                 return;
             }
             "download_with_options" => {

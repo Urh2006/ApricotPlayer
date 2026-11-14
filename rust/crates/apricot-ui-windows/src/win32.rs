@@ -273,6 +273,7 @@ const SPOTIFY_SUBSCRIPTION_TIMER_MS: u32 = 300_000;
 /// A media key or the system media overlay: WPARAM is the event, LPARAM
 /// milliseconds for seeking.
 const WM_MEDIA_KEY: u32 = WM_APP + 30;
+const WM_HOTKEY: u32 = 0x0312;
 const CONVERSION_TIMER_INTERVAL_MS: u32 = 100;
 const UPDATE_TIMER_ID: usize = 15;
 const UPDATE_TIMER_INTERVAL_MS: u32 = 100;
@@ -679,6 +680,9 @@ struct WindowState {
     conversion_cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pending_suggestions: Option<apricot_shell::youtube_extras::PendingSuggestions>,
     media_controls: Option<apricot_platform::integrations::SystemMediaControls>,
+    /// The commands of the registered global shortcuts; hotkey id N is
+    /// entry N - 1.
+    global_hotkeys: Vec<&'static str>,
     /// Python `conversion_progress_dialog`.
     conversion_progress_window: Option<crate::converter_win32::ConversionProgressWindow>,
     pending_updates: Vec<Receiver<UpdateMessage>>,
@@ -1271,6 +1275,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam.0 == DIAGNOSTIC_REPORT_TIMER_ID => {
             poll_diagnostic_report(window);
+            LRESULT(0)
+        }
+        WM_HOTKEY => {
+            run_global_hotkey(window, wparam.0);
             LRESULT(0)
         }
         WM_MEDIA_KEY => {
@@ -2216,6 +2224,7 @@ unsafe fn create_controls(
         conversion_cancels: Vec::new(),
         pending_suggestions: None,
         media_controls: None,
+        global_hotkeys: Vec::new(),
         conversion_progress_window: None,
         pending_updates: Vec::new(),
         app_update_check_running: false,
@@ -13732,6 +13741,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "copy_diagnostic_report" => copy_diagnostic_report(window),
         "converter_options" => edit_converter_options(window),
         "open_integrations" => edit_integrations(window),
+        "open_global_shortcuts" => edit_global_shortcuts(window),
         "settings_export" => backups::run(window, apricot_shell::backups::Backup::ExportSettings),
         "settings_import" => backups::run(window, apricot_shell::backups::Backup::ImportSettings),
         "bookmarks_export" => backups::run(window, apricot_shell::backups::Backup::ExportBookmarks),
@@ -15850,6 +15860,7 @@ unsafe fn edit_converter_options(window: HWND) {
 /// subscription schedule.
 unsafe fn start_integrations(window: HWND) {
     apply_integrations(window);
+    let _ = apply_global_shortcuts(window);
     let _ = SetTimer(
         Some(window),
         SPOTIFY_SUBSCRIPTION_TIMER_ID,
@@ -15884,6 +15895,133 @@ unsafe fn apply_integrations(window: HWND) {
         .ok();
     }
     update_integrations(state);
+}
+
+/// Registers the global shortcuts again; returns the commands whose chord
+/// another program already uses.
+pub(crate) unsafe fn apply_global_shortcuts(window: HWND) -> Vec<&'static str> {
+    let Some(state) = state_mut(window) else {
+        return Vec::new();
+    };
+    let target = window.0 as isize;
+    for id in 1..=state.global_hotkeys.len() {
+        apricot_platform::global_hotkeys::unregister(target, i32::try_from(id).unwrap_or(0));
+    }
+    state.global_hotkeys.clear();
+    let settings = apricot_app::global_shortcuts::GlobalShortcutSettings::from_settings(
+        state.application.settings(),
+    );
+    let mut failed = Vec::new();
+    for (action, chord) in settings.active() {
+        let id = i32::try_from(state.global_hotkeys.len() + 1).unwrap_or(0);
+        match apricot_platform::global_hotkeys::register(
+            target,
+            id,
+            apricot_shell::global_shortcuts::hotkey(chord),
+        ) {
+            // Ids stay consecutive, so a failed one takes no number.
+            Ok(()) => state.global_hotkeys.push(action),
+            Err(_) => failed.push(action),
+        }
+    }
+    failed
+}
+
+/// A global shortcut was pressed, in Apricot or in another program.
+unsafe fn run_global_hotkey(window: HWND, id: usize) {
+    let Some(action) = state(window)
+        .and_then(|state| {
+            id.checked_sub(1)
+                .and_then(|index| state.global_hotkeys.get(index))
+        })
+        .copied()
+    else {
+        return;
+    };
+    if state(window).is_some_and(|state| state.modal_open) {
+        return;
+    }
+    // Player commands act only on an open player, as media keys do.
+    if action.starts_with("player_")
+        && !state(window).is_some_and(|state| state.application.player_session().is_open())
+    {
+        return;
+    }
+    activate_action(window, action);
+}
+
+/// Global shortcuts from Settings or its own shortcut, saved at once.
+unsafe fn edit_global_shortcuts(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let mut settings = apricot_app::global_shortcuts::GlobalShortcutSettings::from_settings(
+        state.application.settings(),
+    );
+    state.modal_open = true;
+    let chosen = loop {
+        let form = apricot_shell::global_shortcuts::global_shortcuts_form(&catalog, &settings);
+        let Some(values) = crate::feature_form_win32::show(window, &form) else {
+            break None;
+        };
+        match apricot_shell::global_shortcuts::global_shortcuts_from_values(&catalog, &values) {
+            Ok(chosen) => break Some(chosen),
+            Err(error) => {
+                show_error_message(window, &error);
+                // The form opens again with what was typed.
+                settings = typed_global_shortcuts(&values, settings);
+            }
+        }
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    let Some(settings) = chosen else {
+        return;
+    };
+    state.application.set_feature_settings(
+        apricot_app::global_shortcuts::GLOBAL_SHORTCUTS_KEY,
+        serde_json::json!(settings),
+    );
+    if let Err(error) = state.application.save_settings() {
+        show_error_message(
+            window,
+            &catalog
+                .text("settings_save_failed")
+                .replace("{error}", &error.to_string()),
+        );
+        return;
+    }
+    let failed = apply_global_shortcuts(window);
+    if let Some(state) = state_mut(window) {
+        set_status(
+            state,
+            &apricot_shell::global_shortcuts::applied_message(&catalog, &failed),
+            true,
+        );
+    }
+}
+
+/// The form's values kept as settings, so a rejected form opens again with
+/// what the user typed.
+fn typed_global_shortcuts(
+    values: &apricot_shell::FormValues,
+    mut settings: apricot_app::global_shortcuts::GlobalShortcutSettings,
+) -> apricot_app::global_shortcuts::GlobalShortcutSettings {
+    if let Some(enabled) = values
+        .get("enabled")
+        .and_then(apricot_shell::FormValue::checked)
+    {
+        settings.enabled = enabled;
+    }
+    for (action, _) in apricot_app::global_shortcuts::GLOBAL_ACTIONS {
+        if let Some(text) = values.get(action).and_then(apricot_shell::FormValue::text) {
+            settings.bindings.insert(action.to_owned(), text.to_owned());
+        }
+    }
+    settings
 }
 
 /// A media key event as a window message.

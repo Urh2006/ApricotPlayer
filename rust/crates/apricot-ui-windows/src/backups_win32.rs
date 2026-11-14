@@ -80,6 +80,7 @@ pub(super) unsafe fn run(window: HWND, backup: Backup) {
     };
     if report.settings_imported {
         super::apply_integrations(window);
+        let _ = super::apply_global_shortcuts(window);
         let _ = PostMessageW(
             Some(window),
             super::WM_APPLY_AUDIO_PROCESSING,

@@ -1462,6 +1462,7 @@ impl SettingsWindow {
             SettingsCommand::ConverterOptions => self.edit_converter_options(),
             SettingsCommand::RecordingSettings => self.defer_global_action("recording_settings"),
             SettingsCommand::OpenIntegrations
+            | SettingsCommand::GlobalShortcuts
             | SettingsCommand::ExportSettings
             | SettingsCommand::ImportSettings
             | SettingsCommand::ExportBookmarks
