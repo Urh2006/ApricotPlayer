@@ -1,5 +1,4 @@
 //! Native source list with keyboard, context menu and stable focused selection.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use apricot_shell::sources::{SourceBrowser, SourceSelection};
@@ -51,13 +50,14 @@ pub(crate) fn show(owner: HWND, model: &SourceBrowser) -> Option<SourceSelection
     unsafe { show_inner(owner, model).ok().flatten() }
 }
 
+#[allow(clippy::too_many_lines)] // Creates the window and runs its modal loop.
 unsafe fn show_inner(
     owner: HWND,
     model: &SourceBrowser,
 ) -> windows::core::Result<Option<SourceSelection>> {
     let instance = HINSTANCE(GetModuleHandleW(None)?.0);
     let _ = RegisterClassW(&WNDCLASSW {
-        cbWndExtra: size_of::<isize>() as i32,
+        cbWndExtra: i32::try_from(size_of::<isize>()).unwrap_or(8),
         hCursor: LoadCursorW(None, IDC_ARROW)?,
         hInstance: instance,
         lpszClassName: CLASS,
@@ -163,7 +163,7 @@ unsafe fn show_inner(
         let received = GetMessageW(&raw mut message, None, 0, 0).0;
         if received <= 0 {
             if received == 0 {
-                PostQuitMessage(message.wParam.0 as i32);
+                PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             }
             let _ = DestroyWindow(window);
             break;
@@ -248,7 +248,8 @@ unsafe fn layout(window: HWND, state: &State) {
         .into_iter()
         .enumerate()
     {
-        let _ = MoveWindow(control, 12 + index as i32 * 170, height - 48, 158, 34, true);
+        let left = 12 + i32::try_from(index).unwrap_or_default() * 170;
+        let _ = MoveWindow(control, left, height - 48, 158, 34, true);
     }
 }
 
@@ -285,11 +286,13 @@ unsafe fn menu(window: HWND, state: &mut State) {
     )
     .0;
     let _ = DestroyMenu(menu);
-    if selected > 0
+    if let Some(index) = usize::try_from(selected)
+        .ok()
+        .and_then(|selected| selected.checked_sub(1))
         && let Some(action) = state
             .model
             .actions
-            .get(selected as usize - 1)
+            .get(index)
             .map(|action| action.id.to_owned())
     {
         finish(window, state, &action);

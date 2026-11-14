@@ -1,5 +1,4 @@
 //! Thin shell adapter for the shared Radio, IPTV and recording controller.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 use crate::{
     FeatureForm, FormValues, Shell, ShellUi,
     sources::{SourceBrowser, SourceSelection, SourcesEnvironment, SourcesUi},

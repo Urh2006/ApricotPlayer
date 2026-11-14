@@ -27,7 +27,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 11 | Upravljanje lokalnih datotek | narejeno |
 | 12 | Radio | narejeno |
 | 13 | IPTV | narejeno |
-| 14 | Snemanje | čaka |
+| 14 | Snemanje | narejeno |
 | 15 | Pretvornik | čaka |
 | 16 | YouTube dodatki | čaka |
 | 17 | Medijske tipke in Discord | čaka |
@@ -185,3 +185,14 @@ Ročni NVDA preizkus: Ctrl+Alt+Shift+1: NVDA pove "Radio" in "Search stations". 
 Preverjeno v izoliranem namizju z lokalnim seznamom M3U, vodnikom XMLTV in pravim tokom: seznam virov, kategorije s števili, kanal z oddajo, Back s kanalov na kategorije, predvajanje z vrstnim redom najav in Alt+Shift+N. Xtream in Stalker sta preverjena samo s testi, ker za njiju ni testnega računa.
 
 Ročni NVDA preizkus: dodaj vir s seznamom M3U, Ctrl+Alt+Shift+2, Enter: NVDA prebere kategorije s števili. Izberi kategorijo, Enter: NVDA prebere kanal in trenutno oddajo. Enter: "Playing: kanal", nato "Now: oddaja". Alt+Shift+N: trenutna in naslednja oddaja s časom.
+
+## Enota 14
+
+- Snemanje (Ctrl+Alt+Shift+3 ali vnos Recording v glavnem meniju) odpre okno s stanjem ("Not recording", "Recording since 14:02", "Recording paused") in seznamom virov z glasnostjo. Viri so mikrofoni in vhodi, zvok računalnika po napravah, posamezne aplikacije in "vse razen aplikacije". Escape zapre samo okno, snemanje teče naprej.
+- Ctrl+Alt+F9 začne snemati. Če vir še ni izbran, se najprej odpre izbira vira in snemanje se začne takoj po izbiri. Ctrl+Alt+F10 začasno ustavi ali nadaljuje, Ctrl+Alt+F11 ustavi, Ctrl+Alt+Shift+F10 odpre mapo s posnetki. Vsaka sprememba se najavi samo enkrat (osnutek je premor najavil dvakrat).
+- Privzeto FLAC, potrditev z ločenima zvokoma za začetek in konec, govor ali oboje po izbiri. "Remember this choice" shrani vire in glasnost za naslednji zagon, iste nastavitve odpre tudi Settings, Recording. Datoteka se piše v začasno ime in se preimenuje šele, ko je posnetek dokončan, obstoječa datoteka se nikoli ne prepiše.
+- Vse napake in besedila snemanja so prevedeni v 27 jezikov. Ker so Radio, IPTV in snemanje zdaj končani, so moduli virov v celoti preverjeni s strogim lintom (brez izjeme osnutka), navigacija radia pa teče v zanki kot pri IPTV.
+
+Preverjeno v izoliranem namizju s pravimi napravami: Ctrl+Alt+F9 brez virov odpre seznam (mikrofoni, zvok računalnika, aplikacije), izbira zvoka računalnika takoj začne snemanje, okno pokaže stanje in vir, premor in nadaljevanje, ustavitev in shranjena datoteka FLAC. Zajem aplikacije in macOS sta preverjena samo s prevajanjem in testi.
+
+Ročni NVDA preizkus: Ctrl+Alt+F9: NVDA prebere seznam virov. Izberi "Computer audio: ...", Enter: zasliši se zvok začetka. Ctrl+Alt+Shift+3: prva vrstica pove "Recording since ...". Escape, Ctrl+Alt+F10: "Recording paused.", znova: "Recording resumed.", Ctrl+Alt+F11: "Finishing the recording." in zvok konca.

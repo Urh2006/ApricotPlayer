@@ -14,7 +14,7 @@ use std::{
 
 pub(super) fn sources() -> Result<Vec<CaptureSource>, String> {
     let mut sources = vec![CaptureSource {
-        name: "Computer audio".into(),
+        name: String::new(),
         kind: CaptureKind::Output {
             device: "default".into(),
         },
@@ -22,7 +22,7 @@ pub(super) fn sources() -> Result<Vec<CaptureSource>, String> {
     }];
     for device in screencapturekit::audio_devices::AudioInputDevice::list() {
         sources.push(CaptureSource {
-            name: format!("Input: {}", device.name),
+            name: device.name.clone(),
             kind: CaptureKind::Input { device: device.id },
             gain: 1.0,
         });
@@ -34,7 +34,7 @@ pub(super) fn sources() -> Result<Vec<CaptureSource>, String> {
                 continue;
             }
             sources.push(CaptureSource {
-                name: format!("Application: {}", app.application_name()),
+                name: app.application_name().to_string(),
                 kind: CaptureKind::Application {
                     process_id,
                     identity: app.bundle_identifier(),

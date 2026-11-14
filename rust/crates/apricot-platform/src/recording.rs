@@ -1,6 +1,5 @@
-//! Native multi-source capture, mixing and transactional FFmpeg encoding.
+//! Native multi-source capture, mixing and transactional `FFmpeg` encoding.
 //! Capturers own their OS objects on workers. UI closure never owns the session.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 
 use std::{
     collections::VecDeque,
@@ -24,6 +23,28 @@ mod native;
 #[cfg(target_os = "macos")]
 #[path = "recording_macos.rs"]
 mod native;
+
+/// Why a recording could not start or finish; the interface words each case.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RecordingError {
+    NoSources,
+    TooManySources,
+    InvalidFormat,
+    InvalidLevel,
+    /// The file name is taken, or became taken while recording.
+    DestinationExists,
+    CreateFolder,
+    /// A temporary file of an unfinished recording has the same name.
+    UnfinishedExists,
+    EncoderStart,
+    NoneOpened,
+    /// `FFmpeg` failed; its own report follows.
+    NotCompleted(String),
+    SaveFailed,
+    /// Listing the sources failed, with the system's report.
+    Discovery(String),
+    Unsupported,
+}
 
 pub const CAPTURE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: usize = 960;
@@ -110,12 +131,17 @@ impl Default for RecordingSettings {
 }
 
 impl RecordingSettings {
-    pub fn validate(&self) -> Result<(), String> {
+    /// Checks the settings before a recording starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns what is missing or out of range.
+    pub fn validate(&self) -> Result<(), RecordingError> {
         if self.sources.is_empty() {
-            return Err("Choose at least one recording source.".into());
+            return Err(RecordingError::NoSources);
         }
         if self.sources.len() > 16 {
-            return Err("Use no more than 16 recording sources.".into());
+            return Err(RecordingError::TooManySources);
         }
         if !matches!(
             self.sample_rate,
@@ -133,14 +159,14 @@ impl RecordingSettings {
         ) || !(1..=2).contains(&self.channels)
             || !(32..=512).contains(&self.bitrate)
         {
-            return Err("Invalid recording sample rate, channels or bitrate.".into());
+            return Err(RecordingError::InvalidFormat);
         }
         if self
             .sources
             .iter()
             .any(|source| !source.gain.is_finite() || !(0.0..=4.0).contains(&source.gain))
         {
-            return Err("Invalid recording source level.".into());
+            return Err(RecordingError::InvalidLevel);
         }
         Ok(())
     }
@@ -152,12 +178,14 @@ pub enum RecordingEvent {
         output: PathBuf,
         sources: Vec<String>,
     },
+    /// `None` when the source never became ready, usually missing
+    /// permission; otherwise the system's report.
     SourceFailed {
         name: String,
-        error: String,
+        error: Option<String>,
     },
     Paused(bool),
-    Finished(Result<PathBuf, String>),
+    Finished(Result<PathBuf, RecordingError>),
 }
 
 pub struct RecordingSession {
@@ -168,14 +196,19 @@ pub struct RecordingSession {
 }
 
 impl RecordingSession {
+    /// Starts recording on a worker; events report the outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid settings or a taken file name.
     pub fn start(
         settings: RecordingSettings,
         ffmpeg: PathBuf,
         output: PathBuf,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, RecordingError> {
         settings.validate()?;
         if output.exists() {
-            return Err("The recording destination already exists. Choose a new file name.".into());
+            return Err(RecordingError::DestinationExists);
         }
         let stop = Arc::new(AtomicBool::new(false));
         let paused = Arc::new(AtomicBool::new(false));
@@ -196,7 +229,7 @@ impl RecordingSession {
                 worker_stop.store(true, Ordering::Release);
                 let _ = send.send(RecordingEvent::Finished(result));
             })
-            .map_err(|_| "Unable to start the recording worker.".to_owned())?;
+            .map_err(|_| RecordingError::EncoderStart)?;
         Ok(Self {
             stop,
             paused,
@@ -206,15 +239,21 @@ impl RecordingSession {
     }
 
     pub fn pause(&self, paused: bool) {
-        self.paused.store(paused, Ordering::Release)
+        self.paused.store(paused, Ordering::Release);
     }
+    /// Pauses or resumes; `true` when it is now paused.
     pub fn toggle_pause(&self) -> bool {
         let paused = !self.paused.load(Ordering::Acquire);
         self.pause(paused);
         paused
     }
     pub fn stop(&self) {
-        self.stop.store(true, Ordering::Release)
+        self.stop.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Acquire)
     }
     #[must_use]
     pub fn is_active(&self) -> bool {
@@ -224,10 +263,10 @@ impl RecordingSession {
     }
     pub fn poll(&mut self) -> Vec<RecordingEvent> {
         let events = self.events.try_iter().collect();
-        if self.worker.as_ref().is_some_and(JoinHandle::is_finished) {
-            if let Some(worker) = self.worker.take() {
-                let _ = worker.join();
-            }
+        if self.worker.as_ref().is_some_and(JoinHandle::is_finished)
+            && let Some(worker) = self.worker.take()
+        {
+            let _ = worker.join();
         }
         events
     }
@@ -239,13 +278,20 @@ impl Drop for RecordingSession {
     }
 }
 
-pub fn sources() -> Result<Vec<CaptureSource>, String> {
+/// The microphones, computer audio outputs and applications that can be
+/// recorded now.
+///
+/// # Errors
+///
+/// Returns the system's report when the list cannot be read.
+pub fn sources() -> Result<Vec<CaptureSource>, RecordingError> {
     #[cfg(any(windows, target_os = "macos"))]
     return thread::spawn(native::sources)
         .join()
-        .map_err(|_| "Recording source discovery stopped unexpectedly.".to_owned())?;
+        .map_err(|_| RecordingError::Discovery(String::new()))?
+        .map_err(RecordingError::Discovery);
     #[cfg(not(any(windows, target_os = "macos")))]
-    Err("Native recording is available on Windows and macOS.".into())
+    Err(RecordingError::Unsupported)
 }
 
 pub(crate) struct CaptureQueue {
@@ -265,7 +311,7 @@ impl CaptureQueue {
     #[cfg(target_os = "macos")]
     pub(crate) fn fail(&self, message: &str) {
         if let Ok(mut error) = self.error.lock() {
-            *error = Some(message.to_owned())
+            *error = Some(message.to_owned());
         }
     }
     #[cfg(target_os = "macos")]
@@ -293,7 +339,7 @@ impl CaptureQueue {
             }
             for target in output {
                 if let Some(sample) = queue.pop_front() {
-                    *target += sample * gain
+                    *target += sample * gain;
                 } else {
                     break;
                 }
@@ -302,6 +348,7 @@ impl CaptureQueue {
     }
 }
 
+#[allow(clippy::too_many_lines)] // One transaction from encoder start to the final rename.
 fn record(
     settings: &RecordingSettings,
     ffmpeg: &Path,
@@ -309,19 +356,16 @@ fn record(
     stop: &Arc<AtomicBool>,
     paused: &Arc<AtomicBool>,
     send: &Sender<RecordingEvent>,
-) -> Result<PathBuf, String> {
-    let parent = output
-        .parent()
-        .ok_or("Choose a recording destination folder.")?;
-    std::fs::create_dir_all(parent)
-        .map_err(|_| "Unable to create the recording destination.".to_owned())?;
+) -> Result<PathBuf, RecordingError> {
+    let parent = output.parent().ok_or(RecordingError::CreateFolder)?;
+    std::fs::create_dir_all(parent).map_err(|_| RecordingError::CreateFolder)?;
     let temporary = output.with_file_name(format!(
         ".{}-recording.{}",
         output.file_stem().unwrap_or_default().to_string_lossy(),
         settings.format.extension()
     ));
     if temporary.exists() {
-        return Err("A previous unfinished recording has the same name. Choose a new recording destination.".into());
+        return Err(RecordingError::UnfinishedExists);
     }
     let mut command = Command::new(ffmpeg);
     command
@@ -334,13 +378,8 @@ fn record(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
     }
-    let mut encoder = command
-        .spawn()
-        .map_err(|_| "Unable to start FFmpeg for recording.".to_owned())?;
-    let stderr = encoder
-        .stderr
-        .take()
-        .ok_or("Unable to read the recording encoder status.")?;
+    let mut encoder = command.spawn().map_err(|_| RecordingError::EncoderStart)?;
+    let stderr = encoder.stderr.take().ok_or(RecordingError::EncoderStart)?;
     let errors = thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = stderr.take(16_384).read_to_end(&mut bytes);
@@ -348,7 +387,7 @@ fn record(
     });
     let Some(mut input) = encoder.stdin.take() else {
         let _ = encoder.kill();
-        return Err("Unable to open the recording encoder input.".into());
+        return Err(RecordingError::EncoderStart);
     };
     let mut capture_workers = Vec::new();
     let mut queues = Vec::new();
@@ -368,13 +407,13 @@ fn record(
             #[cfg(not(any(windows, target_os = "macos")))]
             let result: Result<(), String> = {
                 let _ = (capture_queue, capture_stop);
-                let _ = ready_send.send(Err("Native recording is unavailable.".into()));
+                let _ = ready_send.send(Err(String::new()));
                 Ok(())
             };
             if let Err(error) = result {
                 let _ = messages.send(RecordingEvent::SourceFailed {
                     name: source.name,
-                    error,
+                    error: Some(error),
                 });
             }
         });
@@ -384,13 +423,13 @@ fn record(
                 successful.push(name);
             }
             Ok(Err(error)) => {
-                let _ = send.send(RecordingEvent::SourceFailed { name, error });
-            }
-            Err(_) => {
                 let _ = send.send(RecordingEvent::SourceFailed {
                     name,
-                    error: "The source did not become ready. Check recording permissions.".into(),
+                    error: Some(error).filter(|error| !error.is_empty()),
                 });
+            }
+            Err(_) => {
+                let _ = send.send(RecordingEvent::SourceFailed { name, error: None });
             }
         }
         capture_workers.push(handle);
@@ -400,7 +439,7 @@ fn record(
         drop(input);
         let _ = encoder.wait();
         let _ = std::fs::remove_file(&temporary);
-        return Err("None of the selected recording sources could be opened.".into());
+        return Err(RecordingError::NoneOpened);
     }
     let _ = send.send(RecordingEvent::Started {
         output: output.to_owned(),
@@ -418,7 +457,7 @@ fn record(
         }
         let mut mixed = vec![0.0_f32; BLOCK_FRAMES * 2];
         for (queue, gain) in &queues {
-            queue.mix(&mut mixed, *gain, is_paused)
+            queue.mix(&mut mixed, *gain, is_paused);
         }
         if !is_paused {
             let bytes: Vec<_> = mixed
@@ -432,7 +471,7 @@ fn record(
         }
         deadline += interval;
         if let Some(wait) = deadline.checked_duration_since(Instant::now()) {
-            thread::sleep(wait)
+            thread::sleep(wait);
         } else if deadline.elapsed() > Duration::from_millis(500) {
             deadline = Instant::now();
         }
@@ -461,23 +500,18 @@ fn record(
     let errors = errors.join().unwrap_or_default();
     if write_error || !status.is_some_and(|status| status.success()) {
         let _ = std::fs::remove_file(&temporary);
-        return Err(format!(
-            "Recording could not be completed. {}",
-            errors.trim()
-        ));
+        return Err(RecordingError::NotCompleted(errors.trim().to_owned()));
     }
     if output.exists() {
         let _ = std::fs::remove_file(&temporary);
-        return Err(
-            "The recording destination was created by another operation. It was not overwritten."
-                .into(),
-        );
+        return Err(RecordingError::DestinationExists);
     }
-    std::fs::rename(&temporary, output)
-        .map_err(|_| "Unable to save the completed recording.".to_owned())?;
+    std::fs::rename(&temporary, output).map_err(|_| RecordingError::SaveFailed)?;
     Ok(output.to_owned())
 }
 
+/// `FFmpeg` reads the mixed 48 kHz stereo floats from its input and never
+/// overwrites a file.
 #[must_use]
 pub fn encoder_arguments(settings: &RecordingSettings, output: &Path) -> Vec<String> {
     let mut values: Vec<String> = [
@@ -533,6 +567,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::float_cmp)] // Exact binary fractions.
     fn mixer_combines_levels_and_does_not_replay_paused_audio() {
         let queue = CaptureQueue::new();
         queue.push([0.5, 0.25, -0.5, -0.25]);

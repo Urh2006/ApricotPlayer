@@ -1,5 +1,4 @@
 //! Windows host adapter; source behavior lives in the shared controller.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 use super::{
     HWND, KillTimer, PathBuf, SetTimer, set_status, show_error_message, start_media_item, state,

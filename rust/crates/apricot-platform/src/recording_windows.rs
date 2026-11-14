@@ -1,5 +1,4 @@
 //! WASAPI endpoint and process-loopback capture. COM objects stay on one worker.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 #![allow(unsafe_code)]
 
 use super::{CAPTURE_RATE, CaptureKind, CaptureQueue, CaptureSource};
@@ -25,7 +24,7 @@ impl Com {
 }
 impl Drop for Com {
     fn drop(&mut self) {
-        wasapi::deinitialize()
+        wasapi::deinitialize();
     }
 }
 
@@ -53,14 +52,7 @@ pub(super) fn sources() -> Result<Vec<CaptureSource>, String> {
                 CaptureKind::Output { device: id }
             };
             sources.push(CaptureSource {
-                name: format!(
-                    "{}: {name}",
-                    if direction == Direction::Capture {
-                        "Input"
-                    } else {
-                        "Computer audio"
-                    }
-                ),
+                name,
                 kind,
                 gain: 1.0,
             });
@@ -86,7 +78,7 @@ pub(super) fn sources() -> Result<Vec<CaptureSource>, String> {
                                 )
                             });
                         sources.push(CaptureSource {
-                            name: format!("Application: {name}"),
+                            name,
                             kind: CaptureKind::Application {
                                 process_id: pid,
                                 identity,
@@ -102,6 +94,7 @@ pub(super) fn sources() -> Result<Vec<CaptureSource>, String> {
     Ok(sources)
 }
 
+#[allow(clippy::needless_pass_by_value)] // The macOS capture takes the same values.
 pub(super) fn capture(
     source: &CaptureSource,
     queue: Arc<CaptureQueue>,
@@ -115,6 +108,7 @@ pub(super) fn capture(
     result
 }
 
+#[allow(clippy::needless_pass_by_value)] // Owned by the capture thread.
 fn capture_inner(
     source: &CaptureSource,
     queue: Arc<CaptureQueue>,
@@ -184,8 +178,10 @@ fn capture_inner(
             let contiguous = bytes.make_contiguous();
             queue.push(
                 contiguous
-                    .chunks_exact(4)
-                    .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap_or_default())),
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|bytes| f32::from_le_bytes(*bytes)),
             );
             bytes.clear();
         }

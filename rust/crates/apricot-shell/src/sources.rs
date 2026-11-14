@@ -1,6 +1,5 @@
 //! Shared source browsers and recorder ownership. Native windows render the
 //! same model and report actions; network/capture work stays off the UI thread.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 
 use crate::{FeatureForm, FormField, FormValue, FormValues};
 use apricot_core::{MediaItem, TranslationCatalog};
@@ -11,8 +10,8 @@ use apricot_platform::{
         RadioLibrary, RadioPage, RadioRequest, Station,
     },
     recording::{
-        self, CaptureKind, CaptureSource, RecordingEvent, RecordingFeedback, RecordingFormat,
-        RecordingSession, RecordingSettings,
+        self, CaptureKind, CaptureSource, RecordingError, RecordingEvent, RecordingFeedback,
+        RecordingFormat, RecordingSession, RecordingSettings,
     },
 };
 use serde_json::Value;
@@ -135,6 +134,10 @@ pub struct SourcesController {
     playing_iptv: Option<String>,
     /// "Now: programme", spoken after the player names the channel.
     pending_programme: Option<String>,
+    /// The recording shortcut asked for a source first; record after it.
+    start_after_sources: bool,
+    /// The clock time the current recording started.
+    recording_since: String,
     metadata_identity: String,
     metadata_title: String,
 }
@@ -176,6 +179,8 @@ impl Default for SourcesController {
             episode_selected: 0,
             playing_iptv: None,
             pending_programme: None,
+            start_after_sources: false,
+            recording_since: String::new(),
             metadata_identity: String::new(),
             metadata_title: String::new(),
         }
@@ -298,34 +303,13 @@ impl SourcesController {
             .text("sources_loading")
             .clone_into(&mut self.loading);
         match action {
-            "open_radio" => self.radio_hub(ui, environment),
+            "open_radio" => self.radio_navigate(ui, environment, RadioScreen::Menu),
             "open_iptv" => self.iptv_navigate(ui, environment, IptvScreen::Sources),
             "open_recording" => self.recording_panel(ui, environment),
             "recording_start" => self.start_recording(ui, environment),
-            "recording_pause" => {
-                if let Some(recorder) = &self.recorder {
-                    let paused = recorder.toggle_pause();
-                    ui.status(
-                        if paused {
-                            "Recording paused."
-                        } else {
-                            "Recording resumed."
-                        },
-                        true,
-                    );
-                }
-            }
-            "recording_stop" => {
-                if let Some(recorder) = &self.recorder {
-                    recorder.stop();
-                    ui.status("Finishing recording...", true);
-                }
-            }
-            "open_recordings_folder" => {
-                if let Err(error) = apricot_platform::shell::open_path(&self.recording.directory) {
-                    ui.error(&error.to_string());
-                }
-            }
+            "recording_pause" => self.pause_recording(ui, &catalog),
+            "recording_stop" => self.stop_recording(ui, &catalog),
+            "open_recordings_folder" => self.open_recordings_folder(ui, &catalog),
             "radio_now_playing" => {
                 if let Some(programme) = self.playing_programme(&catalog) {
                     ui.status(&programme, true);
@@ -374,61 +358,71 @@ impl SourcesController {
             .is_some_and(RecordingSession::is_active)
     }
 
-    pub fn poll(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) -> bool {
+    fn poll_recording(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
         if let Some(recorder) = &mut self.recorder {
+            let catalog = environment.catalog();
+            let sounds = matches!(
+                self.recording.feedback,
+                RecordingFeedback::Sounds | RecordingFeedback::Both
+            );
+            let speech = matches!(
+                self.recording.feedback,
+                RecordingFeedback::Speech | RecordingFeedback::Both
+            );
             for event in recorder.poll() {
                 match event {
-                    RecordingEvent::Started { output, sources } => {
-                        if matches!(
-                            self.recording.feedback,
-                            RecordingFeedback::Sounds | RecordingFeedback::Both
-                        ) {
+                    RecordingEvent::Started { output, .. } => {
+                        self.recording_since = chrono::Local::now().format("%H:%M").to_string();
+                        if sounds {
                             ui.cue(true);
                         }
                         ui.status(
-                            &format!(
-                                "Recording started: {}. {}",
-                                output.display(),
-                                sources.join(", ")
-                            ),
-                            matches!(
-                                self.recording.feedback,
-                                RecordingFeedback::Speech | RecordingFeedback::Both
-                            ),
+                            &catalog
+                                .text("recording_started")
+                                .replace("{file}", &file_name(&output)),
+                            speech,
                         );
                     }
                     RecordingEvent::SourceFailed { name, error } => {
-                        ui.error(&format!("Recording source {name}: {error}"));
+                        ui.error(&match error {
+                            Some(error) => catalog
+                                .text("recording_source_failed")
+                                .replace("{name}", &name)
+                                .replace("{error}", &error),
+                            None => catalog
+                                .text("recording_source_not_ready")
+                                .replace("{name}", &name),
+                        });
                     }
                     RecordingEvent::Paused(paused) => ui.status(
-                        if paused {
-                            "Recording paused."
+                        catalog.text(if paused {
+                            "recording_paused"
                         } else {
-                            "Recording resumed."
-                        },
+                            "recording_resumed"
+                        }),
                         true,
                     ),
                     RecordingEvent::Finished(result) => {
-                        if matches!(
-                            self.recording.feedback,
-                            RecordingFeedback::Sounds | RecordingFeedback::Both
-                        ) {
+                        if sounds {
                             ui.cue(false);
                         }
                         match result {
                             Ok(path) => ui.status(
-                                &format!("Recording saved: {}", path.display()),
-                                matches!(
-                                    self.recording.feedback,
-                                    RecordingFeedback::Speech | RecordingFeedback::Both
-                                ),
+                                &catalog
+                                    .text("recording_saved")
+                                    .replace("{file}", &file_name(&path)),
+                                speech,
                             ),
-                            Err(error) => ui.error(&error),
+                            Err(error) => ui.error(&recording_error(&catalog, &error)),
                         }
                     }
                 }
             }
         }
+    }
+
+    pub fn poll(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) -> bool {
+        self.poll_recording(ui, environment);
         let Some(pending) = self.pending.as_ref() else {
             return self.is_busy();
         };
@@ -461,18 +455,19 @@ impl SourcesController {
                 }
                 self.request.offset = page.next_offset;
                 self.radio_has_more = page.has_more;
-                if self.station_rows.is_empty() {
+                let screen = if self.station_rows.is_empty() {
                     ui.status(environment.catalog().text("radio_no_stations"), true);
-                    self.radio_hub(ui, environment);
+                    RadioScreen::Menu
                 } else {
-                    self.radio_list(ui, environment);
-                }
+                    RadioScreen::Stations
+                };
+                self.radio_navigate(ui, environment, screen);
             }
             Ok(Work::RadioDirectory {
                 kind,
                 entries,
                 offset,
-            }) => self.radio_directory_list(ui, environment, kind, entries, offset),
+            }) => self.radio_directory_list(ui, environment, kind, &entries, offset),
             Ok(Work::Iptv {
                 source,
                 channels,
@@ -606,24 +601,52 @@ impl SourcesController {
         }
     }
 
-    fn radio_hub(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+    /// The radio screens as one loop, so going back and forth never nests
+    /// calls. A screen returns the next one, or `None` when it closed Radio
+    /// or started loading.
+    fn radio_navigate(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        mut screen: RadioScreen,
+    ) {
+        loop {
+            let next = match screen {
+                RadioScreen::Menu => self.radio_hub(ui, environment),
+                RadioScreen::Search => self.search_radio(ui, environment),
+                RadioScreen::Stations => self.radio_list(ui, environment),
+                RadioScreen::Settings => {
+                    self.radio_settings(ui, environment);
+                    Some(RadioScreen::Menu)
+                }
+            };
+            match next {
+                Some(next) => screen = next,
+                None => return,
+            }
+        }
+    }
+
+    fn radio_hub(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<RadioScreen> {
         let catalog = environment.catalog();
         let rows = RADIO_HUB
             .iter()
             .map(|key| catalog.text(key).to_owned())
             .collect();
-        let Some(choice) = ui.browse(&Self::browser(
+        let choice = ui.browse(&Self::browser(
             environment,
             catalog.text("radio_title"),
             rows,
             self.hub_selected,
             &[("open", catalog.text("open"))],
-        )) else {
-            return;
-        };
+        ))?;
         self.hub_selected = choice.index;
         match choice.index {
-            0 => self.search_radio(ui, environment),
+            0 => return Some(RadioScreen::Search),
             1 => {
                 self.request.category = RadioCategory::All;
                 self.request.search.clear();
@@ -639,10 +662,9 @@ impl SourcesController {
                 self.radio_has_more = false;
                 if self.station_rows.is_empty() {
                     ui.status(catalog.text("radio_no_stations"), true);
-                    self.radio_hub(ui, environment);
-                } else {
-                    self.radio_list(ui, environment);
+                    return Some(RadioScreen::Menu);
                 }
+                return Some(RadioScreen::Stations);
             }
             index @ 4..=8 => {
                 self.request.category = [
@@ -668,15 +690,17 @@ impl SourcesController {
                 ][index - 9],
                 0,
             ),
-            14 => {
-                self.radio_settings(ui, environment);
-                self.radio_hub(ui, environment);
-            }
+            14 => return Some(RadioScreen::Settings),
             _ => {}
         }
+        None
     }
 
-    fn search_radio(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+    fn search_radio(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<RadioScreen> {
         let catalog = environment.catalog();
         let mut form = FeatureForm::localized(
             &catalog,
@@ -689,12 +713,12 @@ impl SourcesController {
         );
         catalog.text("search").clone_into(&mut form.submit);
         let Some(values) = ui.form(&form) else {
-            self.radio_hub(ui, environment);
-            return;
+            return Some(RadioScreen::Menu);
         };
         self.request.search = text(&values, "query");
         self.request.category = RadioCategory::All;
         self.load_radio(ui, environment, true);
+        None
     }
 
     fn load_radio(
@@ -727,7 +751,11 @@ impl SourcesController {
     }
 
     #[allow(clippy::too_many_lines)] // One list with its actions.
-    fn radio_list(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+    fn radio_list(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<RadioScreen> {
         let catalog = environment.catalog();
         loop {
             let mut actions = vec![
@@ -755,30 +783,26 @@ impl SourcesController {
                 &actions,
             )) else {
                 // Back returns to the radio menu.
-                self.radio_hub(ui, environment);
-                return;
+                return Some(RadioScreen::Menu);
             };
             self.station_selected = choice.index;
             match choice.action.as_str() {
                 "radio_more" => {
                     self.load_radio(ui, environment, false);
-                    return;
+                    return None;
                 }
                 "radio_refresh" => {
                     self.load_radio(ui, environment, true);
-                    return;
+                    return None;
                 }
                 "radio_filters" => {
                     if self.radio_filters(ui, environment) {
                         self.load_radio(ui, environment, true);
-                        return;
+                        return None;
                     }
                     continue;
                 }
-                "radio_search" => {
-                    self.search_radio(ui, environment);
-                    return;
-                }
+                "radio_search" => return Some(RadioScreen::Search),
                 "radio_clear_history" => {
                     if ui.ask_yes_no(catalog.text("radio_clear_history_confirm")) {
                         let mut next = self.radio.clone();
@@ -819,7 +843,7 @@ impl SourcesController {
                         let _ =
                             RadioClient::new(Some(&proxy)).and_then(|client| client.clicked(&id));
                     });
-                    return;
+                    return None;
                 }
                 "radio_details" => {
                     let mut form = FeatureForm::localized(
@@ -882,7 +906,7 @@ impl SourcesController {
                             .map(|()| Work::Message(catalog.text("radio_vote_done").to_owned()))
                             .map_err(|error| radio_error(&catalog, &error))
                     });
-                    return;
+                    return None;
                 }
                 _ => {}
             }
@@ -915,7 +939,7 @@ impl SourcesController {
         ui: &mut dyn SourcesUi,
         environment: &SourcesEnvironment,
         kind: DirectoryKind,
-        entries: Vec<DirectoryEntry>,
+        entries: &[DirectoryEntry],
         offset: usize,
     ) {
         let catalog = environment.catalog();
@@ -944,7 +968,7 @@ impl SourcesController {
             .collect();
         let title = catalog.text(RADIO_HUB[9 + directory_index(kind)]);
         let Some(choice) = ui.browse(&Self::browser(environment, title, rows, 0, &actions)) else {
-            self.radio_hub(ui, environment);
+            self.radio_navigate(ui, environment, RadioScreen::Menu);
             return;
         };
         if choice.action == "more" {
@@ -1098,8 +1122,8 @@ impl SourcesController {
         loop {
             let next = match screen {
                 IptvScreen::Sources => self.iptv_hub(ui, environment),
-                IptvScreen::Kinds => self.iptv_kinds(ui, environment),
-                IptvScreen::Groups => self.iptv_groups(ui, environment),
+                IptvScreen::Kinds => Some(self.iptv_kinds(ui, environment)),
+                IptvScreen::Groups => Some(self.iptv_groups(ui, environment)),
                 IptvScreen::Channels => self.channel_list(ui, environment),
                 IptvScreen::Episodes => self.episode_list(ui, environment),
             };
@@ -1410,11 +1434,11 @@ impl SourcesController {
         &mut self,
         ui: &mut dyn SourcesUi,
         environment: &SourcesEnvironment,
-    ) -> Option<IptvScreen> {
+    ) -> IptvScreen {
         let kinds = self.kinds_present();
         if kinds.len() <= 1 {
             self.channel_kind = kinds.first().copied();
-            return Some(IptvScreen::Groups);
+            return IptvScreen::Groups;
         }
         let catalog = environment.catalog();
         let rows = kinds
@@ -1447,7 +1471,7 @@ impl SourcesController {
             selected,
             &[("open", catalog.text("open"))],
         )) else {
-            return Some(IptvScreen::Sources);
+            return IptvScreen::Sources;
         };
         let kind = kinds.get(choice.index).copied();
         if kind != self.channel_kind {
@@ -1455,14 +1479,14 @@ impl SourcesController {
             self.channel_group.clear();
             self.channel_selected = 0;
         }
-        Some(IptvScreen::Groups)
+        IptvScreen::Groups
     }
 
     fn iptv_groups(
         &mut self,
         ui: &mut dyn SourcesUi,
         environment: &SourcesEnvironment,
-    ) -> Option<IptvScreen> {
+    ) -> IptvScreen {
         let groups = self.groups_present();
         let back = if self.kinds_present().len() > 1 {
             IptvScreen::Kinds
@@ -1474,7 +1498,7 @@ impl SourcesController {
                 .first()
                 .map(|(name, _)| name.clone())
                 .unwrap_or_default();
-            return Some(IptvScreen::Channels);
+            return IptvScreen::Channels;
         }
         let catalog = environment.catalog();
         let total: usize = groups.iter().map(|(_, count)| count).sum();
@@ -1517,7 +1541,7 @@ impl SourcesController {
             selected,
             &[("open", catalog.text("open"))],
         )) else {
-            return Some(back);
+            return back;
         };
         let group = choice
             .index
@@ -1529,7 +1553,7 @@ impl SourcesController {
             self.channel_group = group;
             self.channel_selected = 0;
         }
-        Some(IptvScreen::Channels)
+        IptvScreen::Channels
     }
 
     fn visible_channels(&self) -> Vec<usize> {
@@ -1613,9 +1637,7 @@ impl SourcesController {
                 return Some(self.channels_back());
             };
             self.channel_selected = selected.index;
-            let Some(source) = self.iptv_active.clone() else {
-                return None;
-            };
+            let source = self.iptv_active.clone()?;
             match selected.action.as_str() {
                 "iptv_search" => {
                     self.search_channels(ui, &catalog);
@@ -1743,7 +1765,9 @@ impl SourcesController {
         );
         catalog.text("search").clone_into(&mut form.submit);
         if let Some(values) = ui.form(&form) {
-            self.channel_query = text(&values, "query").trim().to_owned();
+            text(&values, "query")
+                .trim()
+                .clone_into(&mut self.channel_query);
             self.channel_selected = 0;
         }
     }
@@ -1834,148 +1858,207 @@ impl SourcesController {
         })
     }
 
+    /// The Recording panel. Closing it leaves a recording running; Stop or
+    /// its shortcut ends it.
     fn recording_panel(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+        let catalog = environment.catalog();
+        let mut selected = 0;
         loop {
-            let rows = self
-                .recording
-                .sources
-                .iter()
-                .map(|source| format!("{}; {:.0}%", source.name, source.gain * 100.0))
-                .collect();
-            let Some(selected) = ui.browse(&Self::browser(
+            let status = match &self.recorder {
+                Some(recorder) if recorder.is_active() && recorder.is_paused() => {
+                    catalog.text("recording_status_paused").to_owned()
+                }
+                Some(recorder) if recorder.is_active() => catalog
+                    .text("recording_status_active")
+                    .replace("{time}", &self.recording_since),
+                _ => catalog.text("recording_status_idle").to_owned(),
+            };
+            let mut rows = vec![status];
+            rows.extend(self.recording.sources.iter().map(|source| {
+                catalog
+                    .text("recording_source_row")
+                    .replace("{name}", &source_label(&catalog, source))
+                    .replace("{level}", &format!("{:.0}", source.gain * 100.0))
+            }));
+            let mut actions = if self.is_recording() {
+                vec![
+                    ("recording_stop", catalog.text("recording_stop")),
+                    ("recording_pause", catalog.text("recording_pause")),
+                ]
+            } else {
+                vec![("recording_start", catalog.text("recording_start"))]
+            };
+            actions.extend([
+                ("add", catalog.text("recording_add_source")),
+                ("edit", catalog.text("recording_edit_source")),
+                ("remove", catalog.text("recording_remove_source")),
+                ("settings", catalog.text("recording_settings")),
+                ("folder", catalog.text("recording_open_folder")),
+            ]);
+            let Some(choice) = ui.browse(&Self::browser(
                 environment,
-                "Recording",
+                catalog.text("recording_title"),
                 rows,
-                0,
-                &[
-                    ("recording_start", "Start recording"),
-                    ("recording_pause", "Pause or resume"),
-                    ("recording_stop", "Stop recording"),
-                    ("add", "Add source"),
-                    ("edit", "Edit source level"),
-                    ("remove", "Remove source"),
-                    ("settings", "Recording settings"),
-                    ("folder", "Open recordings folder"),
-                ],
+                selected,
+                &actions,
             )) else {
                 return;
             };
-            match selected.action.as_str() {
-                "recording_start" | "open" => {
+            selected = choice.index;
+            // Row 0 is the status; the sources follow.
+            let source = choice.index.checked_sub(1);
+            match choice.action.as_str() {
+                "recording_start" | "open" if !self.is_recording() => {
                     self.start_recording(ui, environment);
                     return;
                 }
-                "recording_pause" => {
-                    if let Some(recorder) = &self.recorder {
-                        recorder.toggle_pause();
-                    }
-                }
-                "recording_stop" => {
-                    if let Some(recorder) = &self.recorder {
-                        recorder.stop();
-                    }
+                "recording_stop" | "open" => {
+                    self.stop_recording(ui, &catalog);
                     return;
                 }
+                "recording_pause" => self.pause_recording(ui, &catalog),
                 "add" => {
-                    let proxy = environment.proxy.clone();
+                    self.start_after_sources = false;
                     self.spawn(ui, move || {
-                        let _ = proxy;
-                        recording::sources().map(Work::Sources)
+                        recording::sources()
+                            .map(Work::Sources)
+                            .map_err(|error| recording_error(&catalog, &error))
                     });
                     return;
                 }
                 "edit" => {
-                    if let Some(source) = self.recording.sources.get_mut(selected.index) {
-                        let Some(values) = ui.form(&FeatureForm::new(
-                            "Recording source",
-                            vec![
-                                FormField::text("name", "Source name", &source.name),
-                                FormField::number(
-                                    "level",
-                                    "Level, percent",
-                                    f64::from(source.gain) * 100.0,
-                                    0.0,
-                                    400.0,
-                                ),
-                                FormField::checkbox(
-                                    "exclude",
-                                    "Record everything except this application",
-                                    matches!(
-                                        source.kind,
-                                        CaptureKind::Application { exclude: true, .. }
-                                    ),
-                                ),
-                            ],
-                        )) else {
-                            continue;
-                        };
-                        source.name = text(&values, "name");
-                        source.gain = (number(&values, "level") / 100.0) as f32;
-                        if let CaptureKind::Application { exclude, .. } = &mut source.kind {
-                            *exclude = checked(&values, "exclude");
-                        }
-                        if let Err(error) = self.save_recording(environment) {
-                            ui.error(&error);
-                        }
+                    if let Some(index) = source {
+                        self.edit_recording_source(ui, environment, index);
                     }
                 }
                 "remove" => {
-                    if selected.index < self.recording.sources.len() {
-                        self.recording.sources.remove(selected.index);
-                        if let Err(error) = self.save_recording(environment) {
-                            ui.error(&error);
+                    if let Some(index) =
+                        source.filter(|index| *index < self.recording.sources.len())
+                    {
+                        let previous = self.recording.clone();
+                        self.recording.sources.remove(index);
+                        match self.save_recording(environment) {
+                            Ok(()) => {
+                                ui.status(catalog.text("recording_source_removed"), true);
+                                selected = selected.min(self.recording.sources.len());
+                            }
+                            Err(error) => {
+                                self.recording = previous;
+                                ui.error(&error);
+                            }
                         }
                     }
                 }
                 "settings" => self.recording_settings(ui, environment),
-                "folder" => {
-                    if let Err(error) =
-                        apricot_platform::shell::open_path(&self.recording.directory)
-                    {
-                        ui.error(&error.to_string());
-                    }
-                }
+                "folder" => self.open_recordings_folder(ui, &catalog),
                 _ => {}
             }
         }
     }
 
-    fn add_recording_source(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
-        let rows = self
-            .available_sources
-            .iter()
-            .map(|source| source.name.clone())
-            .collect();
-        let Some(selected) = ui.browse(&Self::browser(
-            environment,
-            "Add recording source",
-            rows,
-            0,
-            &[("add", "Add source")],
+    fn edit_recording_source(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        index: usize,
+    ) {
+        let catalog = environment.catalog();
+        let Some(source) = self.recording.sources.get(index).cloned() else {
+            return;
+        };
+        let mut fields = vec![FormField::number(
+            "level",
+            catalog.text("recording_level"),
+            (f64::from(source.gain) * 100.0).round(),
+            0.0,
+            400.0,
+        )];
+        if let CaptureKind::Application { exclude, .. } = source.kind {
+            fields.push(FormField::checkbox(
+                "exclude",
+                catalog.text("recording_exclude"),
+                exclude,
+            ));
+        }
+        let Some(values) = ui.form(&FeatureForm::localized(
+            &catalog,
+            source_label(&catalog, &source),
+            fields,
         )) else {
             return;
         };
-        if let Some(source) = self.available_sources.get(selected.index).cloned() {
-            self.recording.sources.push(source);
-            if let Err(error) = self.save_recording(environment) {
-                ui.error(&error);
+        let previous = self.recording.clone();
+        if let Some(source) = self.recording.sources.get_mut(index) {
+            #[allow(clippy::cast_possible_truncation)] // A level of 0 to 400 percent.
+            let gain = (number(&values, "level") / 100.0) as f32;
+            source.gain = gain;
+            if let CaptureKind::Application { exclude, .. } = &mut source.kind {
+                *exclude = checked(&values, "exclude");
             }
         }
-        self.recording_panel(ui, environment);
+        if let Err(error) = self.save_recording(environment) {
+            self.recording = previous;
+            ui.error(&error);
+        }
     }
 
+    fn add_recording_source(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+        let catalog = environment.catalog();
+        let start = std::mem::take(&mut self.start_after_sources);
+        if self.available_sources.is_empty() {
+            ui.error(catalog.text("recording_no_sources_found"));
+            return;
+        }
+        let rows = self
+            .available_sources
+            .iter()
+            .map(|source| source_label(&catalog, source))
+            .collect();
+        let Some(choice) = ui.browse(&Self::browser(
+            environment,
+            catalog.text("recording_add_source"),
+            rows,
+            0,
+            &[("add", catalog.text("recording_add_source"))],
+        )) else {
+            if !start {
+                self.recording_panel(ui, environment);
+            }
+            return;
+        };
+        if let Some(source) = self.available_sources.get(choice.index).cloned() {
+            let previous = self.recording.clone();
+            self.recording.sources.push(source);
+            if let Err(error) = self.save_recording(environment) {
+                self.recording = previous;
+                ui.error(&error);
+                return;
+            }
+        }
+        // The recording shortcut with no source chosen yet records right
+        // after the choice.
+        if start {
+            self.start_recording(ui, environment);
+        } else {
+            self.recording_panel(ui, environment);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // One form with its checks.
     fn recording_settings(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+        let catalog = environment.catalog();
         let rates = [
-            8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, 192000,
+            8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, 192_000,
         ];
-        let form = FeatureForm::new(
-            "Recording settings",
+        let form = FeatureForm::localized(
+            &catalog,
+            catalog.text("recording_settings"),
             vec![
                 FormField::choice(
                     "format",
-                    "Format",
+                    catalog.text("recording_format"),
                     vec![
-                        "FLAC".into(),
+                        catalog.text("recording_format_flac").to_owned(),
                         "WAV".into(),
                         "MP3".into(),
                         "AAC (M4A)".into(),
@@ -1989,8 +2072,8 @@ impl SourcesController {
                 ),
                 FormField::choice(
                     "rate",
-                    "Sample rate",
-                    rates.iter().map(ToString::to_string).collect(),
+                    catalog.text("recording_sample_rate"),
+                    rates.iter().map(|rate| format!("{rate} Hz")).collect(),
                     rates
                         .iter()
                         .position(|rate| *rate == self.recording.sample_rate)
@@ -1998,35 +2081,38 @@ impl SourcesController {
                 ),
                 FormField::choice(
                     "channels",
-                    "Channels",
-                    vec!["Mono".into(), "Stereo".into()],
+                    catalog.text("recording_channels"),
+                    vec![
+                        catalog.text("recording_mono").to_owned(),
+                        catalog.text("recording_stereo").to_owned(),
+                    ],
                     usize::from(self.recording.channels.saturating_sub(1)),
                 ),
                 FormField::number(
                     "bitrate",
-                    "Lossy bitrate, kbps",
+                    catalog.text("recording_bitrate"),
                     f64::from(self.recording.bitrate),
                     32.0,
                     512.0,
                 ),
                 FormField::text(
                     "folder",
-                    "Destination folder",
+                    catalog.text("recording_folder"),
                     self.recording.directory.to_string_lossy(),
                 ),
                 FormField::checkbox(
                     "remember",
-                    "Remember this choice, including sources and levels",
+                    catalog.text("recording_remember"),
                     self.recording.remember,
                 ),
                 FormField::choice(
                     "feedback",
-                    "Start and stop confirmation",
+                    catalog.text("recording_feedback"),
                     vec![
-                        "Sounds".into(),
-                        "Speech".into(),
-                        "Sounds and speech".into(),
-                        "None".into(),
+                        catalog.text("recording_feedback_sounds").to_owned(),
+                        catalog.text("recording_feedback_speech").to_owned(),
+                        catalog.text("recording_feedback_both").to_owned(),
+                        catalog.text("recording_feedback_none").to_owned(),
                     ],
                     match self.recording.feedback {
                         RecordingFeedback::Sounds => 0,
@@ -2045,10 +2131,16 @@ impl SourcesController {
             3 => RecordingFormat::Aac,
             _ => RecordingFormat::Flac,
         };
-        self.recording.sample_rate = rates[choice(&values, "rate")];
-        self.recording.channels = (choice(&values, "channels") + 1) as u8;
-        self.recording.bitrate = number(&values, "bitrate") as u32;
-        self.recording.directory = PathBuf::from(text(&values, "folder"));
+        self.recording.sample_rate = rates[choice(&values, "rate").min(rates.len() - 1)];
+        self.recording.channels = if choice(&values, "channels") == 0 {
+            1
+        } else {
+            2
+        };
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // 32 to 512.
+        let bitrate = number(&values, "bitrate").clamp(32.0, 512.0).round() as u32;
+        self.recording.bitrate = bitrate;
+        self.recording.directory = PathBuf::from(text(&values, "folder").trim());
         self.recording.remember = checked(&values, "remember");
         self.recording.feedback = match choice(&values, "feedback") {
             1 => RecordingFeedback::Speech,
@@ -2058,7 +2150,7 @@ impl SourcesController {
         };
         if !self.recording.directory.is_absolute() {
             self.recording = previous;
-            ui.error("Choose an absolute recording destination folder.");
+            ui.error(catalog.text("recording_folder_absolute"));
             return;
         }
         if let Err(error) = self.save_recording(environment) {
@@ -2068,20 +2160,27 @@ impl SourcesController {
     }
 
     fn start_recording(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+        let catalog = environment.catalog();
         if self.is_recording() {
-            ui.status("Recording is already active.", true);
+            ui.status(catalog.text("recording_already_active"), true);
             return;
         }
         if self.recording.sources.is_empty() {
-            self.spawn(ui, || recording::sources().map(Work::Sources));
+            self.start_after_sources = true;
+            self.spawn(ui, move || {
+                recording::sources()
+                    .map(Work::Sources)
+                    .map_err(|error| recording_error(&catalog, &error))
+            });
             return;
         }
         let Some(ffmpeg) = environment.ffmpeg.clone() else {
-            ui.error("FFmpeg is required for recording.");
+            ui.error(catalog.text("recording_needs_ffmpeg"));
             return;
         };
         let name = format!(
-            "Recording {}.{}",
+            "{} {}.{}",
+            catalog.text("recording_file_name"),
             chrono::Local::now().format("%Y-%m-%d %H-%M-%S"),
             self.recording.format.extension()
         );
@@ -2089,9 +2188,45 @@ impl SourcesController {
         match RecordingSession::start(self.recording.clone(), ffmpeg, output) {
             Ok(recorder) => {
                 self.recorder = Some(recorder);
-                ui.status("Preparing recording sources...", true);
+                ui.status(catalog.text("recording_preparing"), true);
             }
-            Err(error) => ui.error(&error),
+            Err(error) => ui.error(&recording_error(&catalog, &error)),
+        }
+    }
+
+    fn stop_recording(&mut self, ui: &mut dyn SourcesUi, catalog: &TranslationCatalog) {
+        match &self.recorder {
+            Some(recorder) if recorder.is_active() => {
+                recorder.stop();
+                ui.status(catalog.text("recording_finishing"), true);
+            }
+            _ => ui.status(catalog.text("recording_not_active"), true),
+        }
+    }
+
+    /// The worker's Paused event speaks the new state, once.
+    fn pause_recording(&mut self, ui: &mut dyn SourcesUi, catalog: &TranslationCatalog) {
+        match &self.recorder {
+            Some(recorder) if recorder.is_active() => {
+                recorder.toggle_pause();
+            }
+            _ => ui.status(catalog.text("recording_not_active"), true),
+        }
+    }
+
+    fn open_recordings_folder(&self, ui: &mut dyn SourcesUi, catalog: &TranslationCatalog) {
+        if let Err(error) = std::fs::create_dir_all(&self.recording.directory)
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                apricot_platform::shell::open_path(&self.recording.directory)
+                    .map_err(|error| error.to_string())
+            })
+        {
+            ui.error(
+                &catalog
+                    .text("recording_folder_failed")
+                    .replace("{error}", &error),
+            );
         }
     }
 }
@@ -2126,6 +2261,14 @@ fn unique_id() -> String {
         |_| "iptv".into(),
         |duration| format!("iptv-{}", duration.as_nanos()),
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RadioScreen {
+    Menu,
+    Search,
+    Stations,
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2188,6 +2331,61 @@ fn iptv_error(catalog: &TranslationCatalog, error: IptvError) -> String {
         IptvError::PortalRefused => "iptv_error_portal",
         IptvError::NoPlaybackLink => "iptv_error_no_link",
         IptvError::NeedHttpAddress => "iptv_error_address",
+    };
+    catalog.text(key).to_owned()
+}
+
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
+/// A recording source as the lists name it.
+fn source_label(catalog: &TranslationCatalog, source: &CaptureSource) -> String {
+    let (key, name) = match &source.kind {
+        CaptureKind::Input { .. } => ("recording_input", source.name.as_str()),
+        CaptureKind::Output { .. } if source.name.is_empty() => {
+            return catalog.text("recording_computer_audio").to_owned();
+        }
+        CaptureKind::Output { .. } => ("recording_output", source.name.as_str()),
+        CaptureKind::Application { exclude: true, .. } => {
+            ("recording_app_except", source.name.as_str())
+        }
+        CaptureKind::Application { .. } => ("recording_app", source.name.as_str()),
+    };
+    catalog.text(key).replace("{name}", name)
+}
+
+fn recording_error(catalog: &TranslationCatalog, error: &RecordingError) -> String {
+    let key = match error {
+        RecordingError::NoSources => "recording_error_no_sources",
+        RecordingError::TooManySources => "recording_error_too_many",
+        RecordingError::InvalidFormat => "recording_error_format",
+        RecordingError::InvalidLevel => "recording_error_level",
+        RecordingError::DestinationExists | RecordingError::UnfinishedExists => {
+            "recording_error_exists"
+        }
+        RecordingError::CreateFolder => "recording_error_folder",
+        RecordingError::EncoderStart => "recording_error_encoder",
+        RecordingError::NoneOpened => "recording_error_none_opened",
+        RecordingError::NotCompleted(details) => {
+            return catalog
+                .text("recording_error_not_completed")
+                .replace("{error}", details)
+                .trim()
+                .to_owned();
+        }
+        RecordingError::SaveFailed => "recording_error_save",
+        RecordingError::Discovery(details) => {
+            return catalog
+                .text("recording_error_discovery")
+                .replace("{error}", details)
+                .trim()
+                .to_owned();
+        }
+        RecordingError::Unsupported => "recording_error_unsupported",
     };
     catalog.text(key).to_owned()
 }
