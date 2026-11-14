@@ -20,7 +20,6 @@ roxmltree.workspace = true
 thiserror.workspace = true
 tempfile = "3"
 url.workspace = true
-discord-rich-presence = "1.1.0"
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

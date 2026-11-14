@@ -30,7 +30,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 14 | Snemanje | narejeno |
 | 15 | Pretvornik | narejeno |
 | 16 | YouTube dodatki | narejeno |
-| 17 | Medijske tipke in Discord | narejeno, Discord čaka na aplikacijo |
+| 17 | Medijske tipke | narejeno, Discord odstranjen po Urhovi odločitvi |
 | 18 | Spotify naročnine | narejeno |
 | 19 | Uvoz in izvoz, dokumentacija, izdaja | narejeno lokalno, objava čaka na Urha |
 
@@ -221,6 +221,8 @@ Ročni NVDA preizkus: Ctrl+Alt+Y, vpiši "mozart", Ctrl+Shift+Down: NVDA pove "L
 
 ## Enota 17
 
+Urh se je 14. 11. 2026 odločil, da Discord integracije ne potrebuje. Odstranjena je iz kode, nastavitev, prevodov in javnih besedil; okno se zdaj imenuje "Media controls" in ima eno stikalo. Shranjena stara stikala Discorda se ob branju prezrejo. Spodnji opis Discorda velja samo za zgodovino.
+
 - Medijske tipke in sistemski predstavnostni kontrolniki (Windows: prekrivni kontrolnik z naslovom in izvajalcem, macOS: Now Playing) so privzeto vklopljeni in jih lahko izklopiš. Predvajaj ali premor, naslednji, prejšnji, previjanje in položaj delujejo kot tipke predvajalnika, vendar samo, ko je predvajalnik odprt. Premik drsnika položaja v sistemskem kontrolniku ne povzroči najave.
 - Discord Rich Presence je privzeto izklopljen. Ko ga vklopiš, se privzeto delijo naslov, izvajalec ali kanal, slika in čas predvajanja, vsako od tega lahko izklopiš, med premorom pa se privzeto ne prikazuje. Povezava z Discordom teče v svoji niti in se ob napaki vsakih 15 sekund poskusi znova, zato nikoli ne ustavi vmesnika.
 - Integracije (Ctrl+Alt+Shift+4 ali Settings, General, "Media controls and Discord") so en obrazec z vsemi stikali. Discord potrebuje svojo aplikacijo Discord z ID-jem, ki je ApricotPlayer še nima, zato obrazec pove, da bo deljenje na voljo pozneje, izbire pa se shranijo.
@@ -253,4 +255,4 @@ Preverjeno v izoliranem namizju: izvoz nastavitev in zaznamkov, uvoz zaznamkov z
 
 Ročni NVDA preizkus: Ctrl+Alt+Shift+F6, shrani datoteko: NVDA pove "Settings exported." Ctrl+Alt+Shift+F3, izberi isto datoteko z zaznamki: NVDA prebere "Import bookmarks" in "Imported bookmarks, Add them to my current bookmarks". Enter: NVDA pove rezultat.
 
-Še odprto: objava na GitHubu in gradnja za macOS (GitHub Actions) čakata na Urhovo dovoljenje, Discord čaka na ID aplikacije, macOS koda ni preverjena na Macu.
+Še odprto: objava na GitHubu, gradnja in preizkus na Macu.

@@ -425,7 +425,7 @@ impl MainWindowController {
         let this = Self::alloc(mtm).set_ivars(ControllerIvars {
             shell: RefCell::new(Some({
                 let mut shell = Shell::new(application);
-                // Now Playing and media keys, and Discord when turned on.
+                // Now Playing and media keys when turned on.
                 shell.apply_integrations();
                 shell
             })),

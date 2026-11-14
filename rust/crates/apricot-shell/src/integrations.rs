@@ -1,19 +1,20 @@
-//! The Integrations form and the shared shell's media controls and Discord.
+//! The media controls form and the shared shell's media controls.
 
-use apricot_app::integrations::{DISCORD_APPLICATION_ID, IntegrationSettings, PresenceActivity};
+use apricot_app::integrations::IntegrationSettings;
 use apricot_core::TranslationCatalog;
 
 use crate::{FeatureForm, FormField, FormValue, FormValues};
 
-/// Integrations: the system media controls and Discord, with every shared
-/// detail.
+/// Media controls: the system media controls and the media keys.
 #[must_use]
 pub fn integrations_form(
     catalog: &TranslationCatalog,
     settings: &IntegrationSettings,
 ) -> FeatureForm {
-    let mut fields = vec![
-        FormField::checkbox(
+    FeatureForm::localized(
+        catalog,
+        catalog.text("integrations_settings"),
+        vec![FormField::checkbox(
             "media_controls",
             catalog.text(if cfg!(target_os = "macos") {
                 "integrations_media_controls_mac"
@@ -21,95 +22,22 @@ pub fn integrations_form(
                 "integrations_media_controls"
             }),
             settings.media_controls,
-        ),
-        FormField::checkbox(
-            "discord",
-            catalog.text("integrations_discord"),
-            settings.discord,
-        ),
-        FormField::checkbox(
-            "discord_title",
-            catalog.text("integrations_discord_title"),
-            settings.discord_title,
-        ),
-        FormField::checkbox(
-            "discord_artist",
-            catalog.text("integrations_discord_artist"),
-            settings.discord_artist,
-        ),
-        FormField::checkbox(
-            "discord_artwork",
-            catalog.text("integrations_discord_artwork"),
-            settings.discord_artwork,
-        ),
-        FormField::checkbox(
-            "discord_timing",
-            catalog.text("integrations_discord_timing"),
-            settings.discord_timing,
-        ),
-        FormField::checkbox(
-            "discord_when_paused",
-            catalog.text("integrations_discord_paused"),
-            settings.discord_when_paused,
-        ),
-    ];
-    if DISCORD_APPLICATION_ID.is_empty() {
-        fields.push(FormField::read_only(
-            "discord_note",
-            catalog.text("integrations_discord_note_label"),
-            catalog.text("integrations_discord_unavailable"),
-        ));
-    }
-    FeatureForm::localized(catalog, catalog.text("integrations_settings"), fields)
+        )],
+    )
 }
 
 /// The settings chosen in [`integrations_form`].
 #[must_use]
 pub fn integrations_from_values(values: &FormValues) -> IntegrationSettings {
-    let checked = |id: &str| {
-        values
-            .get(id)
-            .and_then(FormValue::checked)
-            .unwrap_or_default()
-    };
     IntegrationSettings {
-        media_controls: checked("media_controls"),
-        discord: checked("discord"),
-        discord_title: checked("discord_title"),
-        discord_artist: checked("discord_artist"),
-        discord_artwork: checked("discord_artwork"),
-        discord_timing: checked("discord_timing"),
-        discord_when_paused: checked("discord_when_paused"),
+        media_controls: values
+            .get("media_controls")
+            .and_then(FormValue::checked)
+            .unwrap_or_default(),
     }
 }
 
-/// The platform's form of a presence.
-#[must_use]
-pub fn presence_for_platform(
-    presence: Option<PresenceActivity>,
-) -> Option<apricot_platform::integrations::PresenceActivity> {
-    presence.map(
-        |presence| apricot_platform::integrations::PresenceActivity {
-            title: presence.title,
-            artist: presence.artist,
-            artwork: presence.artwork,
-            started_ms: presence.started_ms,
-            ends_ms: presence.ends_ms,
-        },
-    )
-}
-
-/// Unix milliseconds now.
-#[must_use]
-pub fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
-        .unwrap_or_default()
-}
-
-/// The shared shell's media controls and Discord (macOS). Media key events
+/// The shared shell's media controls (macOS). Media key events
 /// wait in a queue that the playback poll empties.
 #[derive(Default)]
 pub(crate) struct IntegrationState {
@@ -118,11 +46,10 @@ pub(crate) struct IntegrationState {
     keys: std::sync::Arc<
         std::sync::Mutex<std::collections::VecDeque<apricot_platform::integrations::MediaKeyEvent>>,
     >,
-    discord: Option<apricot_platform::integrations::DiscordPresence>,
 }
 
 impl crate::Shell {
-    /// Starts or stops the media controls and Discord as Integrations says.
+    /// Starts or stops the media controls as the settings say.
     pub fn apply_integrations(&mut self) {
         let settings = IntegrationSettings::from_settings(self.application.settings());
         #[cfg(any(windows, target_os = "macos"))]
@@ -138,17 +65,10 @@ impl crate::Shell {
                 })
                 .ok();
         }
-        if !settings.discord_active() {
-            self.integrations.discord = None;
-        } else if self.integrations.discord.is_none() {
-            self.integrations.discord = Some(
-                apricot_platform::integrations::DiscordPresence::start(DISCORD_APPLICATION_ID),
-            );
-        }
         self.update_integrations();
     }
 
-    /// What the media controls and Discord show for the player.
+    /// What the media controls show for the player.
     pub(crate) fn update_integrations(&mut self) {
         let session = self.application.player_session();
         let item = session.current_item().cloned();
@@ -167,12 +87,6 @@ impl crate::Shell {
                 None => controls.stopped(),
             }
         }
-        if let Some(discord) = &self.integrations.discord {
-            let settings = IntegrationSettings::from_settings(self.application.settings());
-            discord.show(presence_for_platform(item.and_then(|item| {
-                settings.presence(&item, position, duration, paused, now_ms())
-            })));
-        }
     }
 
     /// The player closed: nothing plays any more.
@@ -180,9 +94,6 @@ impl crate::Shell {
         #[cfg(any(windows, target_os = "macos"))]
         if let Some(controls) = self.integrations.media_controls.as_mut() {
             controls.stopped();
-        }
-        if let Some(discord) = &self.integrations.discord {
-            discord.show(None);
         }
     }
 
@@ -244,14 +155,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_form_round_trips_every_switch() {
+    fn the_form_round_trips_the_switch() {
         let catalog = apricot_app::embedded_catalog("en");
         let settings = IntegrationSettings {
             media_controls: false,
-            discord: true,
-            discord_artwork: false,
-            discord_when_paused: true,
-            ..IntegrationSettings::default()
         };
         let values: FormValues = integrations_form(&catalog, &settings)
             .fields

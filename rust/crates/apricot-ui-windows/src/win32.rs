@@ -679,7 +679,6 @@ struct WindowState {
     conversion_cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pending_suggestions: Option<apricot_shell::youtube_extras::PendingSuggestions>,
     media_controls: Option<apricot_platform::integrations::SystemMediaControls>,
-    discord: Option<apricot_platform::integrations::DiscordPresence>,
     /// Python `conversion_progress_dialog`.
     conversion_progress_window: Option<crate::converter_win32::ConversionProgressWindow>,
     pending_updates: Vec<Receiver<UpdateMessage>>,
@@ -2216,7 +2215,6 @@ unsafe fn create_controls(
         conversion_cancels: Vec::new(),
         pending_suggestions: None,
         media_controls: None,
-        discord: None,
         conversion_progress_window: None,
         pending_updates: Vec::new(),
         app_update_check_running: false,
@@ -15837,8 +15835,7 @@ unsafe fn start_integrations(window: HWND) {
     );
 }
 
-/// Starts or stops the system media controls and Discord as Integrations
-/// says.
+/// Starts or stops the system media controls as the settings say.
 unsafe fn apply_integrations(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
@@ -15862,13 +15859,6 @@ unsafe fn apply_integrations(window: HWND) {
             },
         )
         .ok();
-    }
-    if !settings.discord_active() {
-        state.discord = None;
-    } else if state.discord.is_none() {
-        state.discord = Some(apricot_platform::integrations::DiscordPresence::start(
-            apricot_app::integrations::DISCORD_APPLICATION_ID,
-        ));
     }
     update_integrations(state);
 }
@@ -15929,7 +15919,7 @@ unsafe fn handle_media_key(window: HWND, code: usize, milliseconds: isize) {
     }
 }
 
-/// What the system media controls and Discord show for the player.
+/// What the system media controls show for the player.
 unsafe fn update_integrations(state: &mut WindowState) {
     let session = state.application.player_session();
     let Some(item) = session.current_item().cloned() else {
@@ -15941,20 +15931,6 @@ unsafe fn update_integrations(state: &mut WindowState) {
     if let Some(controls) = state.media_controls.as_mut() {
         controls.now_playing(&item.title, &item.channel, duration);
         controls.playback(!paused, Some(position));
-    }
-    if let Some(discord) = &state.discord {
-        let settings = apricot_app::integrations::IntegrationSettings::from_settings(
-            state.application.settings(),
-        );
-        discord.show(apricot_shell::integrations::presence_for_platform(
-            settings.presence(
-                &item,
-                position,
-                duration,
-                paused,
-                apricot_shell::integrations::now_ms(),
-            ),
-        ));
     }
 }
 
@@ -18656,9 +18632,6 @@ unsafe fn close_player_runtime(window: HWND, state: &mut WindowState) {
     state.clip_preview = None;
     if let Some(controls) = state.media_controls.as_mut() {
         controls.stopped();
-    }
-    if let Some(discord) = &state.discord {
-        discord.show(None);
     }
     let _ = KillTimer(Some(window), CONTROLLED_REPEAT_TIMER_ID);
     state.controlled_repeat = None;

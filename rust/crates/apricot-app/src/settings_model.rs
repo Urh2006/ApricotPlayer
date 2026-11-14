@@ -1769,7 +1769,7 @@ mod tests {
         );
         // macOS adds "Import data from Windows" after "Set default player".
         let mac = usize::from(cfg!(target_os = "macos"));
-        // 2.1 appends "Media controls and Discord" and the four import and
+        // 2.1 appends "Media controls" and the four import and
         // export commands.
         assert_eq!(model.controls.len(), 23 + mac);
         assert!(matches!(
