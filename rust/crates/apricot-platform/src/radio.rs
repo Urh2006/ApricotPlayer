@@ -1,6 +1,5 @@
 //! Radio Browser catalog and durable station identities. Calls run on workers,
 //! never on the UI or playback thread. Read retries never repeat mutations.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 
 use std::{collections::BTreeMap, io::Read, time::Duration};
 
@@ -12,6 +11,23 @@ use url::Url;
 
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 pub const PAGE_SIZE: usize = 100;
+
+/// Why a catalog request failed; the interface words each case.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RadioError {
+    /// The proxy in Settings is not a valid address.
+    Proxy,
+    /// No catalog server answered.
+    Connect,
+    /// Too many requests: the catalog asks to wait.
+    Busy,
+    Http(u16),
+    /// The answer was cut off, too large or not the expected data.
+    InvalidData,
+    InvalidStation,
+    /// The catalog refused the vote, with its own reason.
+    VoteRejected(String),
+}
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
@@ -62,34 +78,16 @@ impl Station {
             self.country.clone(),
             self.language.clone(),
             self.codec.clone(),
-            (self.bitrate > 0)
-                .then(|| format!("{} kbps", self.bitrate))
-                .unwrap_or_default(),
+            if self.bitrate > 0 {
+                format!("{} kbps", self.bitrate)
+            } else {
+                String::new()
+            },
         ]
         .into_iter()
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("; ")
-    }
-
-    #[must_use]
-    pub fn details(&self) -> String {
-        format!(
-            "{}\nCountry: {}\nRegion: {}\nLanguage: {}\nTags: {}\nCodec: {}\nBitrate: {} kbps\nVotes: {}\nPlayed: {}\nWorking at last check: {}\nWebsite: {}\nStream: {}",
-            self.name,
-            self.country,
-            self.state,
-            self.language,
-            self.tags,
-            self.codec,
-            self.bitrate,
-            self.votes,
-            self.clickcount,
-            self.lastcheckok == 1,
-            self.homepage,
-            self.stream_url()
-                .map_or_else(String::new, |url| url.to_string())
-        )
     }
 }
 
@@ -153,10 +151,10 @@ impl RadioFilters {
             query.push(("bitrateMax".into(), self.maximum_bitrate.to_string()));
         }
         query.push(("hidebroken".into(), self.only_working.to_string()));
-        query.push((
-            "is_https".into(),
-            if self.https_only { "true" } else { "" }.to_owned(),
-        ));
+        // The catalog answers an empty value with a server error.
+        if self.https_only {
+            query.push(("is_https".into(), "true".into()));
+        }
     }
 }
 
@@ -177,6 +175,28 @@ pub enum RadioCategory {
     Language(String),
     Tag(String),
     Codec(String),
+}
+
+/// The catalog's lists of station properties.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectoryKind {
+    Countries,
+    Regions,
+    Languages,
+    Tags,
+    Codecs,
+}
+
+impl DirectoryKind {
+    const fn path(self) -> &'static str {
+        match self {
+            Self::Countries => "countries",
+            Self::Regions => "states",
+            Self::Languages => "languages",
+            Self::Tags => "tags",
+            Self::Codecs => "codecs",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -214,25 +234,25 @@ pub struct RadioClient {
 
 impl RadioClient {
     /// Builds a lazily used catalog client. Construction performs no request.
-    pub fn new(proxy: Option<&str>) -> Result<Self, String> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the proxy is not a valid address.
+    pub fn new(proxy: Option<&str>) -> Result<Self, RadioError> {
         let mut builder = Client::builder()
             .timeout(Duration::from_secs(15))
             .connect_timeout(Duration::from_secs(7))
             .redirect(Policy::limited(4))
             .user_agent(format!("ApricotPlayer/{}", env!("CARGO_PKG_VERSION")));
         if let Some(proxy) = proxy.filter(|proxy| !proxy.trim().is_empty()) {
-            builder = builder.proxy(
-                reqwest::Proxy::all(proxy).map_err(|_| "The radio proxy is invalid.".to_owned())?,
-            );
+            builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| RadioError::Proxy)?);
         }
         Ok(Self {
-            client: builder
-                .build()
-                .map_err(|_| "Unable to create the radio client.".to_owned())?,
+            client: builder.build().map_err(|_| RadioError::Connect)?,
             servers: [
                 "https://de1.api.radio-browser.info/",
+                "https://de2.api.radio-browser.info/",
                 "https://nl1.api.radio-browser.info/",
-                "https://at1.api.radio-browser.info/",
             ]
             .into_iter()
             .filter_map(|address| Url::parse(address).ok())
@@ -242,7 +262,11 @@ impl RadioClient {
 
     /// Fetches a raw page before applying local intersections. Advancing the raw
     /// offset prevents filters from trapping pagination on an empty page.
-    pub fn stations(&self, request: &RadioRequest) -> Result<RadioPage, String> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the catalog cannot be read.
+    pub fn stations(&self, request: &RadioRequest) -> Result<RadioPage, RadioError> {
         let mut query = vec![
             ("limit".into(), PAGE_SIZE.to_string()),
             ("offset".into(), request.offset.to_string()),
@@ -319,7 +343,7 @@ impl RadioClient {
         }
         let raw: Vec<Station> =
             serde_json::from_value(self.read("json/stations/search", &query, false)?)
-                .map_err(|_| "The radio catalog returned invalid station data.".to_owned())?;
+                .map_err(|_| RadioError::InvalidData)?;
         let count = raw.len();
         let stations = raw
             .into_iter()
@@ -338,23 +362,29 @@ impl RadioClient {
         })
     }
 
+    /// One page of countries, regions, languages, tags or codecs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the catalog cannot be read.
     pub fn directory(
         &self,
-        kind: &str,
+        kind: DirectoryKind,
         offset: usize,
         search: &str,
         country: &str,
-    ) -> Result<Vec<DirectoryEntry>, String> {
-        if !matches!(
-            kind,
-            "countries" | "states" | "languages" | "tags" | "codecs"
-        ) {
-            return Err("Unknown radio directory.".to_owned());
-        }
+    ) -> Result<Vec<DirectoryEntry>, RadioError> {
+        // Thousands of tags and languages: the most used come first. Places
+        // and codecs are easier to find by name.
+        let by_use = matches!(kind, DirectoryKind::Languages | DirectoryKind::Tags);
         let mut query = vec![
             ("limit".into(), PAGE_SIZE.to_string()),
             ("offset".into(), offset.to_string()),
-            ("order".into(), "name".into()),
+            (
+                "order".into(),
+                if by_use { "stationcount" } else { "name" }.into(),
+            ),
+            ("reverse".into(), by_use.to_string()),
         ];
         if !search.trim().is_empty() {
             query.push(("filter".into(), search.trim().into()));
@@ -362,25 +392,37 @@ impl RadioClient {
         if !country.is_empty() {
             query.push(("country".into(), country.into()));
         }
-        serde_json::from_value(self.read(&format!("json/{kind}"), &query, false)?)
-            .map_err(|_| "The radio catalog returned invalid directory data.".to_owned())
+        serde_json::from_value(self.read(&format!("json/{}", kind.path()), &query, false)?)
+            .map_err(|_| RadioError::InvalidData)
     }
 
-    pub fn vote(&self, id: &str) -> Result<(), String> {
+    /// Votes for a station once; a vote is never retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns the catalog's reason when it refuses the vote.
+    pub fn vote(&self, id: &str) -> Result<(), RadioError> {
         validate_station_id(id)?;
         let result = self.read(&format!("json/vote/{id}"), &[], true)?;
         if result.get("ok").and_then(Value::as_bool) == Some(true) {
             Ok(())
         } else {
-            Err(result
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("The radio catalog did not accept the vote.")
-                .to_owned())
+            Err(RadioError::VoteRejected(
+                result
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            ))
         }
     }
 
-    pub fn clicked(&self, id: &str) -> Result<(), String> {
+    /// Tells the catalog that the station was played, as its rules ask.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the catalog cannot be reached.
+    pub fn clicked(&self, id: &str) -> Result<(), RadioError> {
         validate_station_id(id)?;
         let _ = self.read(&format!("json/url/{id}"), &[], true)?;
         Ok(())
@@ -391,48 +433,46 @@ impl RadioClient {
         path: &str,
         query: &[(String, String)],
         mutation: bool,
-    ) -> Result<Value, String> {
-        let mut last = "The radio catalog is unavailable.".to_owned();
+    ) -> Result<Value, RadioError> {
+        let mut last = RadioError::Connect;
         for base in self.servers.iter().take(if mutation { 1 } else { 2 }) {
-            let url = base
-                .join(path)
-                .map_err(|_| "Invalid radio request.".to_owned())?;
-            let response = self.client.get(url).query(query).send();
-            match response {
-                Ok(response) => {
-                    let status = response.status();
-                    if !status.is_success() {
-                        last = format!("The radio catalog returned HTTP {}.", status.as_u16());
-                        if status.as_u16() == 429 || !status.is_server_error() {
-                            return Err(last);
-                        }
-                        continue;
-                    }
-                    if response
-                        .content_length()
-                        .is_some_and(|length| length > MAX_BYTES)
-                    {
-                        return Err("The radio response is too large.".into());
-                    }
-                    let mut bytes = Vec::new();
-                    response
-                        .take(MAX_BYTES + 1)
-                        .read_to_end(&mut bytes)
-                        .map_err(|_| "The radio response was interrupted.".to_owned())?;
-                    if bytes.len() as u64 > MAX_BYTES {
-                        return Err("The radio response is too large.".into());
-                    }
-                    return serde_json::from_slice(&bytes)
-                        .map_err(|_| "The radio catalog returned invalid JSON.".to_owned());
+            let url = base.join(path).map_err(|_| RadioError::InvalidData)?;
+            let Ok(response) = self.client.get(url).query(query).send() else {
+                last = RadioError::Connect;
+                continue;
+            };
+            let status = response.status();
+            if !status.is_success() {
+                if status.as_u16() == 429 {
+                    return Err(RadioError::Busy);
                 }
-                Err(_) => last = "Unable to connect to the radio catalog.".into(),
+                last = RadioError::Http(status.as_u16());
+                if !status.is_server_error() {
+                    return Err(last);
+                }
+                continue;
             }
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_BYTES)
+            {
+                return Err(RadioError::InvalidData);
+            }
+            let mut bytes = Vec::new();
+            response
+                .take(MAX_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| RadioError::InvalidData)?;
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_BYTES {
+                return Err(RadioError::InvalidData);
+            }
+            return serde_json::from_slice(&bytes).map_err(|_| RadioError::InvalidData);
         }
         Err(last)
     }
 }
 
-fn validate_station_id(id: &str) -> Result<(), String> {
+fn validate_station_id(id: &str) -> Result<(), RadioError> {
     if id.len() == 36
         && id
             .chars()
@@ -440,7 +480,7 @@ fn validate_station_id(id: &str) -> Result<(), String> {
     {
         Ok(())
     } else {
-        Err("Invalid station identity.".into())
+        Err(RadioError::InvalidStation)
     }
 }
 
@@ -480,6 +520,7 @@ impl Default for RadioLibrary {
 }
 
 impl RadioLibrary {
+    /// Adds or removes the station; `true` when it was added.
     pub fn toggle_favorite(&mut self, station: &Station) -> bool {
         if let Some(index) = self
             .favorites
@@ -494,6 +535,7 @@ impl RadioLibrary {
         }
     }
 
+    /// Moves the station to the top of the recently played list.
     pub fn played(&mut self, station: &Station) {
         self.recent
             .retain(|value| value.stationuuid != station.stationuuid);
@@ -541,6 +583,20 @@ mod tests {
             }
             .matches(&station)
         );
+    }
+
+    #[test]
+    fn an_unset_https_filter_sends_no_value() {
+        let mut query = Vec::new();
+        RadioFilters::default().append_query(&mut query);
+        assert!(query.iter().all(|(key, _)| key != "is_https"));
+        let mut query = Vec::new();
+        RadioFilters {
+            https_only: true,
+            ..RadioFilters::default()
+        }
+        .append_query(&mut query);
+        assert!(query.contains(&("is_https".into(), "true".into())));
     }
 
     #[test]

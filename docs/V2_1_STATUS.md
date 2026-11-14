@@ -25,7 +25,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 9 | Zvočne knjige, navigacija in informacije | narejeno |
 | 10 | Playlisti, mape, formati | narejeno |
 | 11 | Upravljanje lokalnih datotek | narejeno |
-| 12 | Radio | čaka |
+| 12 | Radio | narejeno |
 | 13 | IPTV | čaka |
 | 14 | Snemanje | čaka |
 | 15 | Pretvornik | čaka |
@@ -160,3 +160,15 @@ Ročni NVDA preizkus: predvajaj datoteko, Ctrl+Alt+Shift+F2, vpiši ime, Enter: 
 Preverjeno v izoliranem namizju s pravim košem in pravimi sistemskimi dialogi: Delete, Shift+Delete z odgovorom No, Manage files z vrstnim redom Tab (Files, Action, Do it, Close), označi vse, premik v mapo z obstoječim imenom in izbiro Keep both za vse. Testne datoteke so bile nato odstranjene iz koša.
 
 Ročni NVDA preizkus: Ctrl+Alt+O, izberi mapo, na datoteki pritisni Delete: NVDA pove "Moved to the Recycle Bin: ime". Shift+Delete: NVDA prebere vprašanje, fokus je na No. Alt+Shift+M: NVDA pove "Manage files" in prvo datoteko; izberi Mark all files, Enter, nato Move to folder, Enter in izberi mapo z isto datoteko: NVDA prebere "ime already exists in the destination folder".
+
+## Enota 12
+
+- Radio (Ctrl+Alt+Shift+1 ali vnos Radio v glavnem meniju) odpre meni: iskanje postaj, vse postaje, priljubljene, nedavno predvajane, najbolj poslušane, trenutno priljubljene, z največ glasovi, nedavno poslušane pri drugih, nedavno posodobljene, države, regije, jeziki, oznake, kodeki in nastavitve radia. Meni si zapomni zadnjo izbiro.
+- Seznam postaj: Enter predvaja, Ctrl+F doda ali odstrani priljubljeno, Ctrl+L kopira naslov toka, F7 pokaže podrobnosti, kontekstni meni pa ponudi še ime postaje, spletno stran, glasovanje, filtre, osvežitev, iskanje, brisanje zgodovine in nalaganje naslednjih postaj. Nalaganje naslednjih postaj postavi izbiro na prvo novo postajo. Back se vrne v meni radia.
+- Postaje se predvajajo neposredno z naslovom iz imenika, brez iskanja z yt-dlp, zato ostaneta ime postaje in njena oznaka (enako velja za kanale IPTV). Nov izvajalec in naslov skladbe se najavita samodejno, vsak samo enkrat, ime toka iz naslova pa se ne najavi kot skladba. Alt+Shift+N ponovi trenutno skladbo. Samodejno najavo lahko izklopiš v nastavitvah radia.
+- Napake imenika so prevedene (brez povezave, zaseden imenik, napaka strežnika, nečitljivi podatki, zavrnjen glas). Popravljena je napaka osnutka, zaradi katere je imenik vsako iskanje zavrnil (prazen parameter HTTPS).
+- Vsa besedila radia in skupna besedila virov so prevedena v 27 jezikov.
+
+Preverjeno v izoliranem namizju s pravim imenikom in pravim tokom: meni in vrstni red Tab (seznam, Open, Actions, Back), seznam 100 postaj z največ glasovi, Ctrl+F, predvajanje Radio Paradise, samodejna najava skladbe in Alt+Shift+N, zapis v `radio.json`.
+
+Ročni NVDA preizkus: Ctrl+Alt+Shift+1: NVDA pove "Radio" in "Search stations". Puščica dol do "Most voted", Enter: po "Loading" NVDA prebere prvo postajo. Ctrl+F: "Added to radio favorites." Enter: "Playing: ime postaje", ob novi skladbi NVDA prebere izvajalca in naslov. Alt+Shift+N ponovi skladbo.

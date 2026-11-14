@@ -3,12 +3,12 @@
 #![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 
 use crate::{FeatureForm, FormField, FormValue, FormValues};
-use apricot_core::MediaItem;
+use apricot_core::{MediaItem, TranslationCatalog};
 use apricot_platform::{
     iptv::{ChannelKind, EpgGuide, IptvChannel, IptvClient, IptvSource, SourceKind},
     radio::{
-        DirectoryEntry, RadioCategory, RadioClient, RadioFilters, RadioLibrary, RadioPage,
-        RadioRequest, Station,
+        DirectoryEntry, DirectoryKind, RadioCategory, RadioClient, RadioError, RadioFilters,
+        RadioLibrary, RadioPage, RadioRequest, Station,
     },
     recording::{
         self, CaptureKind, CaptureSource, RecordingEvent, RecordingFeedback, RecordingFormat,
@@ -36,6 +36,9 @@ pub struct SourceBrowser {
     pub rows: Vec<String>,
     pub selected: usize,
     pub actions: Vec<SourceAction>,
+    /// Labels of the button that lists the actions and of the Back button.
+    pub actions_button: String,
+    pub back_button: String,
 }
 #[derive(Clone, Debug)]
 pub struct SourceSelection {
@@ -53,6 +56,8 @@ pub trait SourcesUi {
     fn choose_folder(&mut self, title: &str) -> Option<PathBuf>;
     fn copy(&mut self, text: &str) -> bool;
     fn cue(&mut self, started: bool);
+    /// A warning with Yes and No, No being the default.
+    fn ask_yes_no(&mut self, message: &str) -> bool;
 }
 
 #[derive(Clone, Debug)]
@@ -62,13 +67,21 @@ pub struct SourcesEnvironment {
     pub ffmpeg: Option<PathBuf>,
     pub proxy: String,
     pub shortcuts: BTreeMap<String, String>,
+    /// The interface language.
+    pub language: String,
+}
+
+impl SourcesEnvironment {
+    #[must_use]
+    pub fn catalog(&self) -> TranslationCatalog {
+        apricot_app::embedded_catalog(&self.language)
+    }
 }
 
 enum Work {
     RadioPage(RadioPage),
     RadioDirectory {
-        kind: String,
-        country: String,
+        kind: DirectoryKind,
         entries: Vec<DirectoryEntry>,
         offset: usize,
     },
@@ -110,6 +123,9 @@ pub struct SourcesController {
     recorder: Option<RecordingSession>,
     available_sources: Vec<CaptureSource>,
     pending: Option<Receiver<Result<Work, String>>>,
+    /// The localized "Loading" announcement of the current language.
+    loading: String,
+    hub_selected: usize,
     metadata_identity: String,
     metadata_title: String,
 }
@@ -143,6 +159,8 @@ impl Default for SourcesController {
             recorder: None,
             available_sources: Vec::new(),
             pending: None,
+            loading: String::new(),
+            hub_selected: 0,
             metadata_identity: String::new(),
             metadata_title: String::new(),
         }
@@ -155,38 +173,39 @@ impl SourcesController {
             return;
         }
         self.loaded = Some(environment.directory.clone());
+        let catalog = environment.catalog();
         for name in ["radio.json", "iptv-sources.json", "recording.json"] {
             let path = environment.directory.join(name);
             if !path.exists() {
                 continue;
             }
-            let result = std::fs::read(&path)
-                .map_err(|_| "Unable to read saved data.".to_owned())
-                .and_then(|bytes| {
-                    if bytes.len() > 8 * 1024 * 1024 {
-                        return Err("Saved data is too large.".into());
-                    }
-                    match name {
-                        "radio.json" => serde_json::from_slice(&bytes)
-                            .map(|value| self.radio = value)
-                            .map_err(|_| "Invalid radio data.".into()),
-                        "iptv-sources.json" => serde_json::from_slice(&bytes)
-                            .map(|value| self.iptv_sources = value)
-                            .map_err(|_| "Invalid IPTV source data.".into()),
-                        _ => serde_json::from_slice::<RecordingSettings>(&bytes)
-                            .map(|value| {
-                                if value.remember {
-                                    self.recording = value;
-                                }
-                            })
-                            .map_err(|_| "Invalid recording settings.".into()),
-                    }
-                });
-            if let Err(error) = result {
+            let result = std::fs::read(&path).ok().and_then(|bytes| {
+                if bytes.len() > 8 * 1024 * 1024 {
+                    return None;
+                }
+                match name {
+                    "radio.json" => serde_json::from_slice(&bytes)
+                        .map(|value| self.radio = value)
+                        .ok(),
+                    "iptv-sources.json" => serde_json::from_slice(&bytes)
+                        .map(|value| self.iptv_sources = value)
+                        .ok(),
+                    _ => serde_json::from_slice::<RecordingSettings>(&bytes)
+                        .map(|value| {
+                            if value.remember {
+                                self.recording = value;
+                            }
+                        })
+                        .ok(),
+                }
+            });
+            if result.is_none() {
                 self.blocked.insert(name.into());
-                ui.error(&format!(
-                    "{name}: {error} The existing file is preserved and saving it is blocked."
-                ));
+                ui.error(
+                    &catalog
+                        .text("sources_data_unreadable")
+                        .replace("{file}", name),
+                );
             }
         }
         self.request.global_filters = self.radio.global_filters.clone();
@@ -202,9 +221,10 @@ impl SourcesController {
         value: &Value,
     ) -> Result<(), String> {
         if self.blocked.contains(name) {
-            return Err(format!(
-                "{name} could not be loaded safely. Restore a valid backup before saving."
-            ));
+            return Err(environment
+                .catalog()
+                .text("sources_save_blocked")
+                .replace("{file}", name));
         }
         apricot_storage::write_json_atomic(&environment.directory.join(name), value)
             .map_err(|error| error.to_string())
@@ -258,6 +278,10 @@ impl SourcesController {
             return false;
         }
         self.load(ui, environment);
+        let catalog = environment.catalog();
+        catalog
+            .text("sources_loading")
+            .clone_into(&mut self.loading);
         match action {
             "open_radio" => self.radio_hub(ui, environment),
             "open_iptv" => self.iptv_hub(ui, environment),
@@ -289,7 +313,7 @@ impl SourcesController {
             }
             "radio_now_playing" => ui.status(
                 if self.metadata_title.is_empty() {
-                    "No radio song information is available."
+                    catalog.text("radio_no_song")
                 } else {
                     &self.metadata_title
                 },
@@ -311,7 +335,7 @@ impl SourcesController {
         std::thread::spawn(move || {
             let _ = send.send(work());
         });
-        ui.status("Loading...", true);
+        ui.status(&self.loading, true);
     }
 
     #[must_use]
@@ -390,7 +414,10 @@ impl SourcesController {
         let result = match pending.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return true,
-            Err(TryRecvError::Disconnected) => Err("The source task stopped unexpectedly.".into()),
+            Err(TryRecvError::Disconnected) => Err(environment
+                .catalog()
+                .text("sources_task_stopped")
+                .to_owned()),
         };
         self.pending = None;
         match result {
@@ -401,21 +428,30 @@ impl SourcesController {
                     .iter()
                     .map(|station| station.stationuuid.clone())
                     .collect();
+                let first_new = self.station_rows.len();
                 self.station_rows.extend(
                     page.stations
                         .into_iter()
                         .filter(|station| !ids.contains(&station.stationuuid)),
                 );
+                // More stations continue from the first new one.
+                if first_new > 0 && self.station_rows.len() > first_new {
+                    self.station_selected = first_new;
+                }
                 self.request.offset = page.next_offset;
                 self.radio_has_more = page.has_more;
-                self.radio_list(ui, environment);
+                if self.station_rows.is_empty() {
+                    ui.status(environment.catalog().text("radio_no_stations"), true);
+                    self.radio_hub(ui, environment);
+                } else {
+                    self.radio_list(ui, environment);
+                }
             }
             Ok(Work::RadioDirectory {
                 kind,
-                country,
                 entries,
                 offset,
-            }) => self.radio_directory_list(ui, environment, &kind, &country, entries, offset),
+            }) => self.radio_directory_list(ui, environment, kind, entries, offset),
             Ok(Work::Iptv {
                 source,
                 channels,
@@ -458,6 +494,7 @@ impl SourcesController {
         ui: &mut dyn SourcesUi,
         station_id: Option<&str>,
         title: Option<&str>,
+        stream_url: Option<&str>,
     ) {
         let Some(station_id) = station_id else {
             self.metadata_identity.clear();
@@ -468,8 +505,16 @@ impl SourcesController {
             self.metadata_identity = station_id.into();
             self.metadata_title.clear();
         }
+        // Until the station sends a song, mpv names the stream after the end
+        // of its address, which is no song title.
+        let address_name = stream_url
+            .and_then(|url| url.trim_end_matches('/').rsplit('/').next())
+            .unwrap_or_default();
         let Some(title) = title.map(str::trim).filter(|title| {
-            !title.is_empty() && !title.starts_with("http://") && !title.starts_with("https://")
+            !title.is_empty()
+                && !title.starts_with("http://")
+                && !title.starts_with("https://")
+                && !title.eq_ignore_ascii_case(address_name)
         }) else {
             return;
         };
@@ -488,9 +533,10 @@ impl SourcesController {
         selected: usize,
         actions: &[(&'static str, &str)],
     ) -> SourceBrowser {
+        let catalog = environment.catalog();
         SourceBrowser {
             title: title.into(),
-            prompt: "Enter plays or opens the selected item. Shift+F10 opens its actions.".into(),
+            prompt: catalog.text("sources_browser_prompt").to_owned(),
             rows,
             selected,
             actions: actions
@@ -498,71 +544,55 @@ impl SourcesController {
                 .map(|(id, label)| SourceAction {
                     id,
                     label: (*label).into(),
-                    shortcut: environment.shortcuts.get(*id).cloned().unwrap_or_default(),
+                    shortcut: environment
+                        .shortcuts
+                        .get(shortcut_action(id))
+                        .cloned()
+                        .unwrap_or_default(),
                 })
                 .collect(),
+            actions_button: catalog.text("sources_actions").to_owned(),
+            back_button: catalog.text("sources_back").to_owned(),
         }
     }
 
     fn radio_hub(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
-        let rows = [
-            "Search stations",
-            "All stations",
-            "Favorites",
-            "Recently played",
-            "Discover: most played",
-            "Discover: trending",
-            "Discover: most voted",
-            "Discover: recent clicks",
-            "Discover: recently updated",
-            "Countries",
-            "Regions",
-            "Languages",
-            "Tags",
-            "Codecs",
-            "Settings",
-        ]
-        .map(str::to_owned)
-        .to_vec();
+        let catalog = environment.catalog();
+        let rows = RADIO_HUB
+            .iter()
+            .map(|key| catalog.text(key).to_owned())
+            .collect();
         let Some(choice) = ui.browse(&Self::browser(
             environment,
-            "Radio",
+            catalog.text("radio_title"),
             rows,
-            0,
-            &[("open", "Open")],
+            self.hub_selected,
+            &[("open", catalog.text("open"))],
         )) else {
             return;
         };
+        self.hub_selected = choice.index;
         match choice.index {
-            0 => {
-                let Some(values) = ui.form(&FeatureForm::new(
-                    "Search radio",
-                    vec![FormField::text(
-                        "query",
-                        "Station name",
-                        &self.request.search,
-                    )],
-                )) else {
-                    return;
-                };
-                self.request.search = text(&values, "query");
-                self.request.category = RadioCategory::All;
-                self.load_radio(ui, environment, true);
-            }
+            0 => self.search_radio(ui, environment),
             1 => {
                 self.request.category = RadioCategory::All;
                 self.request.search.clear();
                 self.load_radio(ui, environment, true);
             }
-            2 => {
-                self.station_rows = self.radio.favorites.clone();
+            2 | 3 => {
+                self.station_rows = if choice.index == 2 {
+                    self.radio.favorites.clone()
+                } else {
+                    self.radio.recent.clone()
+                };
+                self.station_selected = 0;
                 self.radio_has_more = false;
-                self.radio_list(ui, environment);
-            }
-            3 => {
-                self.station_rows = self.radio.recent.clone();
-                self.radio_has_more = false;
-                self.radio_list(ui, environment);
+                if self.station_rows.is_empty() {
+                    ui.status(catalog.text("radio_no_stations"), true);
+                    self.radio_hub(ui, environment);
+                } else {
+                    self.radio_list(ui, environment);
+                }
             }
             index @ 4..=8 => {
                 self.request.category = [
@@ -573,20 +603,48 @@ impl SourcesController {
                     RadioCategory::Updated,
                 ][index - 4]
                     .clone();
+                self.request.search.clear();
                 self.load_radio(ui, environment, true);
             }
             index @ 9..=13 => self.load_radio_directory(
                 ui,
                 environment,
-                ["countries", "states", "languages", "tags", "codecs"][index - 9],
-                "",
+                [
+                    DirectoryKind::Countries,
+                    DirectoryKind::Regions,
+                    DirectoryKind::Languages,
+                    DirectoryKind::Tags,
+                    DirectoryKind::Codecs,
+                ][index - 9],
                 0,
             ),
             14 => {
                 self.radio_settings(ui, environment);
+                self.radio_hub(ui, environment);
             }
             _ => {}
         }
+    }
+
+    fn search_radio(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+        let catalog = environment.catalog();
+        let mut form = FeatureForm::localized(
+            &catalog,
+            catalog.text("radio_search_title"),
+            vec![FormField::text(
+                "query",
+                catalog.text("radio_station_name"),
+                &self.request.search,
+            )],
+        );
+        catalog.text("search").clone_into(&mut form.submit);
+        let Some(values) = ui.form(&form) else {
+            self.radio_hub(ui, environment);
+            return;
+        };
+        self.request.search = text(&values, "query");
+        self.request.category = RadioCategory::All;
+        self.load_radio(ui, environment, true);
     }
 
     fn load_radio(
@@ -609,119 +667,133 @@ impl SourcesController {
             .unwrap_or_default();
         let request = self.request.clone();
         let proxy = environment.proxy.clone();
+        let catalog = environment.catalog();
         self.spawn(ui, move || {
-            RadioClient::new(Some(&proxy))?
-                .stations(&request)
+            RadioClient::new(Some(&proxy))
+                .and_then(|client| client.stations(&request))
                 .map(Work::RadioPage)
+                .map_err(|error| radio_error(&catalog, &error))
         });
     }
 
+    #[allow(clippy::too_many_lines)] // One list with its actions.
     fn radio_list(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
+        let catalog = environment.catalog();
         loop {
             let mut actions = vec![
-                ("play", "Play"),
-                ("radio_details", "Details"),
-                ("radio_favorite", "Add or remove favorite"),
-                ("radio_copy_url", "Copy stream URL"),
-                ("radio_copy_name", "Copy station name"),
-                ("radio_website", "Open website"),
-                ("radio_vote", "Vote for station"),
-                ("radio_filters", "Filters"),
-                ("radio_refresh", "Refresh"),
-                ("radio_search", "Search"),
-                ("radio_clear_history", "Clear radio history"),
+                ("play", catalog.text("play")),
+                ("radio_details", catalog.text("radio_details")),
+                ("radio_favorite", catalog.text("radio_favorite")),
+                ("radio_copy_url", catalog.text("radio_copy_url")),
+                ("radio_copy_name", catalog.text("radio_copy_name")),
+                ("radio_website", catalog.text("radio_website")),
+                ("radio_vote", catalog.text("radio_vote")),
+                ("radio_filters", catalog.text("radio_filters")),
+                ("radio_refresh", catalog.text("radio_refresh")),
+                ("radio_search", catalog.text("radio_search_stations")),
+                ("radio_clear_history", catalog.text("radio_clear_history")),
             ];
             if self.radio_has_more {
-                actions.push(("radio_more", "Load more"));
+                actions.push(("radio_more", catalog.text("radio_more")));
             }
             let rows = self.station_rows.iter().map(Station::label).collect();
             let Some(choice) = ui.browse(&Self::browser(
                 environment,
-                "Radio stations",
+                catalog.text("radio_stations"),
                 rows,
                 self.station_selected,
                 &actions,
             )) else {
+                // Back returns to the radio menu.
+                self.radio_hub(ui, environment);
                 return;
             };
             self.station_selected = choice.index;
-            if choice.action == "radio_more" {
-                self.load_radio(ui, environment, false);
-                return;
-            }
-            if choice.action == "radio_refresh" {
-                self.load_radio(ui, environment, true);
-                return;
-            }
-            if choice.action == "radio_filters" {
-                if self.radio_filters(ui, environment) {
+            match choice.action.as_str() {
+                "radio_more" => {
+                    self.load_radio(ui, environment, false);
+                    return;
+                }
+                "radio_refresh" => {
                     self.load_radio(ui, environment, true);
                     return;
                 }
-                continue;
-            }
-            if choice.action == "radio_search" {
-                self.radio_hub(ui, environment);
-                return;
-            }
-            if choice.action == "radio_clear_history" {
-                if confirm(
-                    ui,
-                    "Clear radio history?",
-                    "This clears only the list of recently played radio stations.",
-                ) {
-                    let mut next = self.radio.clone();
-                    next.recent.clear();
-                    let previous = std::mem::replace(&mut self.radio, next);
-                    if let Err(error) = self.save_radio(environment) {
-                        self.radio = previous;
-                        ui.error(&error);
+                "radio_filters" => {
+                    if self.radio_filters(ui, environment) {
+                        self.load_radio(ui, environment, true);
+                        return;
                     }
+                    continue;
                 }
-                continue;
+                "radio_search" => {
+                    self.search_radio(ui, environment);
+                    return;
+                }
+                "radio_clear_history" => {
+                    if ui.ask_yes_no(catalog.text("radio_clear_history_confirm")) {
+                        let mut next = self.radio.clone();
+                        next.recent.clear();
+                        let previous = std::mem::replace(&mut self.radio, next);
+                        match self.save_radio(environment) {
+                            Ok(()) => ui.status(catalog.text("radio_history_cleared"), true),
+                            Err(error) => {
+                                self.radio = previous;
+                                ui.error(&error);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
             }
             let Some(station) = self.station_rows.get(choice.index).cloned() else {
                 continue;
             };
             match choice.action.as_str() {
                 "play" | "open" => {
-                    if let Some(item) = station.media() {
-                        let previous = self.radio.clone();
-                        self.radio.played(&station);
-                        if let Err(error) = self.save_radio(environment) {
-                            self.radio = previous;
-                            ui.error(&error);
-                        }
-                        ui.play(item);
-                        let proxy = environment.proxy.clone();
-                        let id = station.stationuuid;
-                        self.spawn(ui, move || {
-                            RadioClient::new(Some(&proxy))?.clicked(&id)?;
-                            Ok(Work::Message(String::new()))
-                        });
+                    let Some(item) = station.media() else {
+                        ui.error(catalog.text("radio_no_stream"));
+                        continue;
+                    };
+                    let previous = self.radio.clone();
+                    self.radio.played(&station);
+                    if let Err(error) = self.save_radio(environment) {
+                        self.radio = previous;
+                        ui.error(&error);
                     }
+                    ui.play(item);
+                    // The catalog counts plays; nothing waits for the answer.
+                    let proxy = environment.proxy.clone();
+                    let id = station.stationuuid;
+                    std::thread::spawn(move || {
+                        let _ =
+                            RadioClient::new(Some(&proxy)).and_then(|client| client.clicked(&id));
+                    });
                     return;
                 }
                 "radio_details" => {
-                    let _ = ui.form(&FeatureForm::new(
-                        "Station details",
+                    let mut form = FeatureForm::localized(
+                        &catalog,
+                        catalog.text("radio_details"),
                         vec![FormField::read_only(
                             "details",
-                            "Station",
-                            station.details(),
+                            &station.name,
+                            station_details(&catalog, &station),
                         )],
-                    ));
+                    );
+                    catalog.text("ok").clone_into(&mut form.submit);
+                    let _ = ui.form(&form);
                 }
                 "radio_favorite" => {
                     let previous = self.radio.clone();
                     let added = self.radio.toggle_favorite(&station);
                     match self.save_radio(environment) {
                         Ok(()) => ui.status(
-                            if added {
-                                "Added to radio favorites."
+                            catalog.text(if added {
+                                "radio_favorite_added"
                             } else {
-                                "Removed from radio favorites."
-                            },
+                                "radio_favorite_removed"
+                            }),
                             true,
                         ),
                         Err(error) => {
@@ -731,26 +803,34 @@ impl SourcesController {
                     }
                 }
                 "radio_copy_url" => {
-                    if let Some(url) = station.stream_url() {
-                        let _ = ui.copy(url.as_str());
+                    if let Some(url) = station.stream_url()
+                        && ui.copy(url.as_str())
+                    {
+                        ui.status(catalog.text("url_copied"), true);
                     }
                 }
                 "radio_copy_name" => {
-                    let _ = ui.copy(&station.name);
-                }
-                "radio_website" => {
-                    if let Some(url) = apricot_platform::radio::http_url(&station.homepage)
-                        && let Err(error) = apricot_platform::shell::open_url(url.as_str())
-                    {
-                        ui.error(&error.to_string());
+                    if ui.copy(&station.name) {
+                        ui.status(catalog.text("radio_name_copied"), true);
                     }
                 }
+                "radio_website" => match apricot_platform::radio::http_url(&station.homepage) {
+                    Some(url) => {
+                        if let Err(error) = apricot_platform::shell::open_url(url.as_str()) {
+                            ui.error(&error.to_string());
+                        }
+                    }
+                    None => ui.status(catalog.text("radio_no_website"), true),
+                },
                 "radio_vote" => {
                     let proxy = environment.proxy.clone();
                     let id = station.stationuuid;
+                    let catalog = catalog.clone();
                     self.spawn(ui, move || {
-                        RadioClient::new(Some(&proxy))?.vote(&id)?;
-                        Ok(Work::Message("Vote submitted.".into()))
+                        RadioClient::new(Some(&proxy))
+                            .and_then(|client| client.vote(&id))
+                            .map(|()| Work::Message(catalog.text("radio_vote_done").to_owned()))
+                            .map_err(|error| radio_error(&catalog, &error))
                     });
                     return;
                 }
@@ -763,21 +843,20 @@ impl SourcesController {
         &mut self,
         ui: &mut dyn SourcesUi,
         environment: &SourcesEnvironment,
-        kind: &str,
-        country: &str,
+        kind: DirectoryKind,
         offset: usize,
     ) {
-        let kind = kind.to_owned();
-        let country = country.to_owned();
         let proxy = environment.proxy.clone();
+        let catalog = environment.catalog();
         self.spawn(ui, move || {
-            let entries = RadioClient::new(Some(&proxy))?.directory(&kind, offset, "", &country)?;
-            Ok(Work::RadioDirectory {
-                kind,
-                country,
-                entries,
-                offset,
-            })
+            RadioClient::new(Some(&proxy))
+                .and_then(|client| client.directory(kind, offset, "", ""))
+                .map(|entries| Work::RadioDirectory {
+                    kind,
+                    entries,
+                    offset,
+                })
+                .map_err(|error| radio_error(&catalog, &error))
         });
     }
 
@@ -785,51 +864,68 @@ impl SourcesController {
         &mut self,
         ui: &mut dyn SourcesUi,
         environment: &SourcesEnvironment,
-        kind: &str,
-        country: &str,
+        kind: DirectoryKind,
         entries: Vec<DirectoryEntry>,
         offset: usize,
     ) {
+        let catalog = environment.catalog();
         let more = entries.len() >= apricot_platform::radio::PAGE_SIZE;
-        let mut actions = vec![("open", "Open")];
+        let mut actions = vec![("open", catalog.text("open"))];
         if more {
-            actions.push(("more", "Next page"));
+            actions.push(("more", catalog.text("radio_next_page")));
         }
         let rows = entries
             .iter()
-            .map(|entry| format!("{}; {} stations", entry.name, entry.stationcount))
+            .map(|entry| {
+                let count = entry.stationcount.to_string();
+                if kind == DirectoryKind::Regions && !entry.country.is_empty() {
+                    catalog
+                        .text("radio_region_row")
+                        .replace("{name}", &entry.name)
+                        .replace("{country}", &entry.country)
+                        .replace("{count}", &count)
+                } else {
+                    catalog
+                        .text("radio_directory_row")
+                        .replace("{name}", &entry.name)
+                        .replace("{count}", &count)
+                }
+            })
             .collect();
-        let Some(choice) = ui.browse(&Self::browser(environment, kind, rows, 0, &actions)) else {
+        let title = catalog.text(RADIO_HUB[9 + directory_index(kind)]);
+        let Some(choice) = ui.browse(&Self::browser(environment, title, rows, 0, &actions)) else {
+            self.radio_hub(ui, environment);
             return;
         };
         if choice.action == "more" {
-            self.load_radio_directory(ui, environment, kind, country, offset + entries.len());
+            self.load_radio_directory(ui, environment, kind, offset + entries.len());
             return;
         }
         let Some(entry) = entries.get(choice.index) else {
             return;
         };
         self.request.category = match kind {
-            "countries" => RadioCategory::Country(entry.iso_3166_1.clone()),
-            "states" => RadioCategory::Region {
+            DirectoryKind::Countries => RadioCategory::Country(entry.iso_3166_1.clone()),
+            DirectoryKind::Regions => RadioCategory::Region {
                 country: String::new(),
                 name: entry.name.clone(),
             },
-            "languages" => RadioCategory::Language(entry.name.clone()),
-            "tags" => RadioCategory::Tag(entry.name.clone()),
-            "codecs" => RadioCategory::Codec(entry.name.clone()),
-            _ => return,
+            DirectoryKind::Languages => RadioCategory::Language(entry.name.clone()),
+            DirectoryKind::Tags => RadioCategory::Tag(entry.name.clone()),
+            DirectoryKind::Codecs => RadioCategory::Codec(entry.name.clone()),
         };
         self.request.search.clear();
         self.load_radio(ui, environment, true);
     }
 
     fn radio_settings(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) {
-        let Some(values) = ui.form(&FeatureForm::new(
-            "Radio settings",
+        let catalog = environment.catalog();
+        let Some(values) = ui.form(&FeatureForm::localized(
+            &catalog,
+            catalog.text("radio_settings"),
             vec![FormField::checkbox(
                 "announce",
-                "Automatically announce a new artist and song title",
+                catalog.text("radio_announce_metadata"),
                 self.radio.announce_metadata,
             )],
         )) else {
@@ -844,6 +940,7 @@ impl SourcesController {
     }
 
     fn radio_filters(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) -> bool {
+        let catalog = environment.catalog();
         let key = format!("{:?}", self.request.category);
         let local = self
             .radio
@@ -851,40 +948,65 @@ impl SourcesController {
             .get(&key)
             .cloned()
             .unwrap_or_default();
-        let form = FeatureForm::new(
-            "Radio filters",
+        let form = FeatureForm::localized(
+            &catalog,
+            catalog.text("radio_filters"),
             vec![
                 FormField::choice(
                     "scope",
-                    "Apply to",
-                    vec!["This category".into(), "All radio categories".into()],
+                    catalog.text("radio_filter_scope"),
+                    vec![
+                        catalog.text("radio_filter_this").to_owned(),
+                        catalog.text("radio_filter_all").to_owned(),
+                    ],
                     0,
                 ),
-                FormField::text("country", "Country code (for example SI)", &local.country),
-                FormField::text("region", "Region", &local.region),
-                FormField::text("language", "Language", &local.language),
-                FormField::text("tags", "Tags, separated by commas", &local.tags),
-                FormField::text("codec", "Codec", &local.codec),
+                FormField::text(
+                    "country",
+                    catalog.text("radio_filter_country"),
+                    &local.country,
+                ),
+                FormField::text("region", catalog.text("radio_filter_region"), &local.region),
+                FormField::text(
+                    "language",
+                    catalog.text("radio_filter_language"),
+                    &local.language,
+                ),
+                FormField::text("tags", catalog.text("radio_filter_tags"), &local.tags),
+                FormField::text("codec", catalog.text("radio_filter_codec"), &local.codec),
                 FormField::number(
                     "min",
-                    "Minimum bitrate",
+                    catalog.text("radio_filter_min_bitrate"),
                     f64::from(local.minimum_bitrate),
                     0.0,
                     10000.0,
                 ),
                 FormField::number(
                     "max",
-                    "Maximum bitrate (0 means unlimited)",
+                    catalog.text("radio_filter_max_bitrate"),
                     f64::from(local.maximum_bitrate),
                     0.0,
                     10000.0,
                 ),
-                FormField::checkbox("working", "Only working stations", local.only_working),
-                FormField::checkbox("https", "HTTPS streams only", local.https_only),
+                FormField::checkbox(
+                    "working",
+                    catalog.text("radio_filter_working"),
+                    local.only_working,
+                ),
+                FormField::checkbox(
+                    "https",
+                    catalog.text("radio_filter_https"),
+                    local.https_only,
+                ),
             ],
         );
         let Some(values) = ui.form(&form) else {
             return false;
+        };
+        let bitrate = |key: &str| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let value = number(&values, key).clamp(0.0, 10000.0).round() as u32;
+            value
         };
         let filters = RadioFilters {
             country: text(&values, "country"),
@@ -892,13 +1014,13 @@ impl SourcesController {
             language: text(&values, "language"),
             tags: text(&values, "tags"),
             codec: text(&values, "codec"),
-            minimum_bitrate: number(&values, "min") as u32,
-            maximum_bitrate: number(&values, "max") as u32,
+            minimum_bitrate: bitrate("min"),
+            maximum_bitrate: bitrate("max"),
             only_working: checked(&values, "working"),
             https_only: checked(&values, "https"),
         };
         if filters.maximum_bitrate > 0 && filters.maximum_bitrate < filters.minimum_bitrate {
-            ui.error("Maximum bitrate must be greater than or equal to minimum bitrate.");
+            ui.error(catalog.text("radio_filter_bitrate_order"));
             return false;
         }
         let previous = self.radio.clone();
@@ -1563,12 +1685,193 @@ fn unique_id() -> String {
     )
 }
 fn confirm(ui: &mut dyn SourcesUi, title: &str, message: &str) -> bool {
-    ui.form(&FeatureForm::new(
-        title,
-        vec![
-            FormField::read_only("message", title, message),
-            FormField::checkbox("confirm", "Confirm", false),
-        ],
-    ))
-    .is_some_and(|values| checked(&values, "confirm"))
+    ui.ask_yes_no(&format!("{title} {message}"))
+}
+
+/// The rows of the Radio menu, in order.
+const RADIO_HUB: [&str; 15] = [
+    "radio_search_stations",
+    "radio_all",
+    "favorites",
+    "radio_recent",
+    "radio_most_played",
+    "radio_trending",
+    "radio_most_voted",
+    "radio_recent_clicks",
+    "radio_updated",
+    "radio_countries",
+    "radio_regions",
+    "radio_languages",
+    "radio_tags",
+    "radio_codecs",
+    "radio_settings",
+];
+
+const fn directory_index(kind: DirectoryKind) -> usize {
+    match kind {
+        DirectoryKind::Countries => 0,
+        DirectoryKind::Regions => 1,
+        DirectoryKind::Languages => 2,
+        DirectoryKind::Tags => 3,
+        DirectoryKind::Codecs => 4,
+    }
+}
+
+/// Station actions answer to the shortcuts of the same command elsewhere in
+/// Apricot, so Ctrl+F, Ctrl+L and F7 keep their meaning.
+fn shortcut_action(id: &str) -> &str {
+    match id {
+        "radio_favorite" => "add_favorite",
+        "radio_copy_url" => "copy_link",
+        "radio_details" => "player_details",
+        _ => id,
+    }
+}
+
+fn radio_error(catalog: &TranslationCatalog, error: &RadioError) -> String {
+    match error {
+        RadioError::Proxy => catalog.text("radio_error_proxy").to_owned(),
+        RadioError::Connect => catalog.text("radio_error_connect").to_owned(),
+        RadioError::Busy => catalog.text("radio_error_busy").to_owned(),
+        RadioError::Http(code) => catalog
+            .text("radio_error_http")
+            .replace("{code}", &code.to_string()),
+        RadioError::InvalidData => catalog.text("radio_error_data").to_owned(),
+        RadioError::InvalidStation => catalog.text("radio_error_station").to_owned(),
+        RadioError::VoteRejected(reason) if reason.trim().is_empty() => {
+            catalog.text("radio_vote_rejected").to_owned()
+        }
+        RadioError::VoteRejected(reason) => catalog
+            .text("radio_vote_rejected_reason")
+            .replace("{reason}", reason.trim()),
+    }
+}
+
+/// One line for each known property of the station.
+fn station_details(catalog: &TranslationCatalog, station: &Station) -> String {
+    let yes_no = |value: bool| catalog.text(if value { "yes" } else { "no" }).to_owned();
+    let mut lines = vec![station.name.clone()];
+    for (key, value) in [
+        ("radio_detail_country", station.country.clone()),
+        ("radio_detail_region", station.state.clone()),
+        ("radio_detail_language", station.language.clone()),
+        ("radio_detail_tags", station.tags.clone()),
+        ("radio_detail_codec", station.codec.clone()),
+        (
+            "radio_detail_bitrate",
+            if station.bitrate > 0 {
+                format!("{} kbps", station.bitrate)
+            } else {
+                String::new()
+            },
+        ),
+        ("radio_detail_votes", station.votes.to_string()),
+        ("radio_detail_listens", station.clickcount.to_string()),
+        ("radio_detail_working", yes_no(station.lastcheckok == 1)),
+        ("radio_detail_website", station.homepage.clone()),
+        (
+            "radio_detail_stream",
+            station
+                .stream_url()
+                .map_or_else(String::new, |url| url.to_string()),
+        ),
+    ] {
+        if !value.trim().is_empty() {
+            lines.push(format!("{}: {}", catalog.text(key), value.trim()));
+        }
+    }
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn station_details_skip_unknown_properties() {
+        let catalog = apricot_app::embedded_catalog("en");
+        let station = Station {
+            name: "Radio Test".into(),
+            country: "Slovenia".into(),
+            bitrate: 128,
+            votes: 3,
+            lastcheckok: 1,
+            url: "https://example.test/live".into(),
+            ..Station::default()
+        };
+        assert_eq!(
+            station_details(&catalog, &station),
+            "Radio Test\nCountry: Slovenia\nBitrate: 128 kbps\nVotes: 3\nListens: 0\n\
+             Working at the last check: Yes\nStream: https://example.test/live"
+        );
+    }
+
+    #[test]
+    fn catalog_errors_are_worded_for_people() {
+        let catalog = apricot_app::embedded_catalog("en");
+        assert_eq!(
+            radio_error(&catalog, &RadioError::Http(503)),
+            "The radio catalog answered with an error (HTTP 503)."
+        );
+        assert_eq!(
+            radio_error(&catalog, &RadioError::VoteRejected("too often".into())),
+            "The radio catalog did not accept the vote: too often"
+        );
+    }
+
+    #[derive(Default)]
+    struct Spoken(Vec<String>);
+
+    impl SourcesUi for Spoken {
+        fn browse(&mut self, _browser: &SourceBrowser) -> Option<SourceSelection> {
+            None
+        }
+        fn form(&mut self, _form: &FeatureForm) -> Option<FormValues> {
+            None
+        }
+        fn status(&mut self, message: &str, announce: bool) {
+            if announce {
+                self.0.push(message.to_owned());
+            }
+        }
+        fn error(&mut self, message: &str) {
+            self.0.push(message.to_owned());
+        }
+        fn play(&mut self, _item: MediaItem) {}
+        fn choose_file(&mut self, _title: &str) -> Option<PathBuf> {
+            None
+        }
+        fn choose_folder(&mut self, _title: &str) -> Option<PathBuf> {
+            None
+        }
+        fn copy(&mut self, _text: &str) -> bool {
+            false
+        }
+        fn cue(&mut self, _started: bool) {}
+        fn ask_yes_no(&mut self, _message: &str) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn only_new_song_titles_are_announced() {
+        let mut controller = SourcesController::default();
+        let mut ui = Spoken::default();
+        let url = Some("https://stream.example.test/aac-320");
+        for title in ["aac-320", "Artist - Song", "Artist - Song", "Artist - Next"] {
+            controller.stream_metadata(&mut ui, Some("station"), Some(title), url);
+        }
+        assert_eq!(ui.0, ["Artist - Song", "Artist - Next"]);
+        controller.radio.announce_metadata = false;
+        controller.stream_metadata(&mut ui, Some("station"), Some("Quiet - Song"), url);
+        assert_eq!(ui.0.len(), 2);
+        assert_eq!(controller.metadata_title, "Quiet - Song");
+    }
+
+    #[test]
+    fn station_actions_reuse_the_familiar_shortcuts() {
+        assert_eq!(shortcut_action("radio_favorite"), "add_favorite");
+        assert_eq!(shortcut_action("radio_copy_url"), "copy_link");
+        assert_eq!(shortcut_action("radio_vote"), "radio_vote");
+    }
 }

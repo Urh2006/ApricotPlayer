@@ -4357,12 +4357,14 @@ unsafe fn start_media_item_with_options(
         item: item.clone(),
         mode,
     });
-    if !matches!(
-        item.source,
-        apricot_core::MediaSource::Youtube
-            | apricot_core::MediaSource::Soundcloud
-            | apricot_core::MediaSource::Direct
-    ) {
+    if item.is_catalog_stream()
+        || !matches!(
+            item.source,
+            apricot_core::MediaSource::Youtube
+                | apricot_core::MediaSource::Soundcloud
+                | apricot_core::MediaSource::Direct
+        )
+    {
         let background = std::mem::take(&mut state.background_start);
         start_player_at(
             window,
@@ -12788,6 +12790,27 @@ unsafe fn set_status(state: &WindowState, message: &str, announce: bool) {
     if announce {
         state.announcer.announce(message, false);
     }
+}
+
+/// A warning with Yes and No, No being the default; focus returns to the
+/// control that had it, as after other message boxes.
+unsafe fn ask_yes_no(window: HWND, message: &str) -> bool {
+    let previous = GetFocus();
+    let message = wide(message);
+    let answer = MessageBoxW(
+        Some(window),
+        PCWSTR(message.as_ptr()),
+        crate::PRODUCT_CAPTION,
+        MB_YESNO
+            | windows::Win32::UI::WindowsAndMessaging::MB_ICONWARNING
+            | windows::Win32::UI::WindowsAndMessaging::MB_DEFBUTTON2,
+    );
+    if !previous.is_invalid()
+        && windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(previous)).as_bool()
+    {
+        let _ = SetFocus(Some(previous));
+    }
+    answer == windows::Win32::UI::WindowsAndMessaging::IDYES
 }
 
 unsafe fn show_error_message(window: HWND, message: &str) {

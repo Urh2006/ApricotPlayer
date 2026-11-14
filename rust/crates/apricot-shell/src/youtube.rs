@@ -916,10 +916,12 @@ impl Shell {
             item: item.clone(),
             mode,
         });
-        if !matches!(
-            item.source,
-            MediaSource::Youtube | MediaSource::Soundcloud | MediaSource::Direct
-        ) {
+        if item.is_catalog_stream()
+            || !matches!(
+                item.source,
+                MediaSource::Youtube | MediaSource::Soundcloud | MediaSource::Direct
+            )
+        {
             self.start_player_at(ui, item, session_shuffle, start_position_seconds);
             return;
         }

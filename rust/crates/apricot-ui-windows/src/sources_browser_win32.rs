@@ -125,11 +125,18 @@ unsafe fn show_inner(
         window,
         instance,
         w!("BUTTON"),
-        "Actions",
+        &model.actions_button,
         WS_TABSTOP,
         ACTIONS,
     )?;
-    let back = child(window, instance, w!("BUTTON"), "Back", WS_TABSTOP, BACK)?;
+    let back = child(
+        window,
+        instance,
+        w!("BUTTON"),
+        &model.back_button,
+        WS_TABSTOP,
+        BACK,
+    )?;
     let mut state = Box::new(State {
         model: model.clone(),
         prompt,

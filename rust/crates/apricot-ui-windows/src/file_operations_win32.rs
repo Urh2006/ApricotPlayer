@@ -1,18 +1,9 @@
 //! Native wrapper for the shared local file operations in the folder list.
-use super::{MainView, refresh_local_folder, set_status, show_error_message, state_mut, wide};
+use super::{MainView, refresh_local_folder, set_status, show_error_message, state_mut};
 use apricot_shell::file_manager::{self, FileManagerUi, Operation};
-use windows::{
-    Win32::{
-        Foundation::HWND,
-        UI::{
-            Input::KeyboardAndMouse::{GetFocus, SetFocus},
-            WindowsAndMessaging::{
-                IDYES, IsWindow, LB_GETCURSEL, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO,
-                MessageBoxW, SendMessageW,
-            },
-        },
-    },
-    core::PCWSTR,
+use windows::Win32::{
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{LB_GETCURSEL, SendMessageW},
 };
 
 /// The file operations' dialogs, owned by the main window.
@@ -30,22 +21,8 @@ impl FileManagerUi for FileUi {
     }
 
     fn ask_yes_no(&mut self, message: &str) -> bool {
-        // SAFETY: the owner is the live main window; focus returns to the
-        // control that had it, as after other message boxes.
-        unsafe {
-            let previous = GetFocus();
-            let message = wide(message);
-            let answer = MessageBoxW(
-                Some(self.owner),
-                PCWSTR(message.as_ptr()),
-                crate::PRODUCT_CAPTION,
-                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2,
-            );
-            if !previous.is_invalid() && IsWindow(Some(previous)).as_bool() {
-                let _ = SetFocus(Some(previous));
-            }
-            answer == IDYES
-        }
+        // SAFETY: the owner is the live main window.
+        unsafe { super::ask_yes_no(self.owner, message) }
     }
 }
 

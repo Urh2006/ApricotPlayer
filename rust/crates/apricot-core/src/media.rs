@@ -89,6 +89,15 @@ impl MediaItem {
         })
     }
 
+    /// A radio station or IPTV channel: its catalog already gave the stream
+    /// address, so mpv opens it without a yt-dlp lookup that would replace
+    /// the station's name and identity.
+    #[must_use]
+    pub fn is_catalog_stream(&self) -> bool {
+        self.metadata.contains_key("radio_station_id")
+            || self.metadata.contains_key("iptv_channel_id")
+    }
+
     pub fn is_local_media(&self) -> bool {
         self.source == MediaSource::Local
             || self

@@ -59,6 +59,9 @@ impl SourcesUi for Ui {
     fn cue(&mut self, started: bool) {
         apricot_platform::recording_cue::play(started);
     }
+    fn ask_yes_no(&mut self, message: &str) -> bool {
+        unsafe { super::ask_yes_no(self.window, message) }
+    }
 }
 unsafe fn environment(window: HWND) -> Option<SourcesEnvironment> {
     let state = state(window)?;
@@ -76,6 +79,7 @@ unsafe fn environment(window: HWND) -> Option<SourcesEnvironment> {
         ),
         proxy: settings.proxy.clone(),
         shortcuts: settings.keyboard_shortcuts.clone(),
+        language: settings.language.clone(),
     })
 }
 pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
@@ -137,8 +141,17 @@ pub(super) unsafe fn metadata(window: HWND) {
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
     let title = session.media_info().stream_title.clone();
+    let url = session
+        .current_item()
+        .and_then(|item| item.url.as_ref())
+        .map(ToString::to_string);
     let mut controller = std::mem::take(&mut state.source_tools);
-    controller.stream_metadata(&mut Ui { window }, station.as_deref(), title.as_deref());
+    controller.stream_metadata(
+        &mut Ui { window },
+        station.as_deref(),
+        title.as_deref(),
+        url.as_deref(),
+    );
     if let Some(state) = state_mut(window) {
         state.source_tools = controller;
     }

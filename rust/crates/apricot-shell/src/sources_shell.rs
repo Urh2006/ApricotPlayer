@@ -40,6 +40,11 @@ impl SourcesUi for Ui<'_> {
     fn cue(&mut self, started: bool) {
         apricot_platform::recording_cue::play(started);
     }
+    fn ask_yes_no(&mut self, message: &str) -> bool {
+        let catalog = self.shell.catalog();
+        self.ui
+            .ask_yes_no(message, catalog.text("yes"), catalog.text("no"))
+    }
 }
 
 impl Shell {
@@ -60,6 +65,7 @@ impl Shell {
             ),
             proxy: settings.proxy.clone(),
             shortcuts: settings.keyboard_shortcuts.clone(),
+            language: settings.language.clone(),
         }
     }
     pub(crate) fn sources_action(&mut self, ui: &mut dyn ShellUi, action: &str) -> bool {
@@ -102,11 +108,16 @@ impl Shell {
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
         let title = session.media_info().stream_title.clone();
+        let url = session
+            .current_item()
+            .and_then(|item| item.url.as_ref())
+            .map(ToString::to_string);
         let mut controller = std::mem::take(&mut self.sources);
         controller.stream_metadata(
             &mut Ui { shell: self, ui },
             station.as_deref(),
             title.as_deref(),
+            url.as_deref(),
         );
         self.sources = controller;
     }

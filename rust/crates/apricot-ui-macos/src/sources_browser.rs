@@ -192,8 +192,8 @@ pub(crate) fn show(mtm: MainThreadMarker, model: &SourceBrowser) -> Option<Sourc
         &target,
         sel!(open:),
     );
-    let actions = Button::new(mtm, "Actions", &target, sel!(actions:));
-    let back = Button::new(mtm, "Back", &target, sel!(back:));
+    let actions = Button::new(mtm, &model.actions_button, &target, sel!(actions:));
+    let back = Button::new(mtm, &model.back_button, &target, sel!(back:));
     back.setKeyEquivalent(&NSString::from_str("\u{1b}"));
     for (index, button) in [&open, &actions, &back].into_iter().enumerate() {
         button.setFrame(NSRect::new(
