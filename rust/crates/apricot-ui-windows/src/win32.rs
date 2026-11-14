@@ -13649,6 +13649,19 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "player_seek_end" => seek_player_to_end(window),
         "player_volume_up" => adjust_player_volume(window, configured_volume_step(window)),
         "player_volume_down" => adjust_player_volume(window, -configured_volume_step(window)),
+        // 2.1: the highest volume the player allows now, or 5 percent.
+        "player_volume_max" | "player_volume_min" => {
+            let current = state(window)
+                .and_then(|state| state.application.player_session().audio())
+                .map_or(100.0, |audio| audio.volume);
+            let delta = if action_id == "player_volume_max" {
+                1_000.0
+            } else {
+                5.0 - current
+            };
+            adjust_player_volume(window, delta);
+            activate_action(window, "player_volume_status");
+        }
         "player_speed_up" => adjust_player_speed(window, configured_speed_step(window)),
         "player_speed_down" => adjust_player_speed(window, -configured_speed_step(window)),
         "player_pitch_up" => adjust_player_pitch(window, configured_pitch_step(window)),

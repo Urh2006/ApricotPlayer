@@ -5,7 +5,6 @@ Urh se je 14. 11. 2026 odločil, da gredo v beto 2 samo izbira velikosti skoka (
 ## Predvajanje in navigacija
 
 - Bližnjici za največjo in najmanjšo glasnost.
-- Možnost, da se ob Previous in Next prebere ime dosežene datoteke.
 - Večkratni pritisk ene tipke: najprej ime, nato pot oziroma naslov toka, nato kopiranje poti.
 - Okno z vsemi odprtimi datotekami (skok na izbrano, podatki o seznamu: število, velikost, skupni, pretečeni in preostali čas).
 
@@ -38,3 +37,4 @@ Urh se je 14. 11. 2026 odločil, da gredo v beto 2 samo izbira velikosti skoka (
 - Korak ravnovesja in prostorskega zvoka: okno Audio processing (F5).
 - Brisanje izvirnikov po pretvorbi: "Replace the original files" v pretvorniku.
 - Iskanje kanalov IPTV: ukaz Search v seznamu IPTV.
+- Ime ob Previous in Next: Apricot ga že vedno pove ("Playing: ...").

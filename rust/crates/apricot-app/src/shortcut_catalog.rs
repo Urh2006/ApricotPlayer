@@ -293,6 +293,10 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("player_silence_toggle", "audio"),
     ("player_spatial_toggle", "audio"),
     ("open_global_shortcuts", "system"),
+    ("player_volume_max", "audio"),
+    ("player_volume_min", "audio"),
+    ("player_name_path", "playback"),
+    ("player_opened_files", "playback"),
 ];
 
 /// The category an action is listed under; unknown ids fall back to General.

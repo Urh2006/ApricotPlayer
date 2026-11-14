@@ -26,6 +26,10 @@ pub trait PlaybackFeatureUi {
     fn speak_subtitle(&mut self, text: &str, _interrupt: bool) {
         self.announce(text);
     }
+    /// Puts `text` on the clipboard; `false` when that is not possible.
+    fn copy_text(&mut self, _text: &str) -> bool {
+        false
+    }
 }
 
 fn number(values: &FormValues, key: &str) -> f64 {
@@ -1132,6 +1136,97 @@ pub fn dispatch_playback_feature(
                 ui.announce(&list_position(&catalog, current, length));
             }
         }
+        "player_name_path" => {
+            // Pressed again within 1.5 seconds: the path or address, then
+            // a copy of it; a pause starts again with the name.
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let Some(item) = app.player_session().current_item().cloned() else {
+                return Some(commands);
+            };
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_millis());
+            let extra = &mut app.playback_features_mut().extra;
+            let last = extra
+                .get("name_path_ms")
+                .and_then(|value| value.parse::<u128>().ok())
+                .unwrap_or(0);
+            let presses = extra
+                .get("name_path_presses")
+                .and_then(|value| value.parse::<u8>().ok())
+                .unwrap_or(0);
+            let step = if now.saturating_sub(last) <= 1_500 {
+                (presses + 1).min(2)
+            } else {
+                0
+            };
+            extra.insert("name_path_ms".into(), now.to_string());
+            extra.insert("name_path_presses".into(), step.to_string());
+            let location = item
+                .local_path
+                .clone()
+                .or_else(|| item.url.as_ref().map(ToString::to_string))
+                .unwrap_or_default();
+            match step {
+                0 => {
+                    let name = item
+                        .local_path
+                        .as_deref()
+                        .and_then(|path| std::path::Path::new(path).file_name())
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .filter(|_| item.title.trim().is_empty())
+                        .unwrap_or_else(|| item.title.clone());
+                    ui.announce(&name);
+                }
+                1 => ui.announce(if location.is_empty() {
+                    catalog.text("name_path_no_location")
+                } else {
+                    &location
+                }),
+                _ => {
+                    let copied = !location.is_empty() && ui.copy_text(&location);
+                    ui.announce(catalog.text(if copied {
+                        "name_path_copied"
+                    } else {
+                        "name_path_no_location"
+                    }));
+                }
+            }
+        }
+        "player_opened_files" => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            let Some((current, _)) = app.player_sequence_position() else {
+                ui.announce(catalog.text("list_position_unavailable"));
+                return Some(commands);
+            };
+            let titles: Vec<String> = app
+                .player_sequence_items()
+                .iter()
+                .enumerate()
+                .map(|(index, item)| format!("{}. {}", index + 1, item.title))
+                .collect();
+            let mut form = FeatureForm::localized(
+                &catalog,
+                catalog.text("shortcut_player_opened_files"),
+                vec![
+                    FormField::choice("item", catalog.text("opened_files_list"), titles, current),
+                    FormField::read_only(
+                        "info",
+                        catalog.text("opened_files_info"),
+                        list_statistics(app, &catalog),
+                    ),
+                ],
+            );
+            catalog
+                .text("opened_files_play")
+                .clone_into(&mut form.submit);
+            if let Some(values) = ui.form(&form) {
+                let index = choice(&values, "item");
+                if index != current {
+                    app.playback_features_mut().pending_item_index = Some(index);
+                }
+            }
+        }
         "player_list_info" => {
             let catalog = apricot_app::embedded_catalog(&app.settings().language);
             ui.announce(&list_statistics(app, &catalog));
@@ -2041,6 +2136,9 @@ impl PlaybackFeatureUi for ShellFeatureUi<'_> {
     }
     fn speak_subtitle(&mut self, text: &str, interrupt: bool) {
         self.ui.speak_subtitle(text, interrupt);
+    }
+    fn copy_text(&mut self, text: &str) -> bool {
+        self.ui.copy_text(text)
     }
     fn announce(&mut self, text: &str) {
         self.ui.set_status(text, true);

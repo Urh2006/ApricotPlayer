@@ -39,6 +39,10 @@ impl PlaybackFeatureUi for Ui<'_> {
         unsafe { self.announcer.announce(text, true) };
     }
 
+    fn copy_text(&mut self, text: &str) -> bool {
+        crate::clipboard_win32::copy_text(self.owner, text).is_ok()
+    }
+
     fn speak_subtitle(&mut self, text: &str, interrupt: bool) {
         unsafe { self.announcer.announce(text, interrupt) };
     }

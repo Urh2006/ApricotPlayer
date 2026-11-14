@@ -748,6 +748,21 @@ impl Shell {
             "player_seek_end" => self.seek_player_to_end(ui),
             "player_volume_up" => self.adjust_player_volume(ui, self.configured_volume_step()),
             "player_volume_down" => self.adjust_player_volume(ui, -self.configured_volume_step()),
+            // 2.1: the highest volume the player allows now, or 5 percent.
+            "player_volume_max" | "player_volume_min" => {
+                let current = self
+                    .application
+                    .player_session()
+                    .audio()
+                    .map_or(100.0, |audio| audio.volume);
+                let delta = if action_id == "player_volume_max" {
+                    1_000.0
+                } else {
+                    5.0 - current
+                };
+                self.adjust_player_volume(ui, delta);
+                self.activate_action(ui, "player_volume_status");
+            }
             "player_speed_up" => self.adjust_player_speed(ui, self.configured_speed_step()),
             "player_speed_down" => self.adjust_player_speed(ui, -self.configured_speed_step()),
             "player_pitch_up" => self.adjust_player_pitch(ui, self.configured_pitch_step()),
