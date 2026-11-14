@@ -31,7 +31,7 @@ Ta dokument vodi delo za 2.1 beta 1. Obseg je potrjen v 19 sklopih (EQ, obdelava
 | 15 | Pretvornik | narejeno |
 | 16 | YouTube dodatki | narejeno |
 | 17 | Medijske tipke in Discord | narejeno, Discord čaka na aplikacijo |
-| 18 | Spotify naročnine | čaka |
+| 18 | Spotify naročnine | narejeno |
 | 19 | Uvoz in izvoz, dokumentacija, izdaja | čaka |
 
 ## Enota 1
@@ -228,3 +228,14 @@ Ročni NVDA preizkus: Ctrl+Alt+Y, vpiši "mozart", Ctrl+Shift+Down: NVDA pove "L
 Preverjeno: testi preslikave medijskih dogodkov, zasebnosti Discorda in obrazca, obrazec Integrations v izoliranem namizju z imeni vseh stikal. Sistemskih kontrolnikov v izoliranem namizju ni mogoče preveriti, ker jih Windows tam ne prikaže; preveriti jih je treba ročno na navadnem namizju.
 
 Ročni NVDA preizkus: predvajaj datoteko, pritisni tipko za predvajanje ali premor na tipkovnici: NVDA pove "Paused" ali "Playing". Win+A ali prekrivni kontrolnik glasnosti pokaže naslov skladbe. Ctrl+Alt+Shift+4: NVDA prebere "Media controls and Discord" in prvo stikalo.
+
+## Enota 18
+
+- Naročnine na sezname Spotify (Ctrl+Alt+Shift+B ali meni Spotify) so zdaj v celoti lokalizirane: plošča, obrazci za možnosti, interval in naročanje s povezavo, sporočila o uspehu in vse napake.
+- Preverjanje teče samodejno vsakih 5 minut glede na shranjeni interval (privzeto ena ura) in samo za račun, ki je izbran v meniju Spotify. Ostali računi obdržijo svoje naročnine. Samodejno preverjanje ne pove ničesar, če ni sprememb; "Check now" na koncu pove "Spotify subscriptions checked."
+- Privzeto se oglasijo samo dodane skladbe, odstranjene skladbe in spremenjen vrstni red se vklopijo posebej za vsak seznam. Povzetek je eno sporočilo v obliki "ime: 3 songs added, 1 removed", seznam sprememb pa se odpre kot svoj seznam.
+- Na lastne sezname in sezname neznanega lastnika se ni mogoče naročiti.
+
+Preverjeno: testi besedil plošče, povzetka in poročil, testi ločenih računov in nespremenjenih poškodovanih podatkov. V živo nisem preverjal, ker potrebuje prijavljen račun Spotify.
+
+Ročni NVDA preizkus: prijavi se v Spotify, Ctrl+Alt+Shift+B: NVDA prebere "Spotify playlist subscriptions". Izberi "Subscribe using a link", prilepi povezavo na tuj seznam, Enter: NVDA pove "Subscribed to the playlist." Ponovno odpri ploščo in izberi "Check now": NVDA pove "Updating Spotify subscriptions." in nato "Spotify subscriptions checked."

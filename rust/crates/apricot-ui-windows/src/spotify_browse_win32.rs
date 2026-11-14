@@ -3329,7 +3329,10 @@ pub(super) unsafe fn subscribe_selected(window: HWND, subscribe: bool) {
             })
     });
     let Some(uri) = uri else {
-        show_error_message(window, "Select a Spotify playlist first");
+        if let Some(state) = state(window) {
+            let catalog = super::spotify::catalog(state);
+            show_error_message(window, catalog.text("spotify_sub_select_playlist"));
+        }
         return;
     };
     if let Some(service) = super::spotify::service(window)
@@ -3344,7 +3347,8 @@ pub(super) unsafe fn subscribe_selected(window: HWND, subscribe: bool) {
                 apricot_spotify::playlist_subscriptions::SubscriptionCommand::Unsubscribe(uri)
             },
         );
-        super::spotify::announce(window, "Updating Spotify subscriptions");
+        let catalog = super::spotify::catalog(state);
+        super::spotify::announce(window, catalog.text("spotify_sub_updating"));
     }
 }
 
@@ -3355,17 +3359,21 @@ pub(super) unsafe fn subscriptions(window: HWND) {
     let Some(service) = super::spotify::service(window) else {
         return;
     };
+    let Some(catalog) = state(window).map(super::spotify::catalog) else {
+        return;
+    };
     let document = match service.playlist_subscriptions() {
         Ok(doc) => doc,
         Err(error) => {
-            show_error_message(window, &error);
+            show_error_message(window, &forms::report_text(&catalog, &error));
             return;
         }
     };
-    let Some(values) = crate::feature_form_win32::show(window, &forms::panel(&document)) else {
+    let Some(values) = crate::feature_form_win32::show(window, &forms::panel(&catalog, &document))
+    else {
         return;
     };
-    let action = match forms::selection(&document, &values) {
+    let action = match forms::selection(&catalog, &document, &values) {
         Ok(action) => action,
         Err(error) => {
             show_error_message(window, &error);
@@ -3374,19 +3382,23 @@ pub(super) unsafe fn subscriptions(window: HWND) {
     };
     let command = match action {
         forms::SubscriptionPanelAction::Open(uri) => {
-            open(window, Source::Playlist(uri), "Spotify playlist".into());
+            open(
+                window,
+                Source::Playlist(uri),
+                catalog.text("spotify_sub_playlist").to_owned(),
+            );
             return;
         }
         forms::SubscriptionPanelAction::Changes(uri) => {
             if let Some(change) = document.history.iter().find(|change| change.uri == uri) {
                 subscription_changes(window, change.clone());
             } else {
-                super::spotify::announce(window, "No saved changes for this playlist");
+                super::spotify::announce(window, catalog.text("spotify_sub_no_changes"));
             }
             return;
         }
         forms::SubscriptionPanelAction::Options(uri) => {
-            let Some(form) = forms::options_form(&document, &uri) else {
+            let Some(form) = forms::options_form(&catalog, &document, &uri) else {
                 return;
             };
             let Some(values) = crate::feature_form_win32::show(window, &form) else {
@@ -3398,7 +3410,8 @@ pub(super) unsafe fn subscriptions(window: HWND) {
             }
         }
         forms::SubscriptionPanelAction::Subscribe => {
-            let Some(values) = crate::feature_form_win32::show(window, &forms::subscribe_form())
+            let Some(values) =
+                crate::feature_form_win32::show(window, &forms::subscribe_form(&catalog))
             else {
                 return;
             };
@@ -3407,25 +3420,18 @@ pub(super) unsafe fn subscriptions(window: HWND) {
                 .and_then(apricot_shell::FormValue::text)
                 .and_then(forms::parse_uri)
             else {
-                show_error_message(window, "Enter a valid Spotify playlist link or URI");
+                show_error_message(window, catalog.text("spotify_sub_link_invalid"));
                 return;
             };
             C::Subscribe(uri)
         }
         forms::SubscriptionPanelAction::Command(C::Interval(_)) => {
             let Some(values) =
-                crate::feature_form_win32::show(window, &forms::interval_form(&document))
+                crate::feature_form_win32::show(window, &forms::interval_form(&catalog, &document))
             else {
                 return;
             };
-            C::Interval(
-                (values
-                    .get("minutes")
-                    .and_then(apricot_shell::FormValue::number)
-                    .unwrap_or(60.0)
-                    * 60.0)
-                    .round() as u64,
-            )
+            C::Interval(forms::interval_seconds(&values))
         }
         forms::SubscriptionPanelAction::Command(command) => command,
     };
@@ -3433,7 +3439,7 @@ pub(super) unsafe fn subscriptions(window: HWND) {
         let stamp = state.spotify.epochs_begin();
         service.subscription_operation(stamp, command);
     }
-    super::spotify::announce(window, "Updating Spotify subscriptions");
+    super::spotify::announce(window, catalog.text("spotify_sub_updating"));
 }
 pub(super) unsafe fn subscription_report(
     window: HWND,
@@ -3465,33 +3471,54 @@ pub(super) unsafe fn subscription_report(
         let stamp = state.spotify.epochs_begin();
         service.subscription_operation(stamp, SubscriptionCommand::Acknowledge(ids));
     }
+    let Some(catalog) = state(window).map(super::spotify::catalog) else {
+        return;
+    };
     if !report.message.is_empty() {
-        super::spotify::announce(window, &report.message);
+        super::spotify::announce(
+            window,
+            &apricot_shell::spotify_subscriptions::report_text(&catalog, &report.message),
+        );
     }
     if !report.errors.is_empty() {
-        show_error_message(window, &report.errors.join("\n"));
+        let errors: Vec<_> = report
+            .errors
+            .iter()
+            .map(|error| apricot_shell::spotify_subscriptions::report_text(&catalog, error))
+            .collect();
+        show_error_message(window, &errors.join("\n"));
     }
 }
 pub(super) unsafe fn subscription_changes(
     window: HWND,
     change: apricot_spotify::playlist_subscriptions::PlaylistChanges,
 ) {
+    let title = state(window).map(|state| {
+        apricot_shell::spotify_subscriptions::changes_title(
+            &super::spotify::catalog(state),
+            &change,
+        )
+    });
     let items = if change.added.is_empty() {
         change.removed
     } else {
         change.added
     };
+    let Some(catalog) = state(window).map(super::spotify::catalog) else {
+        return;
+    };
     if items.is_empty() {
-        super::spotify::announce(window, "The playlist order changed");
+        super::spotify::announce(window, catalog.text("spotify_sub_order_changed"));
         return;
     }
+    let title = title.unwrap_or_default();
     open(
         window,
         Source::SubscriptionChanges {
             uri: change.uri,
             items,
         },
-        format!("{}: playlist changes", change.name),
+        title,
     );
 }
 

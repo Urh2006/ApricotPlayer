@@ -263,6 +263,11 @@ const DIAGNOSTIC_REPORT_TIMER_INTERVAL_MS: u32 = 100;
 const CONVERSION_TIMER_ID: usize = 14;
 /// `YouTube` search suggestions on their way.
 const SUGGESTIONS_TIMER_ID: usize = 31;
+/// Spotify playlist subscriptions are due on their own interval; this
+/// timer asks every five minutes whether one is due, also while Spotify is
+/// otherwise quiet.
+const SPOTIFY_SUBSCRIPTION_TIMER_ID: usize = 32;
+const SPOTIFY_SUBSCRIPTION_TIMER_MS: u32 = 300_000;
 /// A media key or the system media overlay: WPARAM is the event, LPARAM
 /// milliseconds for seeking.
 const WM_MEDIA_KEY: u32 = WM_APP + 30;
@@ -804,7 +809,7 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     refresh_rss_feeds_on_startup(window);
     configure_app_update_timer(window);
     schedule_startup_update_checks(window);
-    apply_integrations(window);
+    start_integrations(window);
 
     let mut message = MSG::default();
     loop {
@@ -1268,6 +1273,15 @@ unsafe extern "system" fn window_proc(
         }
         WM_MEDIA_KEY => {
             handle_media_key(window, wparam.0, lparam.0);
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == SPOTIFY_SUBSCRIPTION_TIMER_ID => {
+            if let Some(service) = spotify::service(window)
+                && let Some(state) = state_mut(window)
+            {
+                let stamp = state.spotify.epochs_begin();
+                service.poll_playlist_subscriptions(stamp);
+            }
             LRESULT(0)
         }
         WM_TIMER if wparam.0 == SUGGESTIONS_TIMER_ID => {
@@ -15803,6 +15817,18 @@ unsafe fn edit_converter_options(window: HWND) {
                 .replace("{error}", &error.to_string()),
         ),
     }
+}
+
+/// The 2.1 background work of startup: integrations and the Spotify
+/// subscription schedule.
+unsafe fn start_integrations(window: HWND) {
+    apply_integrations(window);
+    let _ = SetTimer(
+        Some(window),
+        SPOTIFY_SUBSCRIPTION_TIMER_ID,
+        SPOTIFY_SUBSCRIPTION_TIMER_MS,
+        None,
+    );
 }
 
 /// Starts or stops the system media controls and Discord as Integrations

@@ -744,7 +744,7 @@ impl Shell {
             SpotifyEvent::PlaylistSubscriptions { stamp, result } => {
                 if self.spotify.is_current_account(stamp) {
                     match result {
-                        Ok(report) => self.spotify_subscription_report(ui, report),
+                        Ok(report) => self.spotify_subscription_report(ui, &report),
                         Err(error) => ui.show_error(&error_text(&texts, &error)),
                     }
                 }

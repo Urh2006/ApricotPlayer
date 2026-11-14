@@ -1,5 +1,4 @@
 //! Account-scoped playlist subscriptions. Snapshots are committed only after a complete read.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
 use crate::{CatalogItem, accounts::AccountStore};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -101,6 +100,12 @@ pub struct SubscriptionReport {
     pub errors: Vec<String>,
     pub checked: usize,
 }
+
+/// The subscriptions of one account.
+///
+/// # Errors
+///
+/// Returns a message key when the saved data cannot be used.
 pub fn load(store: &AccountStore, key: &str) -> Result<SubscriptionDocument, String> {
     validate_key(key)?;
     let path = store.account_dir(key).join("playlist_subscriptions.json");
@@ -110,17 +115,23 @@ pub fn load(store: &AccountStore, key: &str) -> Result<SubscriptionDocument, Str
     let document: SubscriptionDocument =
         apricot_storage::read_json(&path).map_err(|e| e.to_string())?;
     if document.version != 1 {
-        return Err("Unsupported Spotify subscription data version".into());
+        return Err("spotify_sub_data_version".into());
     }
     if document
         .entries
         .iter()
         .any(|entry| entry.uri != entry.baseline.uri || !entry.uri.starts_with("spotify:playlist:"))
     {
-        return Err("Invalid Spotify subscription data".into());
+        return Err("spotify_sub_data_invalid".into());
     }
     Ok(document)
 }
+
+/// Saves the subscriptions of one account.
+///
+/// # Errors
+///
+/// Returns the error when the file cannot be written.
 pub fn save(
     store: &AccountStore,
     key: &str,
@@ -137,7 +148,7 @@ fn validate_key(key: &str) -> Result<(), String> {
     if key.len() == 16 && key.bytes().all(|b| b.is_ascii_hexdigit()) {
         Ok(())
     } else {
-        Err("Invalid Spotify account key".into())
+        Err("spotify_sub_account_invalid".into())
     }
 }
 fn keys(items: &[CatalogItem]) -> Vec<String> {
@@ -188,6 +199,11 @@ pub fn compare(
     }
 }
 impl SubscriptionDocument {
+    /// Adds a playlist; `false` when it was already subscribed.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message key for an unknown owner or the account's own list.
     pub fn subscribe(
         &mut self,
         snapshot: PlaylistSnapshot,
@@ -195,10 +211,10 @@ impl SubscriptionDocument {
         now: u64,
     ) -> Result<bool, String> {
         if snapshot.owner_uri.is_empty() {
-            return Err("The playlist owner could not be verified".into());
+            return Err("spotify_sub_owner_unknown".into());
         }
         if snapshot.owner_uri == own_uri {
-            return Err("Playlists authored by your account cannot be subscribed to".into());
+            return Err("spotify_sub_own_playlist".into());
         }
         if self.entries.iter().any(|entry| entry.uri == snapshot.uri) {
             return Ok(false);
@@ -213,6 +229,13 @@ impl SubscriptionDocument {
         });
         Ok(true)
     }
+
+    /// Compares a fresh snapshot with the saved one and keeps the changes
+    /// the user asked to hear about.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message key when the playlist owner is unknown.
     pub fn apply_snapshot(
         &mut self,
         snapshot: PlaylistSnapshot,
@@ -228,7 +251,7 @@ impl SubscriptionDocument {
             return Ok(None);
         };
         if snapshot.owner_uri.is_empty() {
-            return Err("The playlist owner could not be verified".into());
+            return Err("spotify_sub_owner_unknown".into());
         }
         if snapshot.owner_uri == own_uri {
             let uri = snapshot.uri;
@@ -298,7 +321,7 @@ impl SubscriptionDocument {
             .filter(|entry| {
                 force
                     || now.saturating_sub(entry.last_checked)
-                        >= self.interval_seconds.clamp(60, 604800)
+                        >= self.interval_seconds.clamp(60, 604_800)
             })
             .map(|entry| entry.uri.clone())
             .collect()
@@ -340,6 +363,12 @@ pub fn now() -> u64 {
         .map_or(0, |time| time.as_secs())
 }
 
+/// Runs one subscription command for the active account.
+///
+/// # Errors
+///
+/// Returns a message key or the error when the data cannot be loaded or
+/// saved.
 pub async fn execute(
     store: &AccountStore,
     account: &str,
@@ -358,27 +387,27 @@ pub async fn execute(
                 .await
                 .map_err(|e| e.to_string())?;
             if document.subscribe(snapshot, &own_uri, now)? {
-                "Subscribed to playlist"
+                "spotify_sub_subscribed"
             } else {
-                "Already subscribed to playlist"
+                "spotify_sub_already"
             }
         }
         SubscriptionCommand::Unsubscribe(uri) => {
             document.entries.retain(|entry| entry.uri != uri);
-            "Unsubscribed from playlist"
+            "spotify_sub_unsubscribed"
         }
         SubscriptionCommand::Options { uri, options } => {
             let entry = document
                 .entries
                 .iter_mut()
                 .find(|entry| entry.uri == uri)
-                .ok_or("The playlist subscription no longer exists")?;
+                .ok_or("spotify_sub_missing")?;
             entry.options = options;
-            "Playlist subscription options saved"
+            "spotify_sub_options_saved"
         }
         SubscriptionCommand::Interval(seconds) => {
-            document.interval_seconds = seconds.clamp(60, 604800);
-            "Spotify subscription interval saved"
+            document.interval_seconds = seconds.clamp(60, 604_800);
+            "spotify_sub_interval_saved"
         }
         SubscriptionCommand::Acknowledge(ids) => {
             document.outbox.retain(|change| !ids.contains(&change.id));
@@ -394,7 +423,13 @@ pub async fn execute(
                     Err(error) => errors.push(format!("{uri}: {error}")),
                 }
             }
-            "Spotify subscription check finished"
+            // A scheduled check works in the background and says nothing;
+            // Check now reports that it finished.
+            if force {
+                "spotify_sub_check_finished"
+            } else {
+                ""
+            }
         }
     }
     .to_owned();
@@ -409,6 +444,10 @@ pub async fn execute(
 }
 
 /// Reads each page and rejects mixed revisions, missing pages and inconsistent totals.
+///
+/// # Errors
+///
+/// Returns the API error when a page is missing or inconsistent.
 pub async fn snapshot(
     api: &crate::api::Api,
     session: &librespot_core::Session,

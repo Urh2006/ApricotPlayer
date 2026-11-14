@@ -622,7 +622,8 @@ impl Shell {
     }
 
     pub(crate) fn spotify_open_subscription_playlist(&mut self, ui: &mut dyn ShellUi, uri: String) {
-        self.browse_open(ui, Source::Playlist(uri), "Spotify playlist".to_owned());
+        let title = self.text("spotify_sub_playlist");
+        self.browse_open(ui, Source::Playlist(uri), title);
     }
     pub(crate) fn spotify_open_subscription_changes(
         &mut self,
@@ -635,16 +636,17 @@ impl Shell {
             change.added.clone()
         };
         if items.is_empty() {
-            ui.set_status("The playlist order changed", true);
+            ui.set_status(&self.text("spotify_sub_order_changed"), true);
             return;
         }
+        let title = crate::spotify_subscriptions::changes_title(&self.catalog(), &change);
         self.browse_open(
             ui,
             Source::SubscriptionChanges {
                 uri: change.uri,
                 items,
             },
-            format!("{}: playlist changes", change.name),
+            title,
         );
     }
 

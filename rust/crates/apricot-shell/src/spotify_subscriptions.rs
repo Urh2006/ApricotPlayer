@@ -1,8 +1,8 @@
-//! Shared Spotify subscription forms and notification projection for both native UIs.
-#![allow(clippy::pedantic, clippy::style)] // 2.1 draft: fully linted when its feature unit is finished.
+//! Shared Spotify subscription forms and notification projection for both
+//! native UIs.
 use crate::{FeatureForm, FormField, FormValues};
 use apricot_app::Application;
-use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
+use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, TranslationCatalog};
 use apricot_spotify::playlist_subscriptions::{
     NotificationOptions, PlaylistChanges, SubscriptionCommand, SubscriptionDocument,
     SubscriptionReport,
@@ -16,15 +16,39 @@ pub enum SubscriptionPanelAction {
     Options(String),
     Subscribe,
 }
-pub fn panel(document: &SubscriptionDocument) -> FeatureForm {
-    FeatureForm::new(
-        "Spotify subscriptions",
+
+const PANEL_ACTIONS: [&str; 7] = [
+    "spotify_sub_open",
+    "spotify_sub_changes",
+    "spotify_sub_options",
+    "spotify_sub_unsubscribe",
+    "spotify_sub_check_now",
+    "spotify_sub_interval",
+    "spotify_sub_subscribe_link",
+];
+
+/// A subscription message or error from the Spotify service in the
+/// interface language; the service words its fixed texts as keys.
+#[must_use]
+pub fn report_text(catalog: &TranslationCatalog, text: &str) -> String {
+    if text.starts_with("spotify_sub_") {
+        catalog.text(text).to_owned()
+    } else {
+        text.to_owned()
+    }
+}
+
+#[must_use]
+pub fn panel(catalog: &TranslationCatalog, document: &SubscriptionDocument) -> FeatureForm {
+    let mut form = FeatureForm::localized(
+        catalog,
+        catalog.text("spotify_sub_title"),
         vec![
             FormField::choice(
                 "playlist",
-                "Playlist",
+                catalog.text("spotify_sub_playlist"),
                 if document.entries.is_empty() {
-                    vec!["No subscribed playlists".into()]
+                    vec![catalog.text("spotify_sub_none").to_owned()]
                 } else {
                     document
                         .entries
@@ -36,22 +60,28 @@ pub fn panel(document: &SubscriptionDocument) -> FeatureForm {
             ),
             FormField::choice(
                 "action",
-                "Action",
-                vec![
-                    "Open playlist".into(),
-                    "Show changes".into(),
-                    "Notification options".into(),
-                    "Unsubscribe".into(),
-                    "Check now".into(),
-                    "Check interval".into(),
-                    "Subscribe using a link".into(),
-                ],
+                catalog.text("playlist_editor_action"),
+                PANEL_ACTIONS
+                    .iter()
+                    .map(|key| catalog.text(key).to_owned())
+                    .collect(),
                 0,
             ),
         ],
-    )
+    );
+    catalog
+        .text("playlist_editor_do")
+        .clone_into(&mut form.submit);
+    form
 }
+
+/// What the panel asked for.
+///
+/// # Errors
+///
+/// Returns a translated message when no playlist is subscribed yet.
 pub fn selection(
+    catalog: &TranslationCatalog,
     document: &SubscriptionDocument,
     values: &FormValues,
 ) -> Result<SubscriptionPanelAction, String> {
@@ -64,7 +94,7 @@ pub fn selection(
             .entries
             .get(selected)
             .map(|entry| entry.uri.clone())
-            .ok_or_else(|| "No subscribed playlist selected".to_owned())
+            .ok_or_else(|| catalog.text("spotify_sub_none_selected").to_owned())
     };
     Ok(
         match values
@@ -84,55 +114,109 @@ pub fn selection(
         },
     )
 }
-pub fn options_form(document: &SubscriptionDocument, uri: &str) -> Option<FeatureForm> {
+
+#[must_use]
+pub fn options_form(
+    catalog: &TranslationCatalog,
+    document: &SubscriptionDocument,
+    uri: &str,
+) -> Option<FeatureForm> {
     let entry = document.entries.iter().find(|entry| entry.uri == uri)?;
-    Some(FeatureForm::new(
-        format!("Notifications: {}", entry.name),
+    Some(FeatureForm::localized(
+        catalog,
+        catalog
+            .text("spotify_sub_options_title")
+            .replace("{name}", &entry.name),
         vec![
-            FormField::checkbox("added", "Added tracks", entry.options.added),
-            FormField::checkbox("removed", "Removed tracks", entry.options.removed),
-            FormField::checkbox("reordered", "Track order changes", entry.options.reordered),
+            FormField::checkbox(
+                "added",
+                catalog.text("spotify_sub_notify_added"),
+                entry.options.added,
+            ),
+            FormField::checkbox(
+                "removed",
+                catalog.text("spotify_sub_notify_removed"),
+                entry.options.removed,
+            ),
+            FormField::checkbox(
+                "reordered",
+                catalog.text("spotify_sub_notify_reordered"),
+                entry.options.reordered,
+            ),
         ],
     ))
 }
+
+#[must_use]
 pub fn options(values: &FormValues) -> NotificationOptions {
+    let checked = |id: &str, default: bool| {
+        values
+            .get(id)
+            .and_then(crate::FormValue::checked)
+            .unwrap_or(default)
+    };
     NotificationOptions {
-        added: values
-            .get("added")
-            .and_then(crate::FormValue::checked)
-            .unwrap_or(true),
-        removed: values
-            .get("removed")
-            .and_then(crate::FormValue::checked)
-            .unwrap_or(false),
-        reordered: values
-            .get("reordered")
-            .and_then(crate::FormValue::checked)
-            .unwrap_or(false),
+        added: checked("added", true),
+        removed: checked("removed", false),
+        reordered: checked("reordered", false),
     }
 }
-pub fn interval_form(document: &SubscriptionDocument) -> FeatureForm {
-    FeatureForm::new(
-        "Spotify subscription checks",
+
+#[must_use]
+pub fn interval_form(catalog: &TranslationCatalog, document: &SubscriptionDocument) -> FeatureForm {
+    #[allow(clippy::cast_precision_loss)] // Seconds of at most a week.
+    let minutes = document.interval_seconds as f64 / 60.0;
+    FeatureForm::localized(
+        catalog,
+        catalog.text("spotify_sub_interval"),
         vec![FormField::number(
             "minutes",
-            "Check every (minutes)",
-            document.interval_seconds as f64 / 60.0,
+            catalog.text("spotify_sub_interval_minutes"),
+            minutes,
             1.0,
             10080.0,
         )],
     )
 }
-pub fn subscribe_form() -> FeatureForm {
-    FeatureForm::new(
-        "Subscribe to Spotify playlist",
-        vec![FormField::text("uri", "Spotify playlist link or URI", "")],
+
+/// The interval chosen in [`interval_form`], in seconds.
+#[must_use]
+pub fn interval_seconds(values: &FormValues) -> u64 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // 1 to 10080 minutes.
+    let seconds = (values
+        .get("minutes")
+        .and_then(crate::FormValue::number)
+        .unwrap_or(60.0)
+        .clamp(1.0, 10080.0)
+        * 60.0)
+        .round() as u64;
+    seconds
+}
+
+#[must_use]
+pub fn subscribe_form(catalog: &TranslationCatalog) -> FeatureForm {
+    FeatureForm::localized(
+        catalog,
+        catalog.text("spotify_sub_subscribe_title"),
+        vec![FormField::text("uri", catalog.text("spotify_sub_link"), "")],
     )
 }
+
+#[must_use]
 pub fn parse_uri(value: &str) -> Option<String> {
     let reference = apricot_core::SpotifyRef::parse(value.trim())?;
     (reference.kind == apricot_core::SpotifyEntityKind::Playlist).then(|| reference.to_uri())
 }
+
+/// The title of the list of a playlist's changes.
+#[must_use]
+pub fn changes_title(catalog: &TranslationCatalog, change: &PlaylistChanges) -> String {
+    catalog
+        .text("spotify_sub_changes_title")
+        .replace("{name}", &change.name)
+}
+
+#[must_use]
 pub fn notification_item(change: &PlaylistChanges, account: &str) -> MediaItem {
     MediaItem {
         id: MediaId(change.uri.clone()),
@@ -157,14 +241,51 @@ pub fn notification_item(change: &PlaylistChanges, account: &str) -> MediaItem {
         ]),
     }
 }
+
+#[must_use]
 pub fn item_changes(item: &MediaItem) -> Option<PlaylistChanges> {
     serde_json::from_value(item.metadata.get("spotify_subscription_change")?.clone()).ok()
 }
-/// Returns IDs safe to acknowledge only after durable notification insertion.
+
+/// One summary line for a playlist's changes: "Mix: 3 tracks added, 1
+/// removed".
+#[must_use]
+pub fn summary(catalog: &TranslationCatalog, change: &PlaylistChanges) -> String {
+    let mut parts = Vec::new();
+    if !change.added.is_empty() {
+        parts.push(
+            catalog
+                .text("spotify_sub_added_count")
+                .replace("{count}", &change.added.len().to_string()),
+        );
+    }
+    if !change.removed.is_empty() {
+        parts.push(
+            catalog
+                .text("spotify_sub_removed_count")
+                .replace("{count}", &change.removed.len().to_string()),
+        );
+    }
+    if change.reordered {
+        parts.push(catalog.text("spotify_sub_reordered").to_owned());
+    }
+    catalog
+        .text("spotify_sub_summary")
+        .replace("{name}", &change.name)
+        .replace("{changes}", &parts.join(", "))
+}
+
+/// Adds one notification for each changed playlist. Returns the IDs safe to
+/// acknowledge, which is only after the notification is stored.
+///
+/// # Errors
+///
+/// Returns the error when the notifications cannot be saved.
 pub fn publish(
     application: &mut Application,
     report: &SubscriptionReport,
 ) -> Result<Vec<String>, String> {
+    let catalog = apricot_app::embedded_catalog(&application.settings().language);
     let mut acknowledged = Vec::new();
     for change in &report.document.outbox {
         let duplicate = application.notifications().iter().any(|notification| {
@@ -175,26 +296,17 @@ pub fn publish(
                 .is_some_and(|existing| existing.id == change.id)
         });
         if !duplicate {
-            let mut parts = Vec::new();
-            if !change.added.is_empty() {
-                parts.push(format!("{} added tracks", change.added.len()));
-            }
-            if !change.removed.is_empty() {
-                parts.push(format!("{} removed tracks", change.removed.len()));
-            }
-            if change.reordered {
-                parts.push("track order changed".to_owned());
-            }
-            let message = format!("{}: {}", change.name, parts.join(", "));
+            #[allow(clippy::cast_precision_loss)] // Unix seconds.
+            let timestamp = change.timestamp as f64;
             application
                 .add_notification(apricot_storage::AppNotification::new(
                     "spotify_playlist",
                     change.name.clone(),
-                    message,
+                    summary(&catalog, change),
                     Some(notification_item(change, &report.account)),
-                    change.timestamp as f64,
+                    timestamp,
                 ))
-                .map_err(|e| e.to_string())?;
+                .map_err(|error| error.to_string())?;
         }
         acknowledged.push(change.id.clone());
     }
@@ -206,17 +318,18 @@ impl crate::Shell {
         let Some(service) = self.spotify_service() else {
             return;
         };
+        let catalog = self.catalog();
         let document = match service.playlist_subscriptions() {
-            Ok(doc) => doc,
+            Ok(document) => document,
             Err(error) => {
-                ui.show_error(&error);
+                ui.show_error(&report_text(&catalog, &error));
                 return;
             }
         };
-        let Some(values) = ui.feature_form(&panel(&document)) else {
+        let Some(values) = ui.feature_form(&panel(&catalog, &document)) else {
             return;
         };
-        let action = match selection(&document, &values) {
+        let action = match selection(&catalog, &document, &values) {
             Ok(action) => action,
             Err(error) => {
                 ui.show_error(&error);
@@ -232,12 +345,12 @@ impl crate::Shell {
                 if let Some(change) = document.history.iter().find(|change| change.uri == uri) {
                     self.spotify_open_subscription_changes(ui, change.clone());
                 } else {
-                    ui.set_status("No saved changes for this playlist", true);
+                    ui.set_status(catalog.text("spotify_sub_no_changes"), true);
                 }
                 return;
             }
             SubscriptionPanelAction::Options(uri) => {
-                let Some(form) = options_form(&document, &uri) else {
+                let Some(form) = options_form(&catalog, &document, &uri) else {
                     return;
                 };
                 let Some(values) = ui.feature_form(&form) else {
@@ -249,7 +362,7 @@ impl crate::Shell {
                 }
             }
             SubscriptionPanelAction::Subscribe => {
-                let Some(values) = ui.feature_form(&subscribe_form()) else {
+                let Some(values) = ui.feature_form(&subscribe_form(&catalog)) else {
                     return;
                 };
                 let Some(uri) = values
@@ -257,37 +370,32 @@ impl crate::Shell {
                     .and_then(crate::FormValue::text)
                     .and_then(parse_uri)
                 else {
-                    ui.show_error("Enter a valid Spotify playlist link or URI");
+                    ui.show_error(catalog.text("spotify_sub_link_invalid"));
                     return;
                 };
                 SubscriptionCommand::Subscribe(uri)
             }
             SubscriptionPanelAction::Command(SubscriptionCommand::Interval(_)) => {
-                let Some(values) = ui.feature_form(&interval_form(&document)) else {
+                let Some(values) = ui.feature_form(&interval_form(&catalog, &document)) else {
                     return;
                 };
-                SubscriptionCommand::Interval(
-                    (values
-                        .get("minutes")
-                        .and_then(crate::FormValue::number)
-                        .unwrap_or(60.0)
-                        * 60.0)
-                        .round() as u64,
-                )
+                SubscriptionCommand::Interval(interval_seconds(&values))
             }
             SubscriptionPanelAction::Command(command) => command,
         };
         let stamp = self.spotify.epochs.begin();
         service.subscription_operation(stamp, command);
-        ui.set_status("Updating Spotify subscriptions", true);
+        ui.set_status(catalog.text("spotify_sub_updating"), true);
         ui.set_background_polling(true);
     }
+
     pub(crate) fn spotify_subscription_report(
         &mut self,
         ui: &mut dyn crate::ShellUi,
-        report: SubscriptionReport,
+        report: &SubscriptionReport,
     ) {
-        match publish(&mut self.application, &report) {
+        let catalog = self.catalog();
+        match publish(&mut self.application, report) {
             Ok(ids) if !ids.is_empty() => {
                 if let Some(service) = self.spotify_service() {
                     let stamp = self.spotify.epochs.begin();
@@ -298,10 +406,37 @@ impl crate::Shell {
             _ => {}
         }
         if !report.message.is_empty() {
-            ui.set_status(&report.message, true);
+            ui.set_status(&report_text(&catalog, &report.message), true);
         }
         if !report.errors.is_empty() {
-            ui.show_error(&report.errors.join("\n"));
+            let errors: Vec<_> = report
+                .errors
+                .iter()
+                .map(|error| report_text(&catalog, error))
+                .collect();
+            ui.show_error(&errors.join("\n"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use apricot_spotify::playlist_subscriptions::PlaylistChanges;
+
+    #[test]
+    fn the_summary_names_each_kind_of_change() {
+        let catalog = apricot_app::embedded_catalog("en");
+        let change = PlaylistChanges {
+            name: "Mix".into(),
+            reordered: true,
+            ..PlaylistChanges::default()
+        };
+        assert_eq!(summary(&catalog, &change), "Mix: track order changed");
+        assert_eq!(
+            report_text(&catalog, "spotify_sub_subscribed"),
+            "Subscribed to the playlist."
+        );
+        assert_eq!(report_text(&catalog, "raw error"), "raw error");
     }
 }
