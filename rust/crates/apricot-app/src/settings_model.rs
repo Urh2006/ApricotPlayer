@@ -1760,12 +1760,39 @@ fn seek_amount_choice(
 #[must_use]
 pub fn setting_help(catalog: &TranslationCatalog, setting: SettingId) -> String {
     let key = format!("setting_help_{}", setting.key());
+    // A Mac wording where the Windows one names the system tray.
+    let mac_key = format!("{key}_mac");
+    let key = if cfg!(target_os = "macos") && catalog.text(&mac_key) != mac_key {
+        mac_key
+    } else {
+        key
+    };
     let text = catalog.text(&key);
     if text == key {
         catalog.text("setting_help_missing").to_owned()
     } else {
-        text.to_owned()
+        mac_shortcuts(text)
     }
+}
+
+/// The shortcuts a help text names ("Ctrl+Alt+Shift+V"), as the Mac
+/// keyboard has them ("Command+Option+Shift+V"); other words stay.
+fn mac_shortcuts(text: &str) -> String {
+    if !cfg!(target_os = "macos") {
+        return text.to_owned();
+    }
+    text.split(' ')
+        .map(|word| {
+            let chord = word.trim_end_matches(|character: char| !character.is_alphanumeric());
+            if chord.contains('+') && apricot_core::shortcut::ShortcutChord::parse(chord).is_some()
+            {
+                word.replacen(chord, &apricot_core::shortcut::display_shortcut(chord), 1)
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn choice_raw(
@@ -1871,6 +1898,22 @@ mod tests {
     use crate::english_catalog;
 
     use super::{SettingsControl, SettingsScreenModel};
+
+    #[test]
+    fn help_texts_name_the_keys_of_this_computer() {
+        let catalog = english_catalog();
+        let help = super::setting_help(&catalog, SettingId::AnnouncementVerbosity);
+        if cfg!(target_os = "macos") {
+            assert!(help.contains("Command+Option+Shift+V"), "{help}");
+            let tray = super::setting_help(&catalog, SettingId::CloseToTray);
+            assert!(
+                tray.contains("menu bar") && !tray.contains("Alt+F4"),
+                "{tray}"
+            );
+        } else {
+            assert!(help.contains("Ctrl+Alt+Shift+V"), "{help}");
+        }
+    }
 
     #[test]
     fn every_setting_control_has_its_own_f1_help() {

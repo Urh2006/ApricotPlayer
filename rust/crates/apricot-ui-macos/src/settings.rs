@@ -52,6 +52,9 @@ const LIST_ROW: f64 = 268.0;
 /// Python waits 140 ms after the last arrow key in the section list.
 const SECTION_RENDER_DELAY: f64 = 0.14;
 
+/// F1 (with fn on most Mac keyboards).
+const F1_KEY_CODE: u16 = 122;
+
 define_class!(
     // SAFETY: NSView may be subclassed; no Drop impl.
     #[unsafe(super(NSView, NSResponder, NSObject))]
@@ -1925,6 +1928,28 @@ impl SettingsWindow {
 
     /// Windows `handle_shortcut_message`: a global shortcut closes the
     /// window and runs in the main window; the Action Finder opens over it.
+    /// The setting of the control with the focus; a text field's editor
+    /// stands for its field.
+    fn focused_setting(&self, window: &NSWindow) -> Option<apricot_core::SettingId> {
+        let responder = window.firstResponder()?;
+        let editor_field = responder
+            .downcast_ref::<objc2_app_kit::NSTextView>()
+            .filter(|text| text.isFieldEditor())
+            .and_then(objc2_app_kit::NSTextView::delegate)
+            .map(|delegate| Retained::as_ptr(&delegate).cast::<u8>());
+        let focused = Retained::as_ptr(&responder).cast::<u8>();
+        self.ivars()
+            .controls
+            .borrow()
+            .iter()
+            .find(|bound| {
+                let view = Retained::as_ptr(&bound.view).cast::<u8>();
+                std::ptr::eq(view, focused)
+                    || editor_field.is_some_and(|field| std::ptr::eq(view, field))
+            })
+            .and_then(|bound| bound.binding.setting())
+    }
+
     fn handle_shortcut(&self, event: &NSEvent) -> bool {
         self.ivars().user_moved.set(true);
         let Some(window) = self.window() else {
@@ -1941,6 +1966,21 @@ impl SettingsWindow {
         });
         if capture_focused {
             return false;
+        }
+        // 2.1: F1 says what the focused setting does; focus stays.
+        let modifiers = controls::modifiers(event);
+        if event.keyCode() == F1_KEY_CODE
+            && !(modifiers.command || modifiers.option || modifiers.control || modifiers.shift)
+        {
+            let Some(setting) = self.focused_setting(&window) else {
+                return false;
+            };
+            if let Some(help) = self.with_shell(|shell, _| {
+                apricot_app::settings_model::setting_help(&shell.catalog(), setting)
+            }) {
+                self.announce(&help, true);
+            }
+            return true;
         }
         let Some(characters) = event.charactersIgnoringModifiers() else {
             return false;
