@@ -672,13 +672,17 @@ struct WindowState {
     download_progress_window: Option<DownloadProgressWindow>,
     download_progress_task_ids: HashSet<u64>,
     download_progress_task_id: Option<u64>,
-    clip_exports: Vec<Receiver<std::result::Result<PathBuf, String>>>,
+    /// The generation whose CUE track end was reached (review 2.1).
+    segment_ended: Option<u64>,
+    /// Running clip exports and the target each one reserved.
+    clip_exports: Vec<(Receiver<std::result::Result<PathBuf, String>>, PathBuf)>,
     pending_bpm: Vec<PendingBpmAnalysis>,
     pending_edit_saves: Vec<PendingEditSave>,
     pending_conversions: Vec<Receiver<ConversionMessage>>,
     /// The Cancel flags of the folder conversions that run.
     conversion_cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    pending_suggestions: Option<apricot_shell::youtube_extras::PendingSuggestions>,
+    /// The suggestions asked for and the query they belong to.
+    pending_suggestions: Option<(apricot_shell::youtube_extras::PendingSuggestions, String)>,
     media_controls: Option<apricot_platform::integrations::SystemMediaControls>,
     /// The commands of the registered global shortcuts; hotkey id N is
     /// entry N - 1.
@@ -740,6 +744,7 @@ unsafe fn register_secondary_window_classes() -> Result<()> {
     crate::download_progress_win32::register()
 }
 
+#[allow(clippy::too_many_lines)] // Startup in the order Python runs it.
 unsafe fn run_win32(application: Application, version: &str, start_hidden: bool) -> Result<()> {
     InitCommonControls();
     let module = GetModuleHandleW(None)?;
@@ -815,6 +820,9 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
     configure_app_update_timer(window);
     schedule_startup_update_checks(window);
     start_integrations(window);
+    if !start_hidden {
+        show_recording_notice(window);
+    }
 
     let mut message = MSG::default();
     loop {
@@ -1368,6 +1376,13 @@ unsafe extern "system" fn window_proc(
                 // Python `on_close` saves the position of the playing item.
                 if state.application.player_session().is_open() {
                     persist_current_playback_position(&mut state);
+                }
+                // A recording in progress is finished and saved, not cut off;
+                // a failure or a kept "(incomplete)" file is told at the next
+                // start (review 2.1).
+                let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+                if let Some(notice) = state.source_tools.finish_recording(&catalog) {
+                    apricot_shell::save_recording_notice(&mut state.application, &notice);
                 }
                 for cancellation in state.download_cancellations.values() {
                     cancellation.store(true, AtomicOrdering::Release);
@@ -2217,6 +2232,7 @@ unsafe fn create_controls(
         download_progress_window: None,
         download_progress_task_ids: HashSet::new(),
         download_progress_task_id: None,
+        segment_ended: None,
         clip_exports: Vec::new(),
         pending_bpm: Vec::new(),
         pending_edit_saves: Vec::new(),
@@ -4395,8 +4411,11 @@ unsafe fn start_media_item_with_options(
         return;
     };
     cancel_youtube_work(window, state);
-    let start_position_seconds =
-        start_position_seconds.or_else(|| state.application.playback_resume_position(&item));
+    // A CUE track starts at its own start time; the file's resume position
+    // belongs to the whole file (review 2.1).
+    let start_position_seconds = start_position_seconds
+        .or_else(|| segment_time(&item, "apricot_segment_start"))
+        .or_else(|| state.application.playback_resume_position(&item));
     if !preserve_sequence {
         state.application.prepare_standalone_playback();
     }
@@ -8740,18 +8759,24 @@ pub(crate) unsafe fn export_clip_range(
     } else {
         clip_video_extension(&item)
     };
+    // Milliseconds keep excerpts that differ only by them apart, and a
+    // name an export still writes is not given twice (review 2.1).
     let stem = format!(
         "{} - {}-{}",
         safe_path_component(&item.title),
-        format_duration(start).replace(':', "-"),
-        format_duration(end).replace(':', "-")
+        apricot_shell::clip_time_label(start),
+        apricot_shell::clip_time_label(end)
     );
-    let mut output = folder.join(format!("{stem}.{extension}"));
-    let mut counter = 2;
-    while output.exists() {
-        output = folder.join(format!("{stem} ({counter}).{extension}"));
-        counter += 1;
-    }
+    let reserved = state(window)
+        .map(|state| {
+            state
+                .clip_exports
+                .iter()
+                .map(|(_, path)| apricot_shell::clip_reservation_key(path))
+                .collect::<std::collections::HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let mut output = apricot_shell::free_clip_path(&folder, &stem, &extension, &reserved);
     if settings.ask_download_location_each_time {
         let catalog = apricot_app::embedded_catalog(&settings.language);
         let default_name = output.file_name().unwrap_or_default().to_string_lossy();
@@ -8778,7 +8803,7 @@ pub(crate) unsafe fn export_clip_range(
         external_audio_input: item.external_audio_url.as_ref().map(ToString::to_string),
         start_seconds: start,
         end_seconds: end,
-        output_path: output,
+        output_path: output.clone(),
         mode: if choice == DownloadChoice::Audio {
             apricot_platform::ClipExportMode::Audio
         } else {
@@ -8796,7 +8821,7 @@ pub(crate) unsafe fn export_clip_range(
         let _ = sender.send(result);
     });
     if let Some(state) = state_mut(window) {
-        state.clip_exports.push(receiver);
+        state.clip_exports.push((receiver, output));
         set_status(
             state,
             &catalog_text(&state.application, "clip_export_started"),
@@ -8818,7 +8843,7 @@ unsafe fn poll_clip_exports(window: HWND) {
     let mut completed = Vec::new();
     state
         .clip_exports
-        .retain(|receiver| match receiver.try_recv() {
+        .retain(|(receiver, _)| match receiver.try_recv() {
             Ok(result) => {
                 completed.push(result);
                 false
@@ -10744,7 +10769,13 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 update_integrations(state);
             }
             PlaybackEvent::MediaInfo(_) => sources_ui::metadata(window),
-            PlaybackEvent::Position { .. } | PlaybackEvent::AudioDevices(_) => {}
+            // A CUE track ends at its own end time, inside the file.
+            PlaybackEvent::Position { elapsed, .. } => {
+                if cue_track_position(window, update.generation, elapsed) {
+                    return;
+                }
+            }
+            PlaybackEvent::AudioDevices(_) => {}
             PlaybackEvent::PreviewFinished => {
                 if state
                     .clip_preview
@@ -10762,6 +10793,15 @@ unsafe fn poll_playback_runtime(window: HWND) {
             }
             PlaybackEvent::Ended => {
                 if playback_features::ended(window) {
+                    continue;
+                }
+                // "Stop after this chapter" at the end of the last one:
+                // nothing plays on (review 2.1).
+                if state.application.playback_features().chapter_stop
+                    && !apricot_app::chapters::session_chapters(state.application.player_session())
+                        .is_empty()
+                {
+                    let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
                     continue;
                 }
                 if state.clip_preview.take().is_some() {
@@ -10815,6 +10855,106 @@ unsafe fn poll_playback_runtime(window: HWND) {
             }
         }
     }
+}
+
+/// What happened to a recording at the last quit, once the window shows.
+unsafe fn show_recording_notice(window: HWND) {
+    if let Some(notice) = state_mut(window)
+        .and_then(|state| apricot_shell::take_recording_notice(&mut state.application))
+    {
+        show_error_message(window, &notice);
+    }
+}
+
+/// The start or end time in seconds of a CUE track (`apricot_segment_start`,
+/// `apricot_segment_end`), when the item is one.
+fn segment_time(item: &apricot_core::MediaItem, key: &str) -> Option<f64> {
+    item.metadata
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+}
+
+/// The end of a CUE track inside its album file (review 2.1): Repeat starts
+/// the track again, a sleep timer or Autoplay next act as at the end of a
+/// file, and otherwise, or when nothing follows, it pauses so the album never
+/// runs into the next track. Seeking back before the end arms it again.
+/// `true` when the playback poll must return because the item changed.
+unsafe fn cue_track_position(window: HWND, generation: u64, elapsed: f64) -> bool {
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    let Some(item) = state.application.player_session().current_item().cloned() else {
+        return false;
+    };
+    let Some(start) = segment_time(&item, "apricot_segment_start") else {
+        return false;
+    };
+    let repeat = state
+        .application
+        .player_session()
+        .enabled_toggles()
+        .contains(&SessionToggle::Repeat);
+    // The last track ends with the file; only Repeat needs to catch that end
+    // before the file's own loop goes back to the first track.
+    let Some(end) = segment_time(&item, "apricot_segment_end").or_else(|| {
+        repeat
+            .then(|| state.application.player_session().duration_seconds())
+            .flatten()
+            .map(|duration| duration - 0.3)
+    }) else {
+        return false;
+    };
+    if elapsed < end - 0.5 {
+        if state.segment_ended == Some(generation) {
+            state.segment_ended = None;
+        }
+        return false;
+    }
+    if elapsed < end || state.segment_ended == Some(generation) {
+        return false;
+    }
+    state.segment_ended = Some(generation);
+    if repeat {
+        let _ = execute_player_command(
+            window,
+            PlaybackCommand::SeekAbsolute {
+                seconds: start,
+                exact: true,
+            },
+        );
+        return false;
+    }
+    if playback_features::ended(window) {
+        return false;
+    }
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    mark_current_podcast_episode_played(state);
+    let autoplay_next = state
+        .application
+        .player_session()
+        .enabled_toggles()
+        .contains(&SessionToggle::AutoplayNext);
+    if autoplay_next {
+        // CUE tracks share one file, so a new generation, not the item's
+        // identity, tells that the next track started.
+        navigate_player_relative_after_end(window);
+        let moved_on = self::state(window)
+            .is_some_and(|state| state.application.player_session().generation() != generation);
+        if moved_on {
+            return true;
+        }
+    } else {
+        set_status(
+            state,
+            &catalog_text(&state.application, "playback_finished"),
+            state.application.settings().announce_playback_finished,
+        );
+    }
+    let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
+    false
 }
 
 unsafe fn finish_youtube_list(
@@ -16426,10 +16566,13 @@ unsafe fn start_search_suggestions(window: HWND) {
         return;
     }
     let settings = state.application.settings();
-    state.pending_suggestions = Some(apricot_shell::youtube_extras::PendingSuggestions::start(
-        &query,
-        &settings.language,
-        &settings.proxy,
+    state.pending_suggestions = Some((
+        apricot_shell::youtube_extras::PendingSuggestions::start(
+            &query,
+            &settings.language,
+            &settings.proxy,
+        ),
+        query.trim().to_owned(),
     ));
     let message = catalog_text(&state.application, "search_suggestions_loading");
     set_status(state, &message, true);
@@ -16443,15 +16586,22 @@ unsafe fn poll_search_suggestions(window: HWND) {
     let Some(result) = state
         .pending_suggestions
         .as_ref()
-        .and_then(apricot_shell::youtube_extras::PendingSuggestions::poll)
+        .and_then(|(pending, _)| pending.poll())
     else {
         if state.pending_suggestions.is_none() {
             let _ = KillTimer(Some(window), SUGGESTIONS_TIMER_ID);
         }
         return;
     };
-    state.pending_suggestions = None;
     let _ = KillTimer(Some(window), SUGGESTIONS_TIMER_ID);
+    let Some((_, query)) = state.pending_suggestions.take() else {
+        return;
+    };
+    // A late answer belongs only to the search it was asked for: not after
+    // leaving Search, nor for a query typed since (review 2.1).
+    if state.view != MainView::Search || window_text(state.search_edit).trim() != query {
+        return;
+    }
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     let suggestions = match result {
         Ok(suggestions) if !suggestions.is_empty() => suggestions,
@@ -18520,6 +18670,16 @@ impl crate::equalizer_win32::EqualizerDialogHost for PlayerEqualizerHost {
         // SAFETY: The host is only used on the UI thread while the main window lives.
         if let Some(state) = unsafe { state_mut(self.window) } {
             state.application.forget_equalizer_advanced(preset_id);
+        }
+    }
+
+    fn set_session_preset(&mut self, preset_id: String) {
+        // SAFETY: The host is only used on the UI thread while the main window lives.
+        if let Some(state) = unsafe { state_mut(self.window) } {
+            state
+                .application
+                .playback_features_mut()
+                .equalizer_session_preset = Some(preset_id);
         }
     }
 

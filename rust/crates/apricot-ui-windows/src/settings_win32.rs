@@ -152,6 +152,8 @@ struct BoundControl {
     label: Option<HWND>,
     control: HWND,
     binding: ControlBinding,
+    /// The shared binding F1 explains (`apricot_shell::settings_help`).
+    help: apricot_shell::SettingsBinding,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -579,6 +581,7 @@ unsafe fn create_bound_control(
     id: usize,
     model: SettingsControl,
 ) -> Result<BoundControl> {
+    let help = apricot_shell::settings_binding(&model);
     let (label, control, binding) = match model {
         SettingsControl::ReadOnlyText {
             id: _,
@@ -990,6 +993,7 @@ unsafe fn create_bound_control(
         label,
         control,
         binding,
+        help,
     })
 }
 
@@ -2655,18 +2659,6 @@ unsafe fn is_section_list_commit_key(message: &MSG) -> bool {
                 && !GetKeyState(i32::from(VK_SHIFT.0)).is_negative())
 }
 
-/// The setting a control changes, for its F1 help.
-fn bound_setting(binding: &ControlBinding) -> Option<SettingId> {
-    match binding {
-        ControlBinding::Text(setting)
-        | ControlBinding::Checkbox(setting)
-        | ControlBinding::Integer { setting, .. }
-        | ControlBinding::IntegerSlider { setting, .. }
-        | ControlBinding::Choice { setting, .. } => Some(*setting),
-        _ => None,
-    }
-}
-
 unsafe extern "system" fn settings_control_proc(
     window: HWND,
     message: u32,
@@ -2701,17 +2693,13 @@ unsafe extern "system" fn settings_control_proc(
         && wparam.0 == 0x70
         && let Ok(parent) = GetParent(window)
         && let Some(state) = state(parent)
-        && let Some(setting) = state
+        && let Some(help) = state
             .controls
             .iter()
             .find(|bound| bound.control == window)
-            .and_then(|bound| bound_setting(&bound.binding))
+            .and_then(|bound| apricot_shell::settings_help(&settings_catalog(state), &bound.help))
     {
-        let catalog = settings_catalog(state);
-        state.announcer.announce(
-            &apricot_app::settings_model::setting_help(&catalog, setting),
-            true,
-        );
+        state.announcer.announce(&help, true);
         return LRESULT(0);
     }
     if (message == WM_KEYDOWN || message == WM_CHAR)

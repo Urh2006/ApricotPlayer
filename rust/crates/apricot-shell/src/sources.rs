@@ -27,6 +27,18 @@ pub struct SourceAction {
     pub id: &'static str,
     pub label: String,
     pub shortcut: String,
+    /// A label for each row when it depends on the row, such as "Add to
+    /// radio favorites" or "Remove from radio favorites"; empty otherwise.
+    pub row_labels: Vec<String>,
+}
+
+impl SourceAction {
+    /// The label the action menu shows while `row` is selected.
+    #[must_use]
+    pub fn label_for(&self, row: Option<usize>) -> &str {
+        row.and_then(|row| self.row_labels.get(row))
+            .map_or(self.label.as_str(), String::as_str)
+    }
 }
 #[derive(Clone, Debug)]
 pub struct SourceBrowser {
@@ -658,6 +670,7 @@ impl SourcesController {
                         .get(shortcut_action(id))
                         .cloned()
                         .unwrap_or_default(),
+                    row_labels: Vec::new(),
                 })
                 .collect(),
             actions_button: catalog.text("sources_actions").to_owned(),
@@ -839,13 +852,34 @@ impl SourcesController {
                 actions.push(("radio_more", catalog.text("radio_more")));
             }
             let rows = self.station_rows.iter().map(Station::label).collect();
-            let Some(choice) = ui.browse(&Self::browser(
+            let mut browser = Self::browser(
                 environment,
                 catalog.text("radio_stations"),
                 rows,
                 self.station_selected,
                 &actions,
-            )) else {
+            );
+            // The menu says what the command does to the selected station.
+            if let Some(favorite) = browser
+                .actions
+                .iter_mut()
+                .find(|action| action.id == "radio_favorite")
+            {
+                favorite.row_labels = self
+                    .station_rows
+                    .iter()
+                    .map(|station| {
+                        catalog
+                            .text(if self.radio.is_favorite(station) {
+                                "radio_favorite_remove"
+                            } else {
+                                "radio_favorite_add"
+                            })
+                            .to_owned()
+                    })
+                    .collect();
+            }
+            let Some(choice) = ui.browse(&browser) else {
                 // Back returns to the radio menu.
                 return Some(RadioScreen::Menu);
             };
@@ -1008,7 +1042,9 @@ impl SourcesController {
         offset: usize,
     ) {
         let catalog = environment.catalog();
-        let more = entries.len() >= apricot_platform::radio::PAGE_SIZE;
+        // Countries come as one whole list; the others in pages.
+        let more =
+            kind != DirectoryKind::Countries && entries.len() >= apricot_platform::radio::PAGE_SIZE;
         let mut actions = vec![("open", catalog.text("open"))];
         if more {
             actions.push(("more", catalog.text("radio_next_page")));

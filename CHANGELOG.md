@@ -50,6 +50,13 @@
 - Videos in imported playlists are recognised as videos.
 - File names with #, ? or % in M3U playlists are found again, and relative addresses in XSPF playlists work again.
 
+### Radio
+
+- The action menu of a station now says "Add to radio favorites" or "Remove from radio favorites", depending on whether the station already is a favorite.
+- Countries are now listed in alphabetical order and all of them in one list, so countries such as Slovenia are no longer missing from the first page. A leading "The" no longer decides the letter, so "The Netherlands" is listed as "Netherlands" under N.
+- Station names no longer start with a tab or a line break that a screen reader read before the name.
+- Live radio streams keep a longer audio buffer, and after a short network gap they wait for two seconds of sound before they continue, which helps against sound that catches every second.
+
 ### Search and settings
 
 - Search suggestions that arrive late no longer open after you left the search or typed something new.

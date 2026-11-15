@@ -310,13 +310,15 @@ struct ClipExport {
 }
 
 /// Case-insensitive key of a reserved clip target.
-fn clip_reservation_key(path: &Path) -> PathBuf {
+#[must_use]
+pub fn clip_reservation_key(path: &Path) -> PathBuf {
     PathBuf::from(path.to_string_lossy().to_lowercase())
 }
 
 /// A time in a clip name: "1-05" for whole seconds, "1-05.250" with
 /// milliseconds, so clips that differ only by milliseconds keep apart.
-fn clip_time_label(seconds: f64) -> String {
+#[must_use]
+pub fn clip_time_label(seconds: f64) -> String {
     let rounded = (seconds.max(0.0) * 1000.0).round() / 1000.0;
     let time = std::time::Duration::try_from_secs_f64(rounded).unwrap_or_default();
     let whole = format_duration(time.as_secs_f64().floor()).replace(':', "-");
@@ -328,7 +330,9 @@ fn clip_time_label(seconds: f64) -> String {
 
 /// The first `stem.ext` or `stem (N).ext` in the folder that neither exists
 /// nor is reserved.
-fn free_clip_path(
+#[must_use]
+#[allow(clippy::implicit_hasher)] // Callers build a plain `HashSet`.
+pub fn free_clip_path(
     folder: &Path,
     stem: &str,
     extension: &str,

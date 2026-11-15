@@ -64,8 +64,9 @@ pub use audiovault::AudiovaultLogin;
 pub use bookmarks::{BookmarkDialog, BookmarkEntry, BookmarkRequest, BookmarkResponse};
 pub use comments::{CommentsCommand, CommentsDialog, CommentsEffect};
 pub use converter::{
-    ConverterDialog, ConverterOptions, ConverterStart, ConverterView,
-    options_form as converter_options_form, options_from_values as converter_options_from_values,
+    ConverterDialog, ConverterOptions, ConverterStart, ConverterView, clip_reservation_key,
+    clip_time_label, free_clip_path, options_form as converter_options_form,
+    options_from_values as converter_options_from_values,
 };
 pub use cookies::CookieCommandResult;
 pub use downloads::{DownloadProgress, safe_path_component};
@@ -74,7 +75,7 @@ pub use feature_form::{FeatureForm, FormField, FormFieldKind, FormValue, FormVal
 pub use keyboard::{FocusKind, KeyRoute};
 pub use library::media_collection_label;
 pub use lyrics::{LyricsDialog, LyricsHighlight, LyricsLoaded};
-pub use player::{format_duration, local_file_item};
+pub use player::{format_duration, local_file_item, save_recording_notice, take_recording_notice};
 pub use player_extras::DetailsLabels;
 pub use podcasts::{rss_episode_label, rss_feed_label};
 pub use queue::{QueueChange, QueueDialog};
@@ -83,7 +84,7 @@ pub use screens::{ListScreen, ScreenControl, local_folder_result_label};
 pub use search::result_label;
 pub use settings_window::{
     SettingsBinding, SettingsInput, ShortcutCapture, canonical_shortcut_text,
-    recording_settings_controls, recording_settings_values, settings_binding,
+    recording_settings_controls, recording_settings_values, settings_binding, settings_help,
     shortcut_action_label, shortcut_text,
 };
 pub use spotify::{

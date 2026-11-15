@@ -264,11 +264,13 @@ unsafe fn finish(window: HWND, state: &mut State, action: &str) {
 
 unsafe fn menu(window: HWND, state: &mut State) {
     let Ok(menu) = CreatePopupMenu() else { return };
+    let row = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
     for (index, action) in state.model.actions.iter().enumerate() {
+        let label = action.label_for(row);
         let label = if action.shortcut.is_empty() {
-            action.label.clone()
+            label.to_owned()
         } else {
-            format!("{}\t{}", action.label, action.shortcut)
+            format!("{label}\t{}", action.shortcut)
         };
         let label = wide(&label);
         let _ = AppendMenuW(menu, MF_STRING, index + 1, PCWSTR(label.as_ptr()));

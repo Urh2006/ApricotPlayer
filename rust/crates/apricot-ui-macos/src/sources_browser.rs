@@ -90,13 +90,19 @@ impl Dialog {
         let Some(model) = self.ivars().model.borrow().clone() else {
             return;
         };
+        let row = self
+            .ivars()
+            .list
+            .borrow()
+            .as_ref()
+            .and_then(|list| usize::try_from(list.selectedRow()).ok());
         for (index, action) in model.actions.iter().enumerate() {
+            let label = action.label_for(row);
             let label = if action.shortcut.is_empty() {
-                action.label.clone()
+                label.to_owned()
             } else {
                 format!(
-                    "{}  {}",
-                    action.label,
+                    "{label}  {}",
                     apricot_core::shortcut::display_shortcut(&action.shortcut)
                 )
             };

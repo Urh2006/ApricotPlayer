@@ -227,10 +227,35 @@ fn same_file(first: &Path, second: &Path) -> bool {
             return first.dev() == second.dev() && first.ino() == second.ino();
         }
     }
+    #[cfg(windows)]
+    if let (Some(first), Some(second)) = (file_identity(first), file_identity(second)) {
+        return first == second;
+    }
     match (fs::canonicalize(first), fs::canonicalize(second)) {
         (Ok(first), Ok(second)) => first == second,
         _ => false,
     }
+}
+
+/// The volume and file index NTFS gives every hard link of one file.
+#[cfg(windows)]
+fn file_identity(path: &Path) -> Option<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle;
+
+    use windows::Win32::{
+        Foundation::HANDLE,
+        Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle},
+    };
+
+    let file = fs::File::open(path).ok()?;
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: The handle belongs to `file`, which lives for the call.
+    unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &raw mut information) }
+        .ok()?;
+    Some((
+        information.dwVolumeSerialNumber,
+        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
+    ))
 }
 
 /// A hidden name beside `target` for a copy in progress.
@@ -420,7 +445,6 @@ mod tests {
 
     /// Review 2.1: two hard links of one file are one file. Replacing one
     /// with the other must not truncate both.
-    #[cfg(unix)]
     #[test]
     fn hard_links_are_never_emptied() {
         let root = tempfile::tempdir().expect("folder");
@@ -471,6 +495,32 @@ mod tests {
         assert_eq!(fs::read_to_string(&source).unwrap(), "new");
         assert_eq!(fs::read_to_string(to.join("song.mp3")).unwrap(), "old");
         // No partial copy stays behind.
+        assert_eq!(fs::read_dir(&to).unwrap().count(), 1);
+    }
+
+    /// Review 2.1 on Windows: an original another program holds without
+    /// sharing deletion cannot move, and the file it was to replace stays.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_move_keeps_the_destination_on_windows() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().expect("folder");
+        let to = root.path().join("to");
+        fs::create_dir_all(&to).expect("to");
+        let source = root.path().join("song.mp3");
+        write(&source, "new");
+        write(&to.join("song.mp3"), "old");
+        // Read and write sharing only, so no rename or delete is allowed.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2)
+            .open(&source)
+            .expect("hold");
+        let result = transfer(&source, &to, TransferMode::Move, Some(Collision::Replace));
+        drop(held);
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(fs::read_to_string(&source).unwrap(), "new");
+        assert_eq!(fs::read_to_string(to.join("song.mp3")).unwrap(), "old");
         assert_eq!(fs::read_dir(&to).unwrap().count(), 1);
     }
 

@@ -515,11 +515,9 @@ impl Shell {
             return None;
         }
         let running = self.playback_ended(ui);
-        let moved_on = self
-            .application
-            .player_session()
-            .current_item()
-            .is_some_and(|current| current.stable_identity() != item.stable_identity());
+        // CUE tracks share one file, so a new generation, not the item's
+        // identity, tells that the next track started.
+        let moved_on = self.application.player_session().generation() != generation;
         if moved_on {
             return running;
         }
@@ -1313,9 +1311,7 @@ impl Shell {
         // failure or a kept "(incomplete)" file is told at the next start.
         let catalog = self.catalog();
         if let Some(message) = self.sources.finish_recording(&catalog) {
-            self.application
-                .set_feature_settings(RECORDING_NOTICE_KEY, serde_json::json!(message));
-            let _ = self.application.save_settings();
+            save_recording_notice(&mut self.application, &message);
         }
         apricot_platform::stop_playback_resolver();
     }
@@ -1325,24 +1321,33 @@ impl Shell {
 /// finish normally (review 2.1).
 const RECORDING_NOTICE_KEY: &str = "recording_exit_notice";
 
+/// Quitting: keeps the message about a recording that did not end as a
+/// normal recording, for [`take_recording_notice`] at the next start.
+pub fn save_recording_notice(application: &mut apricot_app::Application, message: &str) {
+    application.set_feature_settings(RECORDING_NOTICE_KEY, serde_json::json!(message));
+    let _ = application.save_settings();
+}
+
+/// At start: the message [`save_recording_notice`] kept, said only once.
+pub fn take_recording_notice(application: &mut apricot_app::Application) -> Option<String> {
+    let message = application
+        .settings()
+        .preserved
+        .get(RECORDING_NOTICE_KEY)
+        .and_then(serde_json::Value::as_str)
+        .filter(|message| !message.is_empty())
+        .map(str::to_owned)?;
+    application.set_feature_settings(RECORDING_NOTICE_KEY, serde_json::json!(""));
+    let _ = application.save_settings();
+    Some(message)
+}
+
 impl Shell {
     /// At start: what happened to a recording at the last quit.
     pub fn announce_recording_notice(&mut self, ui: &mut dyn ShellUi) {
-        let Some(message) = self
-            .application
-            .settings()
-            .preserved
-            .get(RECORDING_NOTICE_KEY)
-            .and_then(serde_json::Value::as_str)
-            .filter(|message| !message.is_empty())
-            .map(str::to_owned)
-        else {
-            return;
-        };
-        self.application
-            .set_feature_settings(RECORDING_NOTICE_KEY, serde_json::json!(""));
-        let _ = self.application.save_settings();
-        ui.show_error(&message);
+        if let Some(message) = take_recording_notice(&mut self.application) {
+            ui.show_error(&message);
+        }
     }
 }
 

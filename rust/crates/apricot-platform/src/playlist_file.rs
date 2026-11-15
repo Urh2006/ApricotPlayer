@@ -522,13 +522,22 @@ mod tests {
     /// Review 2.1: an XSPF location is a URI; M3U names stay literal.
     #[test]
     fn xspf_locations_are_decoded_and_m3u_names_are_not() {
-        let base = Url::parse("file:///review/list.xspf").unwrap();
+        // A file URL needs a drive letter on Windows, so the folder is real.
+        let folder = std::env::temp_dir().join("review");
+        let expected = |name: &str| folder.join(name).to_string_lossy().into_owned();
+        let base = Url::from_file_path(folder.join("list.xspf")).unwrap();
         let text = r"<playlist><trackList><track><location>My%20Song.flac</location></track></trackList></playlist>";
         let items = parse_xml(text, &base, "xspf").unwrap();
-        assert_eq!(items[0].local_path.as_deref(), Some("/review/My Song.flac"));
-        let m3u = Url::parse("file:///review/list.m3u8").unwrap();
+        assert_eq!(
+            items[0].local_path.as_deref(),
+            Some(expected("My Song.flac").as_str())
+        );
+        let m3u = Url::from_file_path(folder.join("list.m3u8")).unwrap();
         let item = location("100%20.mp3", "", None, &m3u).unwrap();
-        assert_eq!(item.local_path.as_deref(), Some("/review/100%20.mp3"));
+        assert_eq!(
+            item.local_path.as_deref(),
+            Some(expected("100%20.mp3").as_str())
+        );
     }
     #[test]
     fn lists_preserve_duplicates_relative_paths_and_titles() {

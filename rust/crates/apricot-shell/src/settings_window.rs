@@ -11,7 +11,7 @@ use apricot_app::{
     ShortcutActionItem, SpotifyField,
 };
 use apricot_core::shortcut::{ShortcutChord, ShortcutKey};
-use apricot_core::{SettingId, SettingsSection};
+use apricot_core::{SettingId, SettingsSection, TranslationCatalog};
 
 use crate::feature_form::{FormFieldKind, FormValue};
 use crate::{MainMenuSelection, PlayerFocus, Shell, ShellUi, View};
@@ -100,39 +100,41 @@ impl Shell {
     /// the help of a Recording or Spotify field. Other controls have none.
     #[must_use]
     pub fn settings_help(&self, binding: &SettingsBinding) -> Option<String> {
-        if let Some(setting) = binding.setting() {
-            return Some(apricot_app::settings_model::setting_help(
-                &self.catalog(),
-                setting,
-            ));
-        }
-        let key = match binding {
-            SettingsBinding::RecordingField(field) => match field.as_str() {
-                "format" | "rate" | "channels" | "bitrate" | "folder" | "remember" | "feedback" => {
-                    format!("setting_help_recording_{field}")
-                }
-                _ => return None,
-            },
-            SettingsBinding::SpotifyChoice(SpotifyField::Quality) => {
-                "setting_help_spotify_quality".to_owned()
-            }
-            SettingsBinding::SpotifyChoice(SpotifyField::Autoplay) => {
-                "setting_help_spotify_autoplay".to_owned()
-            }
-            SettingsBinding::SpotifyChoice(SpotifyField::LibraryOrder) => {
-                "setting_help_spotify_library_order".to_owned()
-            }
-            SettingsBinding::SpotifyNormalisation => {
-                "setting_help_spotify_normalisation".to_owned()
-            }
-            SettingsBinding::SpotifyListeningHistory => {
-                "setting_help_spotify_listening_history".to_owned()
-            }
-            SettingsBinding::SpotifyKeyCache => "setting_help_spotify_key_cache".to_owned(),
-            _ => return None,
-        };
-        Some(self.text(&key))
+        settings_help(&self.catalog(), binding)
     }
+}
+
+/// [`Shell::settings_help`] for a window that has only the catalog, such as
+/// the Windows settings window.
+#[must_use]
+pub fn settings_help(catalog: &TranslationCatalog, binding: &SettingsBinding) -> Option<String> {
+    if let Some(setting) = binding.setting() {
+        return Some(apricot_app::settings_model::setting_help(catalog, setting));
+    }
+    let key = match binding {
+        SettingsBinding::RecordingField(field) => match field.as_str() {
+            "format" | "rate" | "channels" | "bitrate" | "folder" | "remember" | "feedback" => {
+                format!("setting_help_recording_{field}")
+            }
+            _ => return None,
+        },
+        SettingsBinding::SpotifyChoice(SpotifyField::Quality) => {
+            "setting_help_spotify_quality".to_owned()
+        }
+        SettingsBinding::SpotifyChoice(SpotifyField::Autoplay) => {
+            "setting_help_spotify_autoplay".to_owned()
+        }
+        SettingsBinding::SpotifyChoice(SpotifyField::LibraryOrder) => {
+            "setting_help_spotify_library_order".to_owned()
+        }
+        SettingsBinding::SpotifyNormalisation => "setting_help_spotify_normalisation".to_owned(),
+        SettingsBinding::SpotifyListeningHistory => {
+            "setting_help_spotify_listening_history".to_owned()
+        }
+        SettingsBinding::SpotifyKeyCache => "setting_help_spotify_key_cache".to_owned(),
+        _ => return None,
+    };
+    Some(catalog.text(&key).to_owned())
 }
 
 /// The value a control shows (Windows `window_text`, `CB_GETCURSEL`,

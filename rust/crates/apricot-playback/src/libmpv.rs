@@ -1487,6 +1487,20 @@ fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
+/// A live stream arrives only as fast as it plays: a longer audio buffer
+/// rides over short network and output hiccups, and after the cache ran dry
+/// it waits for two seconds of sound instead of stopping again every moment.
+fn live_stream_options(item: &apricot_core::MediaItem) -> Vec<String> {
+    if item.kind == apricot_core::MediaKind::LiveStream {
+        vec![
+            "audio-buffer=0.5".to_owned(),
+            "cache-pause-wait=2".to_owned(),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
 fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackError> {
     let arguments = match command {
         PlaybackCommand::Load {
@@ -1509,6 +1523,7 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
                 options.push(format!("start={position}"));
             }
             options.extend(http_header_options(&item));
+            options.extend(live_stream_options(&item));
             if !options.is_empty() {
                 arguments.extend(["-1".to_owned(), options.join(",")]);
             }
@@ -2206,6 +2221,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A live stream gets a longer audio buffer and cache wait.
+    #[test]
+    fn live_streams_load_with_a_longer_buffer() {
+        let item = MediaItem {
+            id: MediaId("radio".to_owned()),
+            source: MediaSource::Direct,
+            kind: MediaKind::LiveStream,
+            title: "Radio".to_owned(),
+            url: None,
+            stream_url: Some("https://radio.test/live.mp3".parse().expect("URL")),
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: BTreeMap::new(),
+        };
+        let arguments = command_arguments(PlaybackCommand::Load {
+            item: Box::new(item),
+            start_position_seconds: None,
+        })
+        .expect("load");
+        assert_eq!(
+            arguments.last().map(String::as_str),
+            Some("audio-buffer=0.5,cache-pause-wait=2")
+        );
     }
 
     #[test]

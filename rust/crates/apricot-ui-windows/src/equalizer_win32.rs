@@ -64,6 +64,9 @@ pub trait EqualizerDialogHost {
     /// The profile shown in the dialog, whose advanced settings shape the
     /// sound while the dialog is open; `None` when it closes.
     fn set_preview_preset(&mut self, _preset_id: Option<String>) {}
+    /// The profile OK confirmed, whose advanced settings keep shaping the
+    /// session equalizer after the dialog closes.
+    fn set_session_preset(&mut self, _preset_id: String) {}
     /// The advanced settings an exported profile carries, if any.
     fn advanced_payload(&self, _preset_id: &str) -> Option<serde_json::Value> {
         None
@@ -520,10 +523,10 @@ unsafe fn button_clicked(window: HWND, button: DialogButton) {
         DialogButton::Advanced => {
             if let Some(state) = state_mut(window) {
                 let preset = current_preset(state);
+                // Advanced changes the shape of the bands, not their gains:
+                // the sliders keep what was moved, and Cancel in F4 still
+                // returns to the sound from before F4 opened (review 2.1).
                 state.host.advanced(window, &preset);
-                let gains = state.host.settings().gains_for_preset(&preset);
-                show_gains(state, &gains);
-                state.original_equalizer = state.host.session_equalizer();
                 live_apply(window, state);
             }
         }
@@ -556,6 +559,8 @@ unsafe fn accept(window: HWND) {
         show_message(window, &state.catalog, &error, MB_ICONERROR);
         return;
     }
+    let preset = current_preset(state);
+    state.host.set_session_preset(preset);
     state.accepted = true;
     let _ = DestroyWindow(window);
 }

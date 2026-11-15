@@ -74,7 +74,7 @@ impl Station {
     #[must_use]
     pub fn label(&self) -> String {
         [
-            self.name.clone(),
+            self.name.split_whitespace().collect::<Vec<_>>().join(" "),
             self.country.clone(),
             self.language.clone(),
             self.codec.clone(),
@@ -208,6 +208,20 @@ pub struct DirectoryEntry {
     pub iso_3166_1: String,
     #[serde(default)]
     pub country: String,
+}
+
+/// Countries by name, as a screen reader user finds them by the first
+/// letter: "The Netherlands" is listed as "Netherlands" under N.
+fn sorted_countries(mut entries: Vec<DirectoryEntry>) -> Vec<DirectoryEntry> {
+    for entry in &mut entries {
+        if let Some(name) = entry.name.strip_prefix("The ")
+            && !name.trim().is_empty()
+        {
+            entry.name = name.to_owned();
+        }
+    }
+    entries.sort_by_cached_key(|entry| entry.name.to_lowercase());
+    entries
 }
 
 #[derive(Clone, Debug)]
@@ -347,6 +361,17 @@ impl RadioClient {
         let count = raw.len();
         let stations = raw
             .into_iter()
+            // Some names start with a tab or a line break, which a screen
+            // reader reads before the name.
+            .map(|mut station| {
+                let name = station
+                    .name
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                station.name = name;
+                station
+            })
             .filter(|station| {
                 !station.stationuuid.is_empty()
                     && station.stream_url().is_some()
@@ -374,6 +399,21 @@ impl RadioClient {
         search: &str,
         country: &str,
     ) -> Result<Vec<DirectoryEntry>, RadioError> {
+        // About 230 countries come in one list, sorted here: the catalog
+        // orders them by country code, not by the name people read.
+        if kind == DirectoryKind::Countries {
+            if offset > 0 {
+                return Ok(Vec::new());
+            }
+            let mut query = Vec::new();
+            if !search.trim().is_empty() {
+                query.push(("filter".into(), search.trim().into()));
+            }
+            let entries: Vec<DirectoryEntry> =
+                serde_json::from_value(self.read("json/countries", &query, false)?)
+                    .map_err(|_| RadioError::InvalidData)?;
+            return Ok(sorted_countries(entries));
+        }
         // Thousands of tags and languages: the most used come first. Places
         // and codecs are easier to find by name.
         let by_use = matches!(kind, DirectoryKind::Languages | DirectoryKind::Tags);
@@ -520,6 +560,13 @@ impl Default for RadioLibrary {
 }
 
 impl RadioLibrary {
+    #[must_use]
+    pub fn is_favorite(&self, station: &Station) -> bool {
+        self.favorites
+            .iter()
+            .any(|value| value.stationuuid == station.stationuuid)
+    }
+
     /// Adds or removes the station; `true` when it was added.
     pub fn toggle_favorite(&mut self, station: &Station) -> bool {
         if let Some(index) = self
@@ -546,6 +593,25 @@ impl RadioLibrary {
 
 #[cfg(test)]
 mod tests {
+    /// Countries read by name: sorted, with "The" not deciding the letter.
+    #[test]
+    fn countries_are_sorted_by_the_name_people_read() {
+        let entry = |name: &str| super::DirectoryEntry {
+            name: name.to_owned(),
+            stationcount: 1,
+            iso_3166_1: String::new(),
+            country: String::new(),
+        };
+        let sorted = super::sorted_countries(vec![
+            entry("Slovenia"),
+            entry("The Netherlands"),
+            entry("austria"),
+            entry("Andorra"),
+        ]);
+        let names: Vec<_> = sorted.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, ["Andorra", "austria", "Netherlands", "Slovenia"]);
+    }
+
     use super::*;
 
     #[test]
