@@ -81,6 +81,10 @@ pub struct DownloadOptions {
     pub subtitle_languages: Vec<String>,
     pub embed_metadata: bool,
     pub embed_thumbnail: bool,
+    /// 2.1: keep the video's chapters in the file.
+    pub embed_chapters: bool,
+    /// 2.1: cut sponsor, self-promotion and interaction reminders.
+    pub sponsorblock_remove: bool,
     pub restrict_filenames: bool,
     pub concurrent_fragments: u32,
     pub retries: u32,
@@ -112,6 +116,8 @@ impl Default for DownloadOptions {
             subtitle_languages: vec!["sl".to_owned(), "en".to_owned()],
             embed_metadata: true,
             embed_thumbnail: false,
+            embed_chapters: false,
+            sponsorblock_remove: false,
             restrict_filenames: false,
             concurrent_fragments: 4,
             retries: 10,
@@ -377,11 +383,18 @@ fn append_feature_arguments(arguments: &mut Vec<OsString>, options: &DownloadOpt
         (options.write_automatic_subtitles, "--write-auto-subs"),
         (options.embed_metadata, "--embed-metadata"),
         (options.embed_thumbnail, "--embed-thumbnail"),
+        (options.embed_chapters, "--embed-chapters"),
         (options.restrict_filenames, "--restrict-filenames"),
     ] {
         if enabled {
             arguments.push(flag.into());
         }
+    }
+    if options.sponsorblock_remove {
+        arguments.extend([
+            "--sponsorblock-remove".into(),
+            "sponsor,selfpromo,interaction".into(),
+        ]);
     }
     if (options.write_subtitles || options.write_automatic_subtitles)
         && !options.subtitle_languages.is_empty()
@@ -945,6 +958,34 @@ fn stop_process_tree(child: &mut Child) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chapters_and_sponsorblock_add_their_arguments_only_when_chosen() {
+        let mut arguments = Vec::new();
+        super::append_feature_arguments(&mut arguments, &super::DownloadOptions::default());
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument == "--embed-chapters")
+        );
+        let options = super::DownloadOptions {
+            embed_chapters: true,
+            sponsorblock_remove: true,
+            ..super::DownloadOptions::default()
+        };
+        let mut arguments = Vec::new();
+        super::append_feature_arguments(&mut arguments, &options);
+        let text: Vec<_> = arguments
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(text.contains(&"--embed-chapters".to_owned()));
+        let at = text
+            .iter()
+            .position(|a| a == "--sponsorblock-remove")
+            .expect("sponsorblock");
+        assert_eq!(text[at + 1], "sponsor,selfpromo,interaction");
+    }
+
     use std::{io::Cursor, path::PathBuf};
 
     use super::{

@@ -318,11 +318,41 @@ pub fn update_ytdlp_component(
     components_dir: &Path,
     on_updating: &mut dyn FnMut(),
 ) -> Result<YtdlpUpdate, String> {
+    update_ytdlp_component_from(
+        transport,
+        YTDLP_LATEST_RELEASE_API_URL,
+        current_version,
+        components_dir,
+        on_updating,
+    )
+}
+
+/// The latest release of a yt-dlp channel: the official builds, or the
+/// nightly or master builds that follow `YouTube` changes sooner.
+#[must_use]
+pub fn ytdlp_release_api_url(channel: &str) -> &'static str {
+    match channel {
+        "nightly" => "https://api.github.com/repos/yt-dlp/yt-dlp-nightly-builds/releases/latest",
+        "master" => "https://api.github.com/repos/yt-dlp/yt-dlp-master-builds/releases/latest",
+        _ => YTDLP_LATEST_RELEASE_API_URL,
+    }
+}
+
+/// [`update_ytdlp_component`] from the releases at `release_api_url`.
+///
+/// # Errors
+///
+/// Returns the reason the release could not be found, downloaded or
+/// installed.
+pub fn update_ytdlp_component_from(
+    transport: &mut dyn UpdateTransport,
+    release_api_url: &str,
+    current_version: &str,
+    components_dir: &Path,
+    on_updating: &mut dyn FnMut(),
+) -> Result<YtdlpUpdate, String> {
     let release = transport
-        .get_json(
-            YTDLP_LATEST_RELEASE_API_URL,
-            crate::release::UPDATE_METADATA_MAX_BYTES,
-        )?
+        .get_json(release_api_url, crate::release::UPDATE_METADATA_MAX_BYTES)?
         .as_ref()
         .and_then(Release::from_json)
         .ok_or_else(|| "Could not find a yt-dlp release on GitHub".to_owned())?;

@@ -629,6 +629,10 @@ impl Shell {
                 self.rename_active_file(ui);
                 return;
             }
+            "open_in_browser" | "open_channel_in_browser" => {
+                self.open_active_in_browser(ui, action_id == "open_channel_in_browser");
+                return;
+            }
             "open_from_clipboard"
             | "copy_file_to_clipboard"
             | "show_in_folder"

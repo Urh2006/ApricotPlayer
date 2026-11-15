@@ -136,6 +136,39 @@ pub fn rename_from_values(
     })
 }
 
+/// The web page of an item, or of its channel: only http and https.
+#[must_use]
+pub fn browser_address(item: Option<&MediaItem>, channel: bool) -> Option<String> {
+    let item = item?;
+    let address = if channel {
+        item.metadata
+            .get("channel_url")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)?
+    } else {
+        item.url.as_ref()?.to_string()
+    };
+    (address.starts_with("https://") || address.starts_with("http://")).then_some(address)
+}
+
+/// The name form of a favorite.
+#[must_use]
+pub fn favorite_name_form(catalog: &TranslationCatalog, title: &str) -> FeatureForm {
+    let mut form = FeatureForm::localized(
+        catalog,
+        catalog.text("rename_favorite"),
+        vec![FormField::text(
+            "name",
+            catalog.text("rename_file_name"),
+            title,
+        )],
+    );
+    catalog
+        .text("rename_file_submit")
+        .clone_into(&mut form.submit);
+    form
+}
+
 /// The local file of an item, when it still exists.
 #[must_use]
 pub fn local_file(item: Option<&MediaItem>) -> Option<PathBuf> {
@@ -171,9 +204,42 @@ impl crate::Shell {
         }
     }
 
-    /// Renames the selected or playing local file.
+    /// Opens the item's page or its channel's page in the browser.
+    pub(crate) fn open_active_in_browser(&mut self, ui: &mut dyn crate::ShellUi, channel: bool) {
+        let catalog = self.catalog();
+        match browser_address(self.active_media_item(ui).as_ref(), channel) {
+            Some(address) if apricot_platform::shell::open_url(&address).is_ok() => {}
+            Some(_) => ui.show_error(catalog.text("file_action_unavailable")),
+            None => ui.set_status(catalog.text("browser_address_missing"), true),
+        }
+    }
+
+    /// Renames the selected or playing local file; in Favorites the entry.
     pub(crate) fn rename_active_file(&mut self, ui: &mut dyn crate::ShellUi) {
         let catalog = self.catalog();
+        if self.view == crate::View::Favorites {
+            let Some(index) = ui.selected_row() else {
+                return;
+            };
+            let Some(title) = self
+                .application
+                .favorites()
+                .get(index)
+                .map(|item| item.title.clone())
+            else {
+                return;
+            };
+            let Some(values) = ui.feature_form(&favorite_name_form(&catalog, &title)) else {
+                return;
+            };
+            let name = values.get("name").and_then(FormValue::text).unwrap_or("");
+            match self.application.rename_favorite(index, name) {
+                Ok(true) => self.refresh_media_collection(ui, true, Some(index)),
+                Ok(false) => ui.show_error(catalog.text("rename_file_empty")),
+                Err(error) => ui.show_error(&error.to_string()),
+            }
+            return;
+        }
         let Some(path) = local_file(self.active_media_item(ui).as_ref()) else {
             ui.set_status(catalog.text("local_file_required"), true);
             return;

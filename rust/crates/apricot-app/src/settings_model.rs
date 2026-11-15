@@ -528,6 +528,17 @@ fn general_controls(
             settings.auto_update_ytdlp,
             catalog,
         ),
+        choice_labeled(
+            SettingId::YtdlpUpdateChannel,
+            "ytdlp_update_channel",
+            &settings.ytdlp_update_channel,
+            &[
+                ("stable", "ytdlp_channel_stable"),
+                ("nightly", "ytdlp_channel_nightly"),
+                ("master", "ytdlp_channel_master"),
+            ],
+            catalog,
+        ),
         checkbox(
             SettingId::AutoUpdateApp,
             "auto_update_app",
@@ -847,6 +858,17 @@ fn playback_controls(
                 ("file", "open_file_mode_file"),
                 ("folder", "open_file_mode_folder"),
                 ("folder_and_subfolders", "open_file_mode_subfolders"),
+            ],
+            catalog,
+        ),
+        choice_labeled(
+            SettingId::VideoPlaylistLinkChoice,
+            "video_playlist_link_choice",
+            &settings.video_playlist_link_choice,
+            &[
+                ("ask", "link_choice_ask"),
+                ("video", "link_choice_always_video"),
+                ("playlist", "link_choice_always_playlist"),
             ],
             catalog,
         ),
@@ -1211,6 +1233,18 @@ fn download_controls(
             SettingId::EmbedThumbnail,
             "embed_thumbnail",
             settings.embed_thumbnail,
+            catalog,
+        ),
+        checkbox(
+            SettingId::EmbedChapters,
+            "embed_chapters",
+            settings.embed_chapters,
+            catalog,
+        ),
+        checkbox(
+            SettingId::SponsorblockRemove,
+            "sponsorblock_remove",
+            settings.sponsorblock_remove,
             catalog,
         ),
         checkbox(
@@ -1846,9 +1880,9 @@ mod tests {
         );
         // macOS adds "Import data from Windows" after "Set default player".
         let mac = usize::from(cfg!(target_os = "macos"));
-        // 2.1 appends "Media controls", "Global shortcuts" and the four
-        // import and export commands.
-        assert_eq!(model.controls.len(), 24 + mac);
+        // 2.1 adds the yt-dlp channel and appends "Media controls",
+        // "Global shortcuts" and the four import and export commands.
+        assert_eq!(model.controls.len(), 25 + mac);
         assert!(matches!(
             &model.controls[0],
             SettingsControl::Choice {
@@ -1985,21 +2019,23 @@ mod tests {
     fn implemented_sections_preserve_complete_control_counts() {
         let settings = SettingsDocument::default();
         let expected = [
-            // 2.1 appends integrations and the four import and export commands.
+            // 2.1 adds the yt-dlp channel and appends integrations, global
+            // shortcuts and the four import and export commands.
             (
                 SettingsSection::General,
-                24 + usize::from(cfg!(target_os = "macos")),
+                25 + usize::from(cfg!(target_os = "macos")),
             ),
             // 19 Python items, Spotify, the four 2.1 entries and the reset button.
             (SettingsSection::MainMenu, 25),
             // 2.1 adds "Custom seek amount" and "Open a file from the
             // system with" and appends "Audio processing" and "Playback
             // transitions".
-            (SettingsSection::Playback, 39),
+            (SettingsSection::Playback, 40),
             // 2.1 appends "Bass boost intensity".
             (SettingsSection::Equalizer, 4),
-            // 2.1 appends "Converter options".
-            (SettingsSection::Downloads, 24),
+            // 2.1 adds chapters and SponsorBlock and appends "Converter
+            // options".
+            (SettingsSection::Downloads, 26),
             (SettingsSection::Library, 7),
             (SettingsSection::Podcasts, 10),
             (SettingsSection::Notifications, 5),

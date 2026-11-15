@@ -8312,12 +8312,21 @@ unsafe fn activate_direct_link(window: HWND, action: &str) {
     };
     // A link to a video in a playlist asks which of the two is meant.
     let item = match apricot_app::youtube_extras::video_and_playlist(&link) {
-        Some((video, playlist)) => {
-            let Some(catalog) = state(window)
-                .map(|state| apricot_app::embedded_catalog(&state.application.settings().language))
-            else {
+        Some((video, playlist)) => 'choice: {
+            let Some(state) = state(window) else {
                 return;
             };
+            match state
+                .application
+                .settings()
+                .video_playlist_link_choice
+                .as_str()
+            {
+                "video" => break 'choice video,
+                "playlist" => break 'choice playlist,
+                _ => {}
+            }
+            let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
             let form = apricot_shell::youtube_extras::link_choice_form(&catalog);
             let Some(values) = crate::feature_form_win32::show(window, &form) else {
                 return;
@@ -9462,6 +9471,8 @@ fn download_options_from_settings(
             .collect(),
         embed_metadata: settings.embed_metadata,
         embed_thumbnail: settings.embed_thumbnail,
+        embed_chapters: settings.embed_chapters,
+        sponsorblock_remove: settings.sponsorblock_remove,
         restrict_filenames: settings.restrict_filenames,
         concurrent_fragments: u32::try_from(settings.concurrent_fragments.clamp(1, 32))
             .unwrap_or(4),
@@ -13757,6 +13768,9 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_global_shortcuts" => edit_global_shortcuts(window),
         "open_recents" => open_recents(window),
         "rename_file" => rename_active_file(window),
+        "open_in_browser" | "open_channel_in_browser" => {
+            open_active_in_browser(window, action_id == "open_channel_in_browser");
+        }
         "open_from_clipboard" => open_from_clipboard(window),
         "copy_file_to_clipboard" | "show_in_folder" | "file_properties" => {
             active_file_action(window, action_id);
@@ -16088,8 +16102,70 @@ unsafe fn active_local_file(window: HWND) -> Option<PathBuf> {
     apricot_shell::file_tools::local_file(active_media_item(window).as_ref())
 }
 
-/// Renames the selected or playing local file.
+/// Opens the item's page or its channel's page in the browser.
+unsafe fn open_active_in_browser(window: HWND, channel: bool) {
+    let address =
+        apricot_shell::file_tools::browser_address(active_media_item(window).as_ref(), channel);
+    let Some(state) = state(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    match address {
+        Some(address) if apricot_platform::shell::open_url(&address).is_ok() => {}
+        Some(_) => show_error_message(window, catalog.text("file_action_unavailable")),
+        None => set_status(state, catalog.text("browser_address_missing"), true),
+    }
+}
+
+/// A new name for the selected favorite.
+unsafe fn rename_selected_favorite(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let Ok(index) = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0) else {
+        return;
+    };
+    let Some(title) = state
+        .application
+        .favorites()
+        .get(index)
+        .map(|item| item.title.clone())
+    else {
+        return;
+    };
+    state.modal_open = true;
+    let values = crate::feature_form_win32::show(
+        window,
+        &apricot_shell::file_tools::favorite_name_form(&catalog, &title),
+    );
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = false;
+    let Some(values) = values else {
+        return;
+    };
+    let name = values
+        .get("name")
+        .and_then(apricot_shell::FormValue::text)
+        .unwrap_or("");
+    match state.application.rename_favorite(index, name) {
+        Ok(true) => {
+            refresh_media_collection(state, true);
+            SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(index)), None);
+        }
+        Ok(false) => show_error_message(window, catalog.text("rename_file_empty")),
+        Err(error) => show_error_message(window, &error.to_string()),
+    }
+}
+
+/// Renames the selected or playing local file; in Favorites the entry.
 unsafe fn rename_active_file(window: HWND) {
+    if state(window).is_some_and(|state| state.view == MainView::Favorites) {
+        rename_selected_favorite(window);
+        return;
+    }
     let Some(state) = state_mut(window) else {
         return;
     };

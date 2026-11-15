@@ -303,6 +303,8 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("rename_file", "files"),
     ("show_in_folder", "files"),
     ("file_properties", "files"),
+    ("open_in_browser", "youtube"),
+    ("open_channel_in_browser", "youtube"),
 ];
 
 /// The category an action is listed under; unknown ids fall back to General.

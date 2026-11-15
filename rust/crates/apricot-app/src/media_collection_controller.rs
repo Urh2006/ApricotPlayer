@@ -177,6 +177,26 @@ impl MediaCollectionController {
         self.remove(index)
     }
 
+    /// 2.1: gives one entry a new title and persists it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed collection cannot be persisted.
+    pub fn rename(
+        &mut self,
+        index: usize,
+        title: &str,
+    ) -> Result<bool, MediaCollectionControllerError> {
+        let title = title.trim();
+        if index >= self.items.len() || title.is_empty() {
+            return Ok(false);
+        }
+        let mut candidate = self.items.clone();
+        title.clone_into(&mut candidate[index].title);
+        self.commit(candidate)?;
+        Ok(true)
+    }
+
     /// Clears the collection atomically.
     ///
     /// # Errors

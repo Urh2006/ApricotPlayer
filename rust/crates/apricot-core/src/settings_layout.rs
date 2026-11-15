@@ -71,6 +71,7 @@ const GENERAL: &[SettingId] = &[
     SettingId::DirectLinkEnterAction,
     SettingId::ShowShortcutsInLabels,
     SettingId::AutoUpdateYtdlp,
+    SettingId::YtdlpUpdateChannel,
     SettingId::AutoUpdateApp,
     SettingId::AppUpdateIntervalHours,
     SettingId::AppUpdateNotifications,
@@ -117,6 +118,7 @@ const PLAYBACK: &[SettingId] = &[
     SettingId::SeekSeconds,
     SettingId::CustomSeekSeconds,
     SettingId::OpenFileMode,
+    SettingId::VideoPlaylistLinkChoice,
     SettingId::VolumeStep,
     SettingId::DefaultVolume,
     SettingId::VolumeBoostByDefault,
@@ -151,6 +153,8 @@ const DOWNLOADS: &[SettingId] = &[
     SettingId::SubtitleLanguages,
     SettingId::EmbedMetadata,
     SettingId::EmbedThumbnail,
+    SettingId::EmbedChapters,
+    SettingId::SponsorblockRemove,
     SettingId::RestrictFilenames,
     SettingId::OpenFolderAfterDownload,
     SettingId::PopupWhenDownloadComplete,
@@ -301,9 +305,8 @@ mod tests {
                 .iter()
                 .flat_map(|section| section.reset_fields)
                 .count(),
-            // 112 Python placements and the 2.1 bass boost intensity,
-            // custom seek amount and opened file mode.
-            115
+            // 112 Python placements and seven 2.1 settings.
+            119
         );
         assert!(
             SETTINGS_SECTIONS
@@ -322,7 +325,7 @@ mod tests {
         {
             *placement_counts.entry(*id).or_default() += 1;
         }
-        assert_eq!(placement_counts.len(), 114);
+        assert_eq!(placement_counts.len(), 118);
         assert_eq!(
             placement_counts.get(&SettingId::AppUpdateNotifications),
             Some(&2)

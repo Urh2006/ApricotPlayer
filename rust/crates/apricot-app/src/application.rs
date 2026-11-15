@@ -778,6 +778,19 @@ impl Application {
         self.state.favorites.remove(index)
     }
 
+    /// 2.1: a new title for one favorite.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the changed favorites file cannot be persisted.
+    pub fn rename_favorite(
+        &mut self,
+        index: usize,
+        title: &str,
+    ) -> Result<bool, MediaCollectionControllerError> {
+        self.state.favorites.rename(index, title)
+    }
+
     /// Removes a matching favorite by its durable URL or local path.
     ///
     /// # Errors

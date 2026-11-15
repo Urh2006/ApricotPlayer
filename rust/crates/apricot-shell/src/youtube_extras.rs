@@ -258,6 +258,16 @@ impl Shell {
         let Some((video, playlist)) = apricot_app::youtube_extras::video_and_playlist(link) else {
             return Some(item);
         };
+        match self
+            .application
+            .settings()
+            .video_playlist_link_choice
+            .as_str()
+        {
+            "video" => return Some(video),
+            "playlist" => return Some(playlist),
+            _ => {}
+        }
         let values = ui.feature_form(&link_choice_form(&self.catalog()))?;
         Some(if wants_playlist(&values) {
             playlist

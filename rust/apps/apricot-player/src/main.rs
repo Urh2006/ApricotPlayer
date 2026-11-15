@@ -207,11 +207,11 @@ fn run_qualification(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn s
         .iter()
         .any(|argument| argument == "--qualification-smoke")
     {
-        assert_eq!(SettingId::ALL.len(), 119);
-        // 91 Python actions, the 14 Spotify ones and the 122 of 2.1; 19 Python
+        assert_eq!(SettingId::ALL.len(), 123);
+        // 91 Python actions, the 14 Spotify ones and the 124 of 2.1; 19 Python
         // menu items, Spotify and the four 2.1 entries.
         assert_eq!(apricot_core::PYTHON_BASELINE_ACTIONS, 91);
-        assert_eq!(ACTIONS.len(), 227);
+        assert_eq!(ACTIONS.len(), 229);
         assert_eq!(CUSTOMIZABLE_MAIN_MENU.len(), 24);
         assert_eq!(LANGUAGES.len(), 27);
         assert!(!UpdateChannel::LocalOnly.allows_remote_install());

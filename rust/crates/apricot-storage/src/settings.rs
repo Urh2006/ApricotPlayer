@@ -94,6 +94,14 @@ pub struct SettingsDocument {
     /// 2.1: a file opened from the system plays alone ("file"), with its
     /// folder ("folder") or with its folder and subfolders.
     pub open_file_mode: String,
+    /// 2.1: downloads cut sponsor, self-promotion and interaction segments.
+    pub sponsorblock_remove: bool,
+    /// 2.1: downloads keep the video's chapters.
+    pub embed_chapters: bool,
+    /// 2.1: stable, nightly or master builds of yt-dlp.
+    pub ytdlp_update_channel: String,
+    /// 2.1: a link to a video in a playlist: ask, video or playlist.
+    pub video_playlist_link_choice: String,
     pub volume_step: i64,
     pub default_volume: i64,
     pub volume_boost_by_default: bool,
@@ -221,6 +229,10 @@ impl Default for SettingsDocument {
             seek_seconds: 5.0,
             custom_seek_seconds: 15,
             open_file_mode: "file".to_owned(),
+            sponsorblock_remove: false,
+            embed_chapters: false,
+            ytdlp_update_channel: "stable".to_owned(),
+            video_playlist_link_choice: "ask".to_owned(),
             volume_step: 5,
             default_volume: 100,
             volume_boost_by_default: false,
@@ -380,6 +392,18 @@ impl SettingsDocument {
             "file" | "folder" | "folder_and_subfolders"
         ) {
             "file".clone_into(&mut self.open_file_mode);
+        }
+        if !matches!(
+            self.ytdlp_update_channel.as_str(),
+            "stable" | "nightly" | "master"
+        ) {
+            "stable".clone_into(&mut self.ytdlp_update_channel);
+        }
+        if !matches!(
+            self.video_playlist_link_choice.as_str(),
+            "ask" | "video" | "playlist"
+        ) {
+            "ask".clone_into(&mut self.video_playlist_link_choice);
         }
         self.speed_step = finite_or(self.speed_step, 0.01).clamp(0.01, 0.25);
         self.pitch_step = finite_or(self.pitch_step, 0.01).clamp(0.01, 0.25);

@@ -75,6 +75,10 @@ define_setting_ids! {
     SeekSeconds => "seek_seconds",
     CustomSeekSeconds => "custom_seek_seconds",
     OpenFileMode => "open_file_mode",
+    SponsorblockRemove => "sponsorblock_remove",
+    EmbedChapters => "embed_chapters",
+    YtdlpUpdateChannel => "ytdlp_update_channel",
+    VideoPlaylistLinkChoice => "video_playlist_link_choice",
     VolumeStep => "volume_step",
     DefaultVolume => "default_volume",
     VolumeBoostByDefault => "volume_boost_by_default",
@@ -148,9 +152,9 @@ mod tests {
     use super::SettingId;
 
     #[test]
-    fn baseline_contains_119_unique_settings() {
+    fn baseline_contains_123_unique_settings() {
         let keys: HashSet<_> = SettingId::ALL.iter().map(|id| id.key()).collect();
-        assert_eq!(SettingId::ALL.len(), 119);
+        assert_eq!(SettingId::ALL.len(), 123);
         assert_eq!(keys.len(), SettingId::ALL.len());
     }
 }

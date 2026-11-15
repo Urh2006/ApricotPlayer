@@ -138,6 +138,7 @@ impl Shell {
             return;
         };
         self.updates.ytdlp_check_running = true;
+        let channel = self.application.settings().ytdlp_update_channel.clone();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let executable = apricot_platform::app_update::preferred_ytdlp_executable(&bundled);
@@ -152,8 +153,9 @@ impl Shell {
                     let mut transport =
                         apricot_platform::app_update::update_transport(env!("CARGO_PKG_VERSION"));
                     let updating = sender.clone();
-                    apricot_updater::update_ytdlp_component(
+                    apricot_updater::update_ytdlp_component_from(
                         transport.as_mut(),
+                        apricot_updater::ytdlp_release_api_url(&channel),
                         &current,
                         &components,
                         &mut || {

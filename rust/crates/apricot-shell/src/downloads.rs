@@ -405,6 +405,8 @@ fn download_options_from_settings(
             .collect(),
         embed_metadata: settings.embed_metadata,
         embed_thumbnail: settings.embed_thumbnail,
+        embed_chapters: settings.embed_chapters,
+        sponsorblock_remove: settings.sponsorblock_remove,
         restrict_filenames: settings.restrict_filenames,
         concurrent_fragments: u32::try_from(settings.concurrent_fragments.clamp(1, 32))
             .unwrap_or(4),
