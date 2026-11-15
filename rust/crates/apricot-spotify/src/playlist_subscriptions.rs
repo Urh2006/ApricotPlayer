@@ -99,6 +99,9 @@ pub struct SubscriptionReport {
     pub document: SubscriptionDocument,
     pub errors: Vec<String>,
     pub checked: usize,
+    /// The errors came from a check that works in the background, so they
+    /// are not shown in a message box (review 2.1).
+    pub background: bool,
 }
 
 /// The subscriptions of one account.
@@ -260,6 +263,10 @@ impl SubscriptionDocument {
         }
         let mut changes = compare(&entry.baseline, &snapshot, now);
         if snapshot.revision != entry.baseline.revision {
+            // Every own move is left out at once, then the order is compared
+            // once: several own moves never look like a change by someone
+            // else (review 2.1).
+            let mut moved = BTreeSet::new();
             for local in entry.local_changes.drain(..) {
                 for uri in local.added {
                     if let Some(index) = changes.added.iter().position(|track| track.uri == uri) {
@@ -275,24 +282,20 @@ impl SubscriptionDocument {
                         changes.removed.remove(index);
                     }
                 }
-                if !local.moved_uids.is_empty() {
-                    let before = keys(&entry.baseline.tracks);
-                    let after = keys(&snapshot.tracks);
-                    let remove: BTreeSet<_> = local
-                        .moved_uids
-                        .into_iter()
-                        .map(|uid| format!("uid:{uid}"))
-                        .collect();
-                    let old: Vec<_> = before
-                        .iter()
-                        .filter(|key| !remove.contains(*key) && after.contains(key))
-                        .collect();
-                    let new: Vec<_> = after
-                        .iter()
-                        .filter(|key| !remove.contains(*key) && before.contains(key))
-                        .collect();
-                    changes.reordered = old != new;
-                }
+                moved.extend(local.moved_uids.into_iter().map(|uid| format!("uid:{uid}")));
+            }
+            if !moved.is_empty() {
+                let before = keys(&entry.baseline.tracks);
+                let after = keys(&snapshot.tracks);
+                let old: Vec<_> = before
+                    .iter()
+                    .filter(|key| !moved.contains(*key) && after.contains(key))
+                    .collect();
+                let new: Vec<_> = after
+                    .iter()
+                    .filter(|key| !moved.contains(*key) && before.contains(key))
+                    .collect();
+                changes.reordered = old != new;
             }
         }
         entry.name.clone_from(&snapshot.name);
@@ -315,6 +318,14 @@ impl SubscriptionDocument {
         self.outbox.push(changes.clone());
         Ok(Some(changes))
     }
+    /// A check that failed waits for the interval like one that worked,
+    /// instead of being tried again every minute (review 2.1).
+    pub fn note_failed_check(&mut self, uri: &str, now: u64) {
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.uri == uri) {
+            entry.last_checked = now;
+        }
+    }
+
     pub fn due(&self, now: u64, force: bool) -> Vec<String> {
         self.entries
             .iter()
@@ -381,6 +392,7 @@ pub async fn execute(
     let now = now();
     let mut errors = Vec::new();
     let mut checked = 0;
+    let background = matches!(command, SubscriptionCommand::Check { force: false });
     let message = match command {
         SubscriptionCommand::Subscribe(uri) => {
             let snapshot = snapshot(api, session, &uri)
@@ -418,9 +430,15 @@ pub async fn execute(
                 match snapshot(api, session, &uri).await {
                     Ok(snapshot) => match document.apply_snapshot(snapshot, &own_uri, now, false) {
                         Ok(_) => checked += 1,
-                        Err(error) => errors.push(error),
+                        Err(error) => {
+                            document.note_failed_check(&uri, now);
+                            errors.push(error);
+                        }
                     },
-                    Err(error) => errors.push(format!("{uri}: {error}")),
+                    Err(error) => {
+                        document.note_failed_check(&uri, now);
+                        errors.push(format!("{uri}: {error}"));
+                    }
                 }
             }
             // A scheduled check works in the background and says nothing;
@@ -440,6 +458,7 @@ pub async fn execute(
         document,
         errors,
         checked,
+        background,
     })
 }
 
@@ -552,6 +571,40 @@ mod tests {
             tracks: tracks.iter().map(|s| item(s)).collect(),
         }
     }
+    /// Review 2.1: two own moves together are no change by someone else.
+    #[test]
+    fn several_own_moves_are_not_a_reorder() {
+        let with_uids = |tracks: &[&str], revision: &str| {
+            let mut snapshot = list("spotify:user:other", tracks, revision);
+            for track in &mut snapshot.tracks {
+                track.uid = Some(format!("u{}", track.uri));
+            }
+            snapshot
+        };
+        let mut doc = SubscriptionDocument::default();
+        assert!(
+            doc.subscribe(with_uids(&["a", "b", "c", "d"], "1"), "spotify:user:me", 1)
+                .unwrap()
+        );
+        for uid in ["ua", "ub"] {
+            doc.record_local_edit(&crate::LibraryEdit::MoveInPlaylist {
+                playlist: "spotify:playlist:list".into(),
+                uid: uid.into(),
+                before: false,
+                other_uid: String::new(),
+            });
+        }
+        let changes = doc
+            .apply_snapshot(
+                with_uids(&["c", "a", "d", "b"], "2"),
+                "spotify:user:me",
+                2,
+                true,
+            )
+            .unwrap();
+        assert!(changes.is_none_or(|changes| !changes.reordered));
+    }
+
     #[test]
     fn duplicate_occurrences_and_reordering_are_distinct_changes() {
         let a = list("spotify:user:other", &["a", "b", "a"], "1");

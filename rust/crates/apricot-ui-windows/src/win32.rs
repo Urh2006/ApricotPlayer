@@ -683,6 +683,12 @@ struct WindowState {
     download_progress_task_id: Option<u64>,
     /// The generation whose CUE track end was reached (review 2.1).
     segment_ended: Option<u64>,
+    /// The screen a podcast search or category was asked from.
+    podcast_search_view: Option<MainView>,
+    /// Counts the screens shown, so late source answers stay away from a
+    /// screen the user moved to (review 2.1).
+    view_changes: u64,
+    last_shown_view: MainView,
     /// Player events that arrived while a modal window was open, handled
     /// in order once it closes (review 2.1).
     deferred_playback: std::collections::VecDeque<apricot_playback::PlaybackUpdate>,
@@ -2247,6 +2253,9 @@ unsafe fn create_controls(
         download_progress_task_ids: HashSet::new(),
         download_progress_task_id: None,
         segment_ended: None,
+        podcast_search_view: None,
+        view_changes: 0,
+        last_shown_view: MainView::MainMenu,
         deferred_playback: std::collections::VecDeque::new(),
         clip_exports: Vec::new(),
         pending_bpm: Vec::new(),
@@ -3428,6 +3437,10 @@ unsafe fn layout_button_row(controls: &[HWND], width: i32, y: i32, margin: i32, 
 
 #[allow(clippy::too_many_lines)]
 unsafe fn set_view_visibility(state: &mut WindowState) {
+    if state.view != state.last_shown_view {
+        state.last_shown_view = state.view;
+        state.view_changes = state.view_changes.wrapping_add(1);
+    }
     let list_visible = matches!(
         state.view,
         MainView::MainMenu
@@ -6091,6 +6104,9 @@ unsafe fn prompt_podcast_search(window: HWND) {
                 })
                 .unwrap_or_default();
             let work = crate::podcast_win32::search_directory(query, country, limit, proxy);
+            if let Some(state) = state_mut(window) {
+                state.podcast_search_view = Some(state.view);
+            }
             start_podcast_work_with_message(window, work, &message);
         }
         Ok(_) => {}
@@ -6317,6 +6333,19 @@ unsafe fn poll_podcast_work(window: HWND) {
             show_error_message(window, &message);
         }
         PodcastWorkResult::FeedsRefreshed { results, silent } => {
+            // The shown episode is found again by its identity, so new
+            // episodes at the top never move the selection (review 2.1).
+            let shown = (state.view == MainView::RssItems)
+                .then(|| {
+                    state
+                        .application
+                        .rss_feeds()
+                        .get(state.current_rss_feed_index)?
+                        .items
+                        .get(state.current_rss_item_index)?
+                        .stable_identity()
+                })
+                .flatten();
             match state
                 .application
                 .apply_rss_refreshes(results, unix_timestamp())
@@ -6364,12 +6393,29 @@ unsafe fn poll_podcast_work(window: HWND) {
                     if state.view == MainView::RssFeeds {
                         refresh_rss_feeds(state, false, None);
                     } else if state.view == MainView::RssItems {
+                        if let Some(row) = shown.and_then(|identity| {
+                            state
+                                .application
+                                .rss_feeds()
+                                .get(state.current_rss_feed_index)?
+                                .items
+                                .iter()
+                                .position(|item| item.stable_identity() == Some(identity.clone()))
+                        }) {
+                            state.current_rss_item_index = row;
+                            state.rss_visible_item_count =
+                                state.rss_visible_item_count.max(row + 1);
+                        }
                         refresh_rss_items(state, false, false);
                     }
                 }
                 Err(error) => show_error_message(window, &error.to_string()),
             }
         }
+        // A late answer opens the results only while the screen it was asked
+        // from is still shown (review 2.1).
+        PodcastWorkResult::DirectorySearched { .. } | PodcastWorkResult::CategoryLoaded { .. }
+            if state.podcast_search_view.take() != Some(state.view) => {}
         PodcastWorkResult::DirectorySearched { query, result } => match result {
             Ok(results) => {
                 state.podcast_search_query = query;
@@ -7278,6 +7324,9 @@ unsafe fn open_selected_podcast_category(window: HWND) {
         return;
     };
     let work = crate::podcast_win32::load_category(category, genre_id, proxy);
+    if let Some(state) = state_mut(window) {
+        state.podcast_search_view = Some(state.view);
+    }
     start_podcast_work_with_message(window, work, &message);
 }
 

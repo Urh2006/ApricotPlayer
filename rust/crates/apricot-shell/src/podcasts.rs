@@ -43,6 +43,9 @@ const PODCAST_SPEED_STEPS: [f64; 19] = [
 /// `pending_podcast_work`).
 #[derive(Default)]
 pub(crate) struct PodcastState {
+    /// The screen a podcast search or category was asked from; its answer
+    /// opens the results only while that screen is still shown (review 2.1).
+    search_view: Option<View>,
     feed: usize,
     item: usize,
     visible_items: usize,
@@ -388,6 +391,22 @@ impl Shell {
     /// Windows `refresh_rss_items`: a batch of `rss_max_items` episodes,
     /// more on End or Down at the last row. The Tab order is Back, Refresh
     /// feed, Play episode, Download episode, Download feed, the list.
+    /// The row of the episode shown at `index` before a refresh, found by
+    /// its identity after it, so new episodes at the top never move the
+    /// selection to another one (review 2.1).
+    pub(crate) fn rss_row_after_refresh(
+        &self,
+        before: Option<&apricot_core::MediaItem>,
+    ) -> Option<usize> {
+        let identity = before?.stable_identity()?;
+        self.application
+            .rss_feeds()
+            .get(self.podcasts.feed)?
+            .items
+            .iter()
+            .position(|item| item.stable_identity().as_ref() == Some(&identity))
+    }
+
     pub(crate) fn refresh_rss_items(
         &mut self,
         ui: &mut dyn ShellUi,
@@ -573,6 +592,7 @@ impl Shell {
             settings.proxy.clone(),
         );
         let message = self.text("podcast_searching").replace("{query}", &query);
+        self.podcasts.search_view = Some(self.view);
         self.start_podcast_work(ui, work, &message);
     }
 
@@ -743,6 +763,17 @@ impl Shell {
                 ui.show_error(&message);
             }
             PodcastWorkResult::FeedsRefreshed { results, silent } => {
+                let shown = (self.view == View::RssItems)
+                    .then(|| {
+                        let row = ui.selected_row()?;
+                        self.application
+                            .rss_feeds()
+                            .get(self.podcasts.feed)?
+                            .items
+                            .get(row)
+                            .cloned()
+                    })
+                    .flatten();
                 match self
                     .application
                     .apply_rss_refreshes(results, unix_timestamp())
@@ -784,13 +815,22 @@ impl Shell {
                         if self.view == View::RssFeeds {
                             self.refresh_rss_feeds(ui, false, None);
                         } else if self.view == View::RssItems {
-                            let selected = ui.selected_row();
+                            let selected = self
+                                .rss_row_after_refresh(shown.as_ref())
+                                .or_else(|| ui.selected_row());
+                            if let Some(row) = selected {
+                                self.podcasts.visible_items =
+                                    self.podcasts.visible_items.max(row + 1);
+                            }
                             self.refresh_rss_items(ui, false, false, selected);
                         }
                     }
                     Err(error) => ui.show_error(&error.to_string()),
                 }
             }
+            PodcastWorkResult::DirectorySearched { .. }
+            | PodcastWorkResult::CategoryLoaded { .. }
+                if self.podcasts.search_view.take() != Some(self.view) => {}
             PodcastWorkResult::DirectorySearched { query, result } => match result {
                 Ok(results) => {
                     self.podcasts.search_query = query;
@@ -961,6 +1001,7 @@ impl Shell {
             genre_id,
             self.application.settings().proxy.clone(),
         );
+        self.podcasts.search_view = Some(self.view);
         self.start_podcast_work(ui, work, &self.text("fetching_category_podcasts"));
     }
 

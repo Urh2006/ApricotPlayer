@@ -414,7 +414,13 @@ impl crate::Shell {
                 .iter()
                 .map(|error| report_text(&catalog, error))
                 .collect();
-            ui.show_error(&errors.join("\n"));
+            // A background check says its failure in the status line; only
+            // Check now interrupts with a message box (review 2.1).
+            if report.background {
+                ui.set_status(&errors.join(" "), false);
+            } else {
+                ui.show_error(&errors.join("\n"));
+            }
         }
     }
 }

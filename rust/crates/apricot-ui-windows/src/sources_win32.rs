@@ -11,13 +11,32 @@ use apricot_shell::{
 pub(super) const TIMER: usize = 8501;
 struct Ui {
     window: HWND,
+    /// The source list kept open between actions (review 2.1).
+    kept: Option<crate::sources_browser_win32::KeptBrowser>,
+}
+impl Ui {
+    const fn new(window: HWND) -> Self {
+        Self { window, kept: None }
+    }
+    /// The window dialogs open over: the kept list, else the main window.
+    fn owner(&self) -> HWND {
+        self.kept.as_ref().map_or(
+            self.window,
+            crate::sources_browser_win32::KeptBrowser::window,
+        )
+    }
+}
+impl Drop for Ui {
+    fn drop(&mut self) {
+        crate::sources_browser_win32::close(&mut self.kept);
+    }
 }
 impl SourcesUi for Ui {
     fn browse(&mut self, browser: &SourceBrowser) -> Option<SourceSelection> {
-        crate::sources_browser_win32::show(self.window, browser)
+        crate::sources_browser_win32::browse(self.window, &mut self.kept, browser)
     }
     fn form(&mut self, form: &FeatureForm) -> Option<FormValues> {
-        crate::feature_form_win32::show(self.window, form)
+        crate::feature_form_win32::show(self.owner(), form)
     }
     fn status(&mut self, message: &str, announce: bool) {
         if !message.is_empty() {
@@ -29,14 +48,16 @@ impl SourcesUi for Ui {
         }
     }
     fn error(&mut self, message: &str) {
-        unsafe { show_error_message(self.window, message) }
+        unsafe { show_error_message(self.owner(), message) }
     }
     fn play(&mut self, item: apricot_core::MediaItem) {
+        // The player takes the place of the list.
+        crate::sources_browser_win32::close(&mut self.kept);
         unsafe { start_media_item(self.window, item, None) }
     }
     fn choose_file(&mut self, title: &str) -> Option<PathBuf> {
         crate::file_dialog_win32::choose_file_with_filters(
-            self.window,
+            self.owner(),
             title,
             &[
                 (
@@ -50,7 +71,7 @@ impl SourcesUi for Ui {
         .flatten()
     }
     fn choose_folder(&mut self, title: &str) -> Option<PathBuf> {
-        crate::folder_dialog_win32::choose_media_folder(self.window, title)
+        crate::folder_dialog_win32::choose_media_folder(self.owner(), title)
     }
     fn copy(&mut self, text: &str) -> bool {
         crate::clipboard_win32::copy_text(self.window, text).is_ok()
@@ -59,7 +80,10 @@ impl SourcesUi for Ui {
         apricot_platform::recording_cue::play(started);
     }
     fn ask_yes_no(&mut self, message: &str) -> bool {
-        unsafe { super::ask_yes_no(self.window, message) }
+        unsafe { super::ask_yes_no(self.owner(), message) }
+    }
+    fn navigation_mark(&self) -> u64 {
+        unsafe { state(self.window) }.map_or(0, |state| state.view_changes)
     }
 }
 pub(super) unsafe fn environment(window: HWND) -> Option<SourcesEnvironment> {
@@ -161,7 +185,7 @@ pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
         return true;
     };
     let mut controller = lend(state);
-    let handled = controller.action(&mut Ui { window }, &environment, id);
+    let handled = controller.action(&mut Ui::new(window), &environment, id);
     let busy = controller.is_busy();
     if let Some(state) = state_mut(window) {
         give_back(state, controller);
@@ -200,7 +224,7 @@ pub(super) unsafe fn resume_after_player(
     };
     let mut controller = lend(state);
     let resumed = controller.resume_after_player(
-        &mut Ui { window },
+        &mut Ui::new(window),
         &environment,
         station.as_deref(),
         channel.as_deref(),
@@ -224,7 +248,7 @@ pub(super) unsafe fn ensure_loaded(window: HWND) {
         return;
     };
     let mut controller = lend(state);
-    controller.ensure_loaded(&mut Ui { window }, &environment);
+    controller.ensure_loaded(&mut Ui::new(window), &environment);
     if let Some(state) = state_mut(window) {
         give_back(state, controller);
     }
@@ -243,7 +267,7 @@ pub(super) unsafe fn poll(window: HWND) {
         return;
     };
     let mut controller = lend(state);
-    let busy = controller.poll(&mut Ui { window }, &environment);
+    let busy = controller.poll(&mut Ui::new(window), &environment);
     if let Some(state) = state_mut(window) {
         give_back(state, controller);
     }
@@ -278,7 +302,7 @@ pub(super) unsafe fn metadata(window: HWND) {
         .map(str::to_owned);
     let mut controller = lend(state);
     controller.stream_metadata(
-        &mut Ui { window },
+        &mut Ui::new(window),
         station.as_deref(),
         title.as_deref(),
         url.as_deref(),
@@ -293,7 +317,7 @@ pub(super) unsafe fn playback_started(window: HWND) {
         return;
     };
     let mut controller = lend(state);
-    controller.playback_started(&mut Ui { window });
+    controller.playback_started(&mut Ui::new(window));
     if let Some(state) = state_mut(window) {
         give_back(state, controller);
     }

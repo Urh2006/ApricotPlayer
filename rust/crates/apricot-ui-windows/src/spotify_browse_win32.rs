@@ -3486,7 +3486,15 @@ pub(super) unsafe fn subscription_report(
             .iter()
             .map(|error| apricot_shell::spotify_subscriptions::report_text(&catalog, error))
             .collect();
-        show_error_message(window, &errors.join("\n"));
+        // A background check says its failure in the status line; only
+        // Check now interrupts with a message box (review 2.1).
+        if report.background {
+            if let Some(state) = state(window) {
+                set_status(state, &errors.join(" "), false);
+            }
+        } else {
+            show_error_message(window, &errors.join("\n"));
+        }
     }
 }
 pub(super) unsafe fn subscription_changes(

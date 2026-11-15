@@ -176,7 +176,7 @@ pub(crate) fn show(mtm: MainThreadMarker, model: &SourceBrowser) -> Option<Sourc
         NSSize::new(796.0, 38.0),
     ));
     content.addSubview(&prompt);
-    let list = List::new(mtm, &model.title);
+    let list = List::new(mtm, &model.list_name);
     list.set_rows(
         model.rows.clone(),
         (!model.rows.is_empty()).then_some(model.selected.min(model.rows.len().saturating_sub(1))),

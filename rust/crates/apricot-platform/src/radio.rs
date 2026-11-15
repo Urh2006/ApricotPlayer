@@ -71,6 +71,48 @@ impl Station {
         Some(item)
     }
 
+    /// The station's name with single spaces.
+    #[must_use]
+    pub fn display_name(&self) -> String {
+        self.name.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// The rows of a station list: the name only, as the details are in
+    /// Details; stations that share a name also say their codec and bit
+    /// rate, so they can be told apart (review 2.1).
+    #[must_use]
+    pub fn list_rows(stations: &[Self]) -> Vec<String> {
+        let names: Vec<String> = stations.iter().map(Self::display_name).collect();
+        stations
+            .iter()
+            .zip(&names)
+            .map(|(station, name)| {
+                let shared = names
+                    .iter()
+                    .filter(|other| other.eq_ignore_ascii_case(name))
+                    .count()
+                    > 1;
+                let quality = [
+                    station.codec.clone(),
+                    if station.bitrate > 0 {
+                        format!("{} kbps", station.bitrate)
+                    } else {
+                        String::new()
+                    },
+                ]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+                if shared && !quality.is_empty() {
+                    format!("{name}, {quality}")
+                } else {
+                    name.clone()
+                }
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn label(&self) -> String {
         [
@@ -280,6 +322,7 @@ impl RadioClient {
     /// # Errors
     ///
     /// Returns an error when the catalog cannot be read.
+    #[allow(clippy::too_many_lines)] // One query, its filters and the local check.
     pub fn stations(&self, request: &RadioRequest) -> Result<RadioPage, RadioError> {
         let mut query = vec![
             ("limit".into(), PAGE_SIZE.to_string()),
@@ -290,6 +333,9 @@ impl RadioClient {
             query.push(("name".into(), request.search.trim().into()));
         }
         let mut category_filters = RadioFilters::default();
+        // A region's country as the catalog names it ("Germany"): regions of
+        // the same name in other countries stay apart (review 2.1).
+        let mut region_country = None;
         let order = match &request.category {
             RadioCategory::All => "name",
             RadioCategory::MostPlayed => "clickcount",
@@ -302,7 +348,13 @@ impl RadioClient {
                 "name"
             }
             RadioCategory::Region { country, name } => {
-                category_filters.country.clone_from(country);
+                if country.len() == 2 {
+                    category_filters.country.clone_from(country);
+                } else if !country.trim().is_empty() {
+                    region_country = Some(country.trim().to_owned());
+                    query.push(("country".into(), country.trim().to_owned()));
+                    query.push(("countryExact".into(), "true".into()));
+                }
                 category_filters.region.clone_from(name);
                 "name"
             }
@@ -375,6 +427,9 @@ impl RadioClient {
             .filter(|station| {
                 !station.stationuuid.is_empty()
                     && station.stream_url().is_some()
+                    && region_country
+                        .as_deref()
+                        .is_none_or(|country| station.country.eq_ignore_ascii_case(country))
                     && request.global_filters.matches(station)
                     && request.local_filters.matches(station)
                     && category_filters.matches(station)
@@ -593,6 +648,25 @@ impl RadioLibrary {
 
 #[cfg(test)]
 mod tests {
+    /// Review 2.1: rows are station names; only stations that share a name
+    /// add their codec and bit rate.
+    #[test]
+    fn station_rows_are_short_and_tell_namesakes_apart() {
+        let station = |name: &str, bitrate: u32| super::Station {
+            name: name.to_owned(),
+            codec: "MP3".to_owned(),
+            bitrate,
+            country: "Germany".to_owned(),
+            ..super::Station::default()
+        };
+        let rows = super::Station::list_rows(&[
+            station("	Rock  FM", 128),
+            station("Jazz", 128),
+            station("Jazz", 320),
+        ]);
+        assert_eq!(rows, ["Rock FM", "Jazz, MP3 128 kbps", "Jazz, MP3 320 kbps"]);
+    }
+
     /// Countries read by name: sorted, with "The" not deciding the letter.
     #[test]
     fn countries_are_sorted_by_the_name_people_read() {

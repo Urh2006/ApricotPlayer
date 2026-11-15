@@ -43,6 +43,9 @@ impl SourceAction {
 #[derive(Clone, Debug)]
 pub struct SourceBrowser {
     pub title: String,
+    /// The list's accessible name; a different one from the title, so a
+    /// screen reader does not say the same words twice (review 2.1).
+    pub list_name: String,
     pub prompt: String,
     pub rows: Vec<String>,
     pub selected: usize,
@@ -69,6 +72,12 @@ pub trait SourcesUi {
     fn cue(&mut self, started: bool);
     /// A warning with Yes and No, No being the default.
     fn ask_yes_no(&mut self, message: &str) -> bool;
+    /// A number that changes whenever the main window shows another screen,
+    /// so work that finishes after the user moved on is dropped instead of
+    /// opening a window over the new screen (review 2.1).
+    fn navigation_mark(&self) -> u64 {
+        0
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -119,6 +128,12 @@ pub struct SourcesController {
     blocked: BTreeSet<String>,
     radio: RadioLibrary,
     station_rows: Vec<Station>,
+    /// Pages in a row that the filters left empty (review 2.1).
+    radio_empty_pages: u8,
+    /// `Some(true)` while the list shows the radio favorites, `Some(false)`
+    /// the recently played; Refresh then reads that list again and catalog
+    /// filters do not apply (review 2.1).
+    radio_personal: Option<bool>,
     station_selected: usize,
     request: RadioRequest,
     radio_has_more: bool,
@@ -134,6 +149,8 @@ pub struct SourcesController {
     recorder: Option<RecordingSession>,
     available_sources: Vec<CaptureSource>,
     pending: Option<Receiver<Result<Work, String>>>,
+    /// The main window's screen when `pending` was started.
+    pending_mark: u64,
     /// The localized "Loading" announcement of the current language.
     loading: String,
     hub_selected: usize,
@@ -144,6 +161,9 @@ pub struct SourcesController {
     episode_selected: usize,
     /// The IPTV channel that plays, for its programme on request.
     playing_iptv: Option<String>,
+    /// The playing channel and its source's guide, kept apart from what is
+    /// browsed, so another source's list never answers for it (review 2.1).
+    playing_iptv_context: Option<(IptvChannel, EpgGuide)>,
     /// "Now: programme", spoken after the player names the channel.
     pending_programme: Option<String>,
     /// The recording shortcut asked for a source first; record after it.
@@ -174,6 +194,8 @@ impl Default for SourcesController {
             },
             radio,
             station_rows: Vec::new(),
+            radio_empty_pages: 0,
+            radio_personal: None,
             station_selected: 0,
             radio_has_more: false,
             iptv_sources: Vec::new(),
@@ -188,6 +210,7 @@ impl Default for SourcesController {
             recorder: None,
             available_sources: Vec::new(),
             pending: None,
+            pending_mark: 0,
             loading: String::new(),
             hub_selected: 0,
             iptv_selected: 0,
@@ -195,6 +218,7 @@ impl Default for SourcesController {
             episode_series: None,
             episode_selected: 0,
             playing_iptv: None,
+            playing_iptv_context: None,
             pending_programme: None,
             start_after_sources: false,
             recording_since: String::new(),
@@ -378,6 +402,7 @@ impl SourcesController {
     ) {
         let (send, receive) = mpsc::channel();
         self.pending = Some(receive);
+        self.pending_mark = ui.navigation_mark();
         std::thread::spawn(move || {
             let _ = send.send(work());
         });
@@ -485,6 +510,7 @@ impl SourcesController {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // One arm for each kind of finished work.
     pub fn poll(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) -> bool {
         self.poll_recording(ui, environment);
         let Some(pending) = self.pending.as_ref() else {
@@ -499,6 +525,11 @@ impl SourcesController {
                 .to_owned()),
         };
         self.pending = None;
+        // The user went to another screen meanwhile: the late answer would
+        // take the focus from it.
+        if ui.navigation_mark() != self.pending_mark {
+            return self.is_busy();
+        }
         match result {
             Err(error) => ui.error(&error),
             Ok(Work::RadioPage(page)) => {
@@ -519,6 +550,16 @@ impl SourcesController {
                 }
                 self.request.offset = page.next_offset;
                 self.radio_has_more = page.has_more;
+                // Filters can leave a whole page empty while more follow:
+                // the next pages are read, up to ten, before "no stations"
+                // (review 2.1).
+                let nothing_new = self.station_rows.len() == first_new;
+                if nothing_new && page.has_more && self.radio_empty_pages < 10 {
+                    self.radio_empty_pages += 1;
+                    self.load_radio(ui, environment, false);
+                    return self.is_busy();
+                }
+                self.radio_empty_pages = 0;
                 let screen = if self.station_rows.is_empty() {
                     ui.status(environment.catalog().text("radio_no_stations"), true);
                     RadioScreen::Menu
@@ -563,6 +604,7 @@ impl SourcesController {
                     self.player_return =
                         Some((SourceReturn::Iptv(self.opening_from), channel.id.clone()));
                     self.playing_iptv = Some(channel.id.clone());
+                    self.playing_iptv_context = Some((channel.clone(), self.guide.clone()));
                     // The player names the channel when it starts; the
                     // programme follows with its first stream details.
                     let now = chrono::Utc::now().timestamp();
@@ -637,6 +679,13 @@ impl SourcesController {
         if self.playing_iptv.is_none() {
             self.pending_programme = None;
         }
+        if self
+            .playing_iptv_context
+            .as_ref()
+            .is_some_and(|(channel, _)| Some(channel.id.as_str()) != iptv_channel)
+        {
+            self.playing_iptv_context = None;
+        }
         let Some(station_id) = station_id else {
             self.metadata_identity.clear();
             self.metadata_title.clear();
@@ -677,6 +726,7 @@ impl SourcesController {
         let catalog = environment.catalog();
         SourceBrowser {
             title: title.into(),
+            list_name: title.into(),
             prompt: catalog.text("sources_browser_prompt").to_owned(),
             rows,
             selected,
@@ -750,6 +800,7 @@ impl SourcesController {
                 self.load_radio(ui, environment, true);
             }
             2 | 3 => {
+                self.radio_personal = Some(choice.index == 2);
                 self.station_rows = if choice.index == 2 {
                     self.radio.favorites.clone()
                 } else {
@@ -828,6 +879,8 @@ impl SourcesController {
             self.station_rows.clear();
             self.station_selected = 0;
             self.request.offset = 0;
+            self.radio_empty_pages = 0;
+            self.radio_personal = None;
         }
         self.request.global_filters = self.radio.global_filters.clone();
         self.request.local_filters = self
@@ -863,15 +916,20 @@ impl SourcesController {
                 ("radio_copy_name", catalog.text("radio_copy_name")),
                 ("radio_website", catalog.text("radio_website")),
                 ("radio_vote", catalog.text("radio_vote")),
-                ("radio_filters", catalog.text("radio_filters")),
+            ];
+            // Catalog filters do not apply to a personal list.
+            if self.radio_personal.is_none() {
+                actions.push(("radio_filters", catalog.text("radio_filters")));
+            }
+            actions.extend([
                 ("radio_refresh", catalog.text("radio_refresh")),
                 ("radio_search", catalog.text("radio_search_stations")),
                 ("radio_clear_history", catalog.text("radio_clear_history")),
-            ];
+            ]);
             if self.radio_has_more {
                 actions.push(("radio_more", catalog.text("radio_more")));
             }
-            let rows = self.station_rows.iter().map(Station::label).collect();
+            let rows = Station::list_rows(&self.station_rows);
             let mut browser = Self::browser(
                 environment,
                 catalog.text("radio_stations"),
@@ -879,6 +937,7 @@ impl SourcesController {
                 self.station_selected,
                 &actions,
             );
+            catalog.text("radio_title").clone_into(&mut browser.title);
             // The menu says what the command does to the selected station.
             if let Some(favorite) = browser
                 .actions
@@ -910,6 +969,20 @@ impl SourcesController {
                     return None;
                 }
                 "radio_refresh" => {
+                    if let Some(favorites) = self.radio_personal {
+                        self.station_rows = if favorites {
+                            self.radio.favorites.clone()
+                        } else {
+                            self.radio.recent.clone()
+                        };
+                        if self.station_rows.is_empty() {
+                            ui.status(catalog.text("radio_no_stations"), true);
+                            return Some(RadioScreen::Menu);
+                        }
+                        self.station_selected =
+                            self.station_selected.min(self.station_rows.len() - 1);
+                        continue;
+                    }
                     self.load_radio(ui, environment, true);
                     return None;
                 }
@@ -927,7 +1000,14 @@ impl SourcesController {
                         next.recent.clear();
                         let previous = std::mem::replace(&mut self.radio, next);
                         match self.save_radio(environment) {
-                            Ok(()) => ui.status(catalog.text("radio_history_cleared"), true),
+                            Ok(()) => {
+                                ui.status(catalog.text("radio_history_cleared"), true);
+                                // The shown history is gone too.
+                                if self.radio_personal == Some(false) {
+                                    self.station_rows.clear();
+                                    return Some(RadioScreen::Menu);
+                                }
+                            }
                             Err(error) => {
                                 self.radio = previous;
                                 ui.error(&error);
@@ -1102,7 +1182,7 @@ impl SourcesController {
         self.request.category = match kind {
             DirectoryKind::Countries => RadioCategory::Country(entry.iso_3166_1.clone()),
             DirectoryKind::Regions => RadioCategory::Region {
-                country: String::new(),
+                country: entry.country.clone(),
                 name: entry.name.clone(),
             },
             DirectoryKind::Languages => RadioCategory::Language(entry.name.clone()),
@@ -1134,6 +1214,7 @@ impl SourcesController {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // One form with all its fields.
     fn radio_filters(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) -> bool {
         let catalog = environment.catalog();
         let key = format!("{:?}", self.request.category);
@@ -1203,7 +1284,7 @@ impl SourcesController {
             let value = number(&values, key).clamp(0.0, 10000.0).round() as u32;
             value
         };
-        let filters = RadioFilters {
+        let typed = RadioFilters {
             country: text(&values, "country"),
             region: text(&values, "region"),
             language: text(&values, "language"),
@@ -1214,12 +1295,25 @@ impl SourcesController {
             only_working: checked(&values, "working"),
             https_only: checked(&values, "https"),
         };
+        // The form shows this list's filters; only the fields the user
+        // changed go to the chosen scope, so saving for all lists keeps the
+        // filters already set there (review 2.1).
+        let global = choice(&values, "scope") == 1;
+        let filters = changed_filters(
+            &local,
+            &typed,
+            if global {
+                self.radio.global_filters.clone()
+            } else {
+                local.clone()
+            },
+        );
         if filters.maximum_bitrate > 0 && filters.maximum_bitrate < filters.minimum_bitrate {
             ui.error(catalog.text("radio_filter_bitrate_order"));
             return false;
         }
         let previous = self.radio.clone();
-        if choice(&values, "scope") == 1 {
+        if global {
             self.radio.global_filters = filters;
         } else {
             self.radio.local_filters.insert(key, filters);
@@ -1971,13 +2065,18 @@ impl SourcesController {
     /// The programme now and next of the IPTV channel that plays.
     fn playing_programme(&self, catalog: &TranslationCatalog) -> Option<String> {
         let id = self.playing_iptv.as_deref()?;
-        let channel = self
-            .channels
-            .iter()
-            .chain(&self.episodes)
-            .find(|channel| channel.id == id)?;
+        let (channel, guide) = match &self.playing_iptv_context {
+            Some((channel, guide)) if channel.id == id => (channel, guide),
+            _ => (
+                self.channels
+                    .iter()
+                    .chain(&self.episodes)
+                    .find(|channel| channel.id == id)?,
+                &self.guide,
+            ),
+        };
         let now = chrono::Utc::now().timestamp();
-        let (current, next) = self.guide.now_next(&channel.epg_id, now);
+        let (current, next) = guide.now_next(&channel.epg_id, now);
         let mut parts = Vec::new();
         for (key, programme) in [("iptv_now", current), ("iptv_next", next)] {
             if let Some(programme) = programme {
@@ -2535,6 +2634,52 @@ fn source_label(catalog: &TranslationCatalog, source: &CaptureSource) -> String 
     catalog.text(key).replace("{name}", name)
 }
 
+/// `target` with the fields of `typed` that differ from what the form
+/// showed (`shown`).
+#[cfg(test)]
+mod filter_tests {
+    /// Review 2.1: saving one changed field for all lists keeps the others.
+    #[test]
+    fn only_changed_filter_fields_reach_the_scope() {
+        let shown = super::RadioFilters::default();
+        let mut typed = shown.clone();
+        typed.codec = "MP3".into();
+        let global = super::RadioFilters {
+            country: "SI".into(),
+            ..super::RadioFilters::default()
+        };
+        let saved = super::changed_filters(&shown, &typed, global);
+        assert_eq!(saved.country, "SI");
+        assert_eq!(saved.codec, "MP3");
+    }
+}
+
+fn changed_filters(
+    shown: &RadioFilters,
+    typed: &RadioFilters,
+    mut target: RadioFilters,
+) -> RadioFilters {
+    macro_rules! take {
+        ($($field:ident),*) => {
+            $(if typed.$field != shown.$field {
+                target.$field.clone_from(&typed.$field);
+            })*
+        };
+    }
+    take!(
+        country,
+        region,
+        language,
+        tags,
+        codec,
+        minimum_bitrate,
+        maximum_bitrate,
+        only_working,
+        https_only
+    );
+    target
+}
+
 fn recording_error(catalog: &TranslationCatalog, error: &RecordingError) -> String {
     let key = match error {
         RecordingError::NoSources => "recording_error_no_sources",
@@ -2765,7 +2910,7 @@ mod tests {
 
     impl SourcesUi for Browsing {
         fn browse(&mut self, browser: &SourceBrowser) -> Option<SourceSelection> {
-            self.titles.push(browser.title.clone());
+            self.titles.push(browser.list_name.clone());
             self.rows.push(browser.rows.clone());
             self.answers
                 .pop_front()

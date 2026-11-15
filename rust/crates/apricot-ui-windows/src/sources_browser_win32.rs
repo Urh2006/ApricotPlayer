@@ -17,13 +17,13 @@ use windows::{
                 AppendMenuW, BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
                 DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, GetClientRect,
                 GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW, IsChild, IsDialogMessageW,
-                IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY,
-                LoadCursorW, MF_STRING, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
-                SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TPM_LEFTALIGN,
-                TPM_RETURNCMD, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
-                WM_KEYDOWN, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_EX_DLGMODALFRAME,
-                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK,
+                LBS_NOTIFY, LoadCursorW, MF_STRING, MSG, MoveWindow, PostQuitMessage,
+                RegisterClassW, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+                ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TrackPopupMenu, TranslateMessage,
+                WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
+                WM_CONTEXTMENU, WM_KEYDOWN, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD,
+                WS_EX_DLGMODALFRAME, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -45,16 +45,109 @@ struct State {
     result: Option<SourceSelection>,
 }
 
-pub(crate) fn show(owner: HWND, model: &SourceBrowser) -> Option<SourceSelection> {
-    // SAFETY: The modal loop exclusively owns all dialog controls and state.
-    unsafe { show_inner(owner, model).ok().flatten() }
+/// A list window that stays open between the actions of one source screen,
+/// so Copy, Favorites or Details never close and reopen it and the screen
+/// reader does not announce the window again (review 2.1).
+pub(crate) struct KeptBrowser {
+    window: HWND,
+    state: Box<State>,
+    owner: HWND,
+    owner_enabled: bool,
+    previous: HWND,
 }
 
-#[allow(clippy::too_many_lines)] // Creates the window and runs its modal loop.
-unsafe fn show_inner(
+impl KeptBrowser {
+    pub(crate) const fn window(&self) -> HWND {
+        self.window
+    }
+}
+
+/// Shows `model` in the kept window when it is the same list, else in a new
+/// one, and waits for the user's choice. The window stays open after a
+/// choice; `None` (Back or Escape) closes it.
+pub(crate) fn browse(
     owner: HWND,
+    kept: &mut Option<KeptBrowser>,
     model: &SourceBrowser,
-) -> windows::core::Result<Option<SourceSelection>> {
+) -> Option<SourceSelection> {
+    // SAFETY: The window, its controls and state belong to this thread and
+    // live in `kept` until `close`.
+    unsafe {
+        let reuse = kept.as_ref().is_some_and(|browser| {
+            IsWindow(Some(browser.window)).as_bool() && browser.state.model.title == model.title
+        });
+        if reuse {
+            if let Some(browser) = kept.as_mut() {
+                update(browser, model);
+            }
+        } else {
+            close(kept);
+            *kept = create(owner, model).ok();
+        }
+        let browser = kept.as_mut()?;
+        browser.state.result = None;
+        run(browser.window, &mut browser.state);
+        let result = browser.state.result.take();
+        if !IsWindow(Some(browser.window)).as_bool() {
+            close(kept);
+        }
+        result
+    }
+}
+
+/// Closes the kept window and gives the focus back to where it was.
+pub(crate) fn close(kept: &mut Option<KeptBrowser>) {
+    let Some(browser) = kept.take() else {
+        return;
+    };
+    // SAFETY: As in `browse`.
+    unsafe {
+        if browser.owner_enabled {
+            let _ = EnableWindow(browser.owner, true);
+        }
+        if IsWindow(Some(browser.window)).as_bool() {
+            let _ = DestroyWindow(browser.window);
+        }
+        let _ = SetForegroundWindow(browser.owner);
+        if IsWindow(Some(browser.previous)).as_bool() {
+            let _ = SetFocus(Some(browser.previous));
+        }
+    }
+}
+
+/// The same list with new rows or a new selection: only what changed is
+/// changed, and the focus stays.
+unsafe fn update(browser: &mut KeptBrowser, model: &SourceBrowser) {
+    let state = &mut browser.state;
+    if state.model.rows != model.rows {
+        SendMessageW(state.list, LB_RESETCONTENT, None, None);
+        for row in &model.rows {
+            let row = wide(row);
+            SendMessageW(
+                state.list,
+                LB_ADDSTRING,
+                None,
+                Some(LPARAM(row.as_ptr() as isize)),
+            );
+        }
+    }
+    let selected = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
+    if !model.rows.is_empty() && selected != Some(model.selected.min(model.rows.len() - 1)) {
+        SendMessageW(
+            state.list,
+            LB_SETCURSEL,
+            Some(WPARAM(model.selected.min(model.rows.len() - 1))),
+            None,
+        );
+    }
+    if state.model.list_name != model.list_name {
+        crate::accessibility_win32::set_control_name(state.list, &model.list_name);
+    }
+    state.model = model.clone();
+}
+
+#[allow(clippy::too_many_lines)] // Creates the window and its controls.
+unsafe fn create(owner: HWND, model: &SourceBrowser) -> windows::core::Result<KeptBrowser> {
     let instance = HINSTANCE(GetModuleHandleW(None)?.0);
     let _ = RegisterClassW(&WNDCLASSW {
         cbWndExtra: i32::try_from(size_of::<isize>()).unwrap_or(8),
@@ -95,7 +188,7 @@ unsafe fn show_inner(
         WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(LBS_NOTIFY as u32),
         LIST,
     )?;
-    crate::accessibility_win32::set_control_name(list, &model.title);
+    crate::accessibility_win32::set_control_name(list, &model.list_name);
     for row in &model.rows {
         let row = wide(row);
         SendMessageW(
@@ -158,8 +251,19 @@ unsafe fn show_inner(
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetForegroundWindow(window);
     let _ = SetFocus(Some(list));
+    Ok(KeptBrowser {
+        window,
+        state,
+        owner,
+        owner_enabled,
+        previous,
+    })
+}
+
+/// The modal loop: until a choice is made or the window closes.
+unsafe fn run(window: HWND, state: &mut State) {
     let mut message = MSG::default();
-    while IsWindow(Some(window)).as_bool() {
+    while IsWindow(Some(window)).as_bool() && state.result.is_none() {
         let received = GetMessageW(&raw mut message, None, 0, 0).0;
         if received <= 0 {
             if received == 0 {
@@ -173,7 +277,7 @@ unsafe fn show_inner(
             if key == usize::from(VK_APPS.0)
                 || (key == usize::from(VK_F10.0) && GetKeyState(i32::from(VK_SHIFT.0)) < 0)
             {
-                menu(window, &mut state);
+                menu(window, state);
                 continue;
             }
             if let Some(chord) = crate::shortcut_win32::chord_from_message(&message)
@@ -186,7 +290,7 @@ unsafe fn show_inner(
                     })
                     .map(|action| action.id.to_owned())
             {
-                finish(window, &mut state, &action);
+                finish(window, state, &action);
                 continue;
             }
         }
@@ -195,14 +299,6 @@ unsafe fn show_inner(
             DispatchMessageW(&raw const message);
         }
     }
-    if owner_enabled {
-        let _ = EnableWindow(owner, true);
-    }
-    let _ = SetForegroundWindow(owner);
-    if IsWindow(Some(previous)).as_bool() {
-        let _ = SetFocus(Some(previous));
-    }
-    Ok(state.result.take())
 }
 
 unsafe fn child(
@@ -253,13 +349,13 @@ unsafe fn layout(window: HWND, state: &State) {
     }
 }
 
-unsafe fn finish(window: HWND, state: &mut State, action: &str) {
+/// A choice ends the modal loop; the window stays for the next one.
+unsafe fn finish(_window: HWND, state: &mut State, action: &str) {
     let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
     state.result = Some(SourceSelection {
         index: usize::try_from(selected).unwrap_or_default(),
         action: action.into(),
     });
-    let _ = DestroyWindow(window);
 }
 
 unsafe fn menu(window: HWND, state: &mut State) {
