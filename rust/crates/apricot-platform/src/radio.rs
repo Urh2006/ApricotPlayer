@@ -664,7 +664,10 @@ mod tests {
             station("Jazz", 128),
             station("Jazz", 320),
         ]);
-        assert_eq!(rows, ["Rock FM", "Jazz, MP3 128 kbps", "Jazz, MP3 320 kbps"]);
+        assert_eq!(
+            rows,
+            ["Rock FM", "Jazz, MP3 128 kbps", "Jazz, MP3 320 kbps"]
+        );
     }
 
     /// Countries read by name: sorted, with "The" not deciding the letter.
