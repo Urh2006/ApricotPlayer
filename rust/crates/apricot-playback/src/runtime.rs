@@ -29,6 +29,8 @@ const MAX_BACKLOG: usize = 1024;
 struct OutgoingEngine {
     engine: Box<dyn PlaybackEngine>,
     started: Option<Instant>,
+    /// While paused the crossfade waits (review 2.1).
+    paused_at: Option<Instant>,
     queued: Instant,
     seconds: f64,
     equal_power: bool,
@@ -55,6 +57,39 @@ struct VolumeFade {
     fade_back: bool,
 }
 
+/// A seek that arrives while another waits for its fade: relative steps add
+/// up, an absolute target moves by later relative steps, and a new absolute
+/// target replaces the waiting one. `None` for anything that is not a seek.
+fn combined_seek(pending: &PlaybackCommand, next: &PlaybackCommand) -> Option<PlaybackCommand> {
+    Some(match (pending, next) {
+        (
+            PlaybackCommand::SeekRelative { seconds, exact },
+            PlaybackCommand::SeekRelative {
+                seconds: more,
+                exact: next_exact,
+            },
+        ) => PlaybackCommand::SeekRelative {
+            seconds: seconds + more,
+            exact: *exact || *next_exact,
+        },
+        (
+            PlaybackCommand::SeekAbsolute { seconds, exact },
+            PlaybackCommand::SeekRelative {
+                seconds: more,
+                exact: next_exact,
+            },
+        ) => PlaybackCommand::SeekAbsolute {
+            seconds: (seconds + more).max(0.0),
+            exact: *exact || *next_exact,
+        },
+        (
+            PlaybackCommand::SeekAbsolute { .. } | PlaybackCommand::SeekRelative { .. },
+            PlaybackCommand::SeekAbsolute { .. },
+        ) => next.clone(),
+        _ => return None,
+    })
+}
+
 /// Volume over the last `seconds` of a file: full until then, silent at the end.
 fn end_fade_volume(target: f64, elapsed: f64, duration: f64, seconds: f64) -> Option<f64> {
     if seconds <= 0.0 || !duration.is_finite() || duration <= seconds * 2.0 {
@@ -64,6 +99,7 @@ fn end_fade_volume(target: f64, elapsed: f64, duration: f64, seconds: f64) -> Op
     (remaining < seconds).then(|| target * (remaining / seconds).clamp(0.0, 1.0))
 }
 
+#[allow(clippy::too_many_lines)] // Crossfade, end fade and volume fades in one tick.
 fn tick_transitions(
     active: &mut Option<(u64, Box<dyn PlaybackEngine>)>,
     outgoing: &mut Option<OutgoingEngine>,
@@ -78,7 +114,9 @@ fn tick_transitions(
         return;
     };
     let now = Instant::now();
-    if let Some(old) = outgoing.as_mut() {
+    if let Some(old) = outgoing.as_mut()
+        && old.paused_at.is_none()
+    {
         if old.started.is_none() && position.read(*generation).is_some() {
             old.started = Some(now);
         }
@@ -570,6 +608,11 @@ fn playback_worker(
                     if crossfade || transition_options.start_fade_seconds > 0.0 {
                         launch.initial_volume = 0.0;
                     }
+                    // Two players never share one render surface: the
+                    // incoming audio of a crossfade draws nothing (review 2.1).
+                    if crossfade && matches!(launch.video_mode, crate::MpvVideoMode::RenderApi(_)) {
+                        launch.video_mode = crate::MpvVideoMode::AudioOnly;
+                    }
                     if crossfade {
                         let old = active.take();
                         active = start_or_replace_engine(
@@ -586,6 +629,7 @@ fn playback_worker(
                             outgoing = Some(OutgoingEngine {
                                 engine,
                                 started: None,
+                                paused_at: None,
                                 queued: Instant::now(),
                                 seconds: transition_options.crossfade_seconds.clamp(0.001, 30.0),
                                 equal_power: transition_options.equal_power,
@@ -658,9 +702,23 @@ fn playback_worker(
                                     }
                                 }
                             }
+                            // Stop ends the outgoing item of a crossfade too.
+                            PlaybackCommand::Stop => {
+                                outgoing = None;
+                                fade = None;
+                            }
                             PlaybackCommand::SeekAbsolute { .. }
                             | PlaybackCommand::SeekRelative { .. } => {
                                 outgoing = None;
+                                // Seeks during a seek fade add up: five
+                                // presses seek five steps (review 2.1).
+                                if let Some(task) = fade.as_mut()
+                                    && let Some(pending) = task.after.as_ref()
+                                    && let Some(combined) = combined_seek(pending, &command)
+                                {
+                                    task.after = Some(combined);
+                                    continue;
+                                }
                                 if transition_options.seek_fade_seconds > 0.0 {
                                     fade = Some(VolumeFade {
                                         started: Some(Instant::now()),
@@ -676,6 +734,14 @@ fn playback_worker(
                             PlaybackCommand::SetPaused(paused) => {
                                 if let Some(old) = outgoing.as_mut() {
                                     let _ = old.engine.execute(command.clone());
+                                    let now = Instant::now();
+                                    if *paused {
+                                        old.paused_at.get_or_insert(now);
+                                    } else if let Some(at) = old.paused_at.take()
+                                        && let Some(started) = old.started.as_mut()
+                                    {
+                                        *started += now.saturating_duration_since(at);
+                                    }
                                 }
                                 if transition_options.pause_fade_seconds > 0.0 && outgoing.is_none()
                                 {
@@ -1284,6 +1350,142 @@ mod tests {
                 .last()
                 .is_some_and(|volume| (*volume - 80.0).abs() < 1.0),
             "{incoming:?}"
+        );
+    }
+
+    /// An engine that tells when it is dropped, that is, stopped.
+    struct DroppedEngine {
+        commands: Arc<Mutex<Vec<PlaybackCommand>>>,
+        dropped: Arc<AtomicUsize>,
+    }
+
+    impl PlaybackEngine for DroppedEngine {
+        fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
+            self.commands.lock().expect("commands").push(command);
+            Ok(())
+        }
+
+        fn poll_event(&mut self) -> Result<Option<PlaybackEvent>, PlaybackError> {
+            Ok(Some(PlaybackEvent::Position {
+                elapsed: 0.1,
+                duration: Some(60.0),
+            }))
+        }
+    }
+
+    impl Drop for DroppedEngine {
+        fn drop(&mut self) {
+            self.dropped.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    type Launches = Arc<Mutex<Vec<crate::MpvVideoMode>>>;
+    type EngineCommands = Arc<Mutex<Vec<Arc<Mutex<Vec<PlaybackCommand>>>>>>;
+
+    fn crossfading_runtime(
+        dropped: &Arc<AtomicUsize>,
+        launches: &Launches,
+        engines: &EngineCommands,
+    ) -> PlaybackRuntime {
+        let dropped = Arc::clone(dropped);
+        let launches = Arc::clone(launches);
+        let engines = Arc::clone(engines);
+        PlaybackRuntime::spawn_with(Box::new(move |options| {
+            launches.lock().expect("launches").push(options.video_mode);
+            let commands = Arc::new(Mutex::new(Vec::new()));
+            engines.lock().expect("engines").push(Arc::clone(&commands));
+            Ok(Box::new(DroppedEngine {
+                commands,
+                dropped: Arc::clone(&dropped),
+            }))
+        }))
+        .expect("runtime")
+    }
+
+    fn start_crossfade(runtime: &PlaybackRuntime, seconds: f64) {
+        let mut first = MpvLaunchOptions::new("mpv");
+        first.video_mode = crate::MpvVideoMode::RenderApi(7);
+        runtime.start(1, first, item("first")).expect("first");
+        std::thread::sleep(Duration::from_millis(50));
+        let mut second = MpvLaunchOptions::new("mpv");
+        second.video_mode = crate::MpvVideoMode::RenderApi(7);
+        second.transitions.crossfade_seconds = seconds;
+        runtime.start(2, second, item("second")).expect("second");
+        std::thread::sleep(Duration::from_millis(80));
+    }
+
+    /// Review 2.1: Stop during a crossfade stops the item going out too, and
+    /// the incoming item of a crossfade never takes the render surface.
+    #[test]
+    fn stop_during_a_crossfade_ends_both_items() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let launches = Launches::default();
+        let engines = Arc::default();
+        let runtime = crossfading_runtime(&dropped, &launches, &engines);
+        start_crossfade(&runtime, 20.0);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0, "both still play");
+        assert_eq!(
+            *launches.lock().unwrap(),
+            [
+                crate::MpvVideoMode::RenderApi(7),
+                crate::MpvVideoMode::AudioOnly
+            ]
+        );
+        runtime.execute(2, PlaybackCommand::Stop).expect("stop");
+        std::thread::sleep(Duration::from_millis(80));
+        assert_eq!(dropped.load(Ordering::SeqCst), 1, "the old item stopped");
+    }
+
+    /// Review 2.1: a pause freezes the crossfade; it goes on after Play.
+    #[test]
+    fn a_paused_crossfade_waits() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let launches = Launches::default();
+        let engines = EngineCommands::default();
+        let runtime = crossfading_runtime(&dropped, &launches, &engines);
+        start_crossfade(&runtime, 0.3);
+        runtime
+            .execute(2, PlaybackCommand::SetPaused(true))
+            .expect("pause");
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            dropped.load(Ordering::SeqCst),
+            0,
+            "the old item waits paused"
+        );
+        runtime
+            .execute(2, PlaybackCommand::SetPaused(false))
+            .expect("play");
+        std::thread::sleep(Duration::from_millis(600));
+        assert_eq!(dropped.load(Ordering::SeqCst), 1, "then the crossfade ends");
+    }
+
+    #[test]
+    fn seeks_during_a_seek_fade_add_up() {
+        let relative = |seconds| PlaybackCommand::SeekRelative {
+            seconds,
+            exact: false,
+        };
+        assert_eq!(
+            super::combined_seek(&relative(5.0), &relative(5.0)),
+            Some(relative(10.0))
+        );
+        assert_eq!(
+            super::combined_seek(
+                &PlaybackCommand::SeekAbsolute {
+                    seconds: 30.0,
+                    exact: true
+                },
+                &relative(-5.0)
+            ),
+            Some(PlaybackCommand::SeekAbsolute {
+                seconds: 25.0,
+                exact: true
+            })
+        );
+        assert_eq!(
+            super::combined_seek(&PlaybackCommand::SetPaused(true), &relative(5.0)),
+            None
         );
     }
 

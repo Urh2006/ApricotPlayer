@@ -822,6 +822,24 @@ impl Application {
             .to_owned()
     }
 
+    /// After a rename: the open player, its playing list and the recent
+    /// files follow the file to its new name (review 2.1). Saved playlists,
+    /// favorites, bookmarks and positions keep the name they were saved with.
+    pub fn relink_local_file(&mut self, old: &Path, new: &Path) {
+        let (old, new) = (old.to_string_lossy(), new.to_string_lossy());
+        if let Some(mut item) = self.player_session().current_item().cloned()
+            && item.relink_local_file(&old, &new)
+        {
+            let _ = self.state.player.replace_current_item(item);
+        }
+        self.state.player_sequence.relink_local_file(&old, &new);
+        let mut recents = self.recents();
+        if let Some(entry) = recents.files.iter_mut().find(|entry| **entry == *old) {
+            new.as_ref().clone_into(entry);
+            self.set_recents(&recents);
+        }
+    }
+
     /// 2.1: makes `items` the playing list, as a folder opened with a file.
     pub fn set_player_sequence_items(&mut self, items: &[MediaItem], item: &MediaItem) {
         let _ = self
@@ -3106,6 +3124,10 @@ impl Application {
     ) -> Result<(), SettingsControllerError> {
         self.settings.import(path)?;
         self.spotify_settings_draft = None;
+        // The imported announcement length counts at once (review 2.1).
+        apricot_core::set_short_announcements(
+            self.settings.current().announcement_verbosity == "short",
+        );
         Ok(())
     }
 
@@ -3635,6 +3657,33 @@ mod tests {
         assert!(
             (app.equalizer_settings().gains_for_preset("custom2")["31"] - 7.5).abs() < f64::EPSILON
         );
+    }
+
+    /// Review 2.1: a renamed file is found again from the player and its
+    /// playing list.
+    #[test]
+    fn a_renamed_file_keeps_its_place_in_the_player() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let mut song = media_item("x");
+        song.id = MediaId("/Music/old.mp3".to_owned());
+        song.title = "old".to_owned();
+        song.local_path = Some("/Music/old.mp3".to_owned());
+        let other = media_item("other");
+        app.start_player_item(song.clone());
+        app.set_player_sequence_items(
+            &[song, other],
+            &app.player_session().current_item().cloned().unwrap(),
+        );
+        app.relink_local_file(Path::new("/Music/old.mp3"), Path::new("/Music/new.mp3"));
+        let current = app.player_session().current_item().expect("item");
+        assert_eq!(current.local_path.as_deref(), Some("/Music/new.mp3"));
+        assert_eq!(current.title, "new");
+        assert_eq!(
+            app.player_sequence_items()[0].local_path.as_deref(),
+            Some("/Music/new.mp3")
+        );
+        assert_eq!(app.player_sequence_position(), Some((0, 2)));
     }
 
     #[test]

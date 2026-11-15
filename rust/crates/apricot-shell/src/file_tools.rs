@@ -24,15 +24,13 @@ pub fn opened_file_playback(app: &mut Application, path: &Path) -> Option<MediaI
             .as_deref()
             .and_then(|local| std::fs::canonicalize(local).ok())
     };
-    let items: Vec<_> = apricot_platform::local_media::scan_local_media_folder(&folder)
-        .ok()?
-        .into_iter()
-        .filter(|item| {
-            mode == "folder_and_subfolders"
-                || canonical(item).and_then(|local| local.parent().map(Path::to_path_buf))
-                    == Some(folder.clone())
-        })
-        .collect();
+    // Only the subfolder mode walks the tree below the folder.
+    let items = if mode == "folder_and_subfolders" {
+        apricot_platform::local_media::scan_local_media_folder(&folder)
+    } else {
+        apricot_platform::local_media::scan_local_media_folder_shallow(&folder)
+    }
+    .ok()?;
     let item = items
         .iter()
         .find(|item| canonical(item).as_ref() == Some(&wanted))?
@@ -263,6 +261,7 @@ impl crate::Shell {
         };
         match rename_from_values(&catalog, &path, &values) {
             Ok(renamed) => {
+                self.application.relink_local_file(&path, &renamed);
                 ui.set_status(
                     &catalog.text("rename_file_done").replace(
                         "{name}",

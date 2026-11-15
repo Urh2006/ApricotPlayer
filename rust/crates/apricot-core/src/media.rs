@@ -100,6 +100,29 @@ impl MediaItem {
 
     /// The address carries a login, so the item is not kept in history or
     /// resume positions.
+    /// Points a local item at its renamed file: the path, an id that was the
+    /// path, and a title that was the old file name. `true` when it was the
+    /// renamed file (review 2.1).
+    pub fn relink_local_file(&mut self, old: &str, new: &str) -> bool {
+        if self.local_path.as_deref() != Some(old) {
+            return false;
+        }
+        let stem = |path: &str| {
+            std::path::Path::new(path)
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        if self.title == stem(old) {
+            self.title = stem(new);
+        }
+        if self.id.0 == old {
+            new.clone_into(&mut self.id.0);
+        }
+        self.local_path = Some(new.to_owned());
+        true
+    }
+
     #[must_use]
     pub fn has_private_address(&self) -> bool {
         self.metadata

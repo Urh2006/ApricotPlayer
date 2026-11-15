@@ -235,6 +235,21 @@ impl SourcesController {
                 );
             }
         }
+        // Playlists saved by earlier betas with a login in the address get
+        // it protected now.
+        let mut protected = false;
+        for source in &mut self.iptv_sources {
+            if source.kind == SourceKind::Playlist
+                && source.protected_credentials.is_empty()
+                && apricot_platform::iptv::address_is_private(&source.address)
+            {
+                let address = source.address.clone();
+                protected |= source.set_playlist_address(&address).is_ok();
+            }
+        }
+        if protected {
+            let _ = self.save_iptv(environment);
+        }
         self.request.global_filters = self.radio.global_filters.clone();
         if self.recording.directory.as_os_str().is_empty() {
             self.recording.directory = environment.download_directory.join("Recordings");
@@ -358,6 +373,13 @@ impl SourcesController {
                 .as_ref()
                 .is_some_and(RecordingSession::is_active)
     }
+    /// Quitting: the recording is stopped and saved before the app ends.
+    pub fn finish_recording(&mut self) {
+        if let Some(mut recorder) = self.recorder.take() {
+            let _ = recorder.finish();
+        }
+    }
+
     #[must_use]
     pub fn is_recording(&self) -> bool {
         self.recorder
@@ -1293,7 +1315,8 @@ impl SourcesController {
                 FormField::file(
                     "address",
                     catalog.text("iptv_source_address"),
-                    old.as_ref().map_or("", |source| &source.address),
+                    old.as_ref()
+                        .map_or_else(String::new, IptvSource::playlist_address),
                     &["m3u", "m3u8"],
                     catalog.text("browse"),
                 ),
@@ -1370,6 +1393,15 @@ impl SourcesController {
                 epg_address: text(&values, "epg").trim().to_owned(),
                 prefer_hls: checked(&values, "hls"),
             };
+            let protected = if source.kind == SourceKind::Playlist {
+                source.set_playlist_address(&text(&values, "address"))
+            } else {
+                Ok(())
+            };
+            if let Err(error) = protected {
+                ui.error(&iptv_error(&catalog, error));
+                continue;
+            }
             if source.kind != SourceKind::Playlist
                 && let Err(error) = source.set_credentials(
                     &text(&values, "username"),
@@ -2456,6 +2488,11 @@ fn recording_error(catalog: &TranslationCatalog, error: &RecordingError) -> Stri
                 .replace("{error}", details)
                 .trim()
                 .to_owned();
+        }
+        RecordingError::Incomplete(kept) => {
+            return catalog
+                .text("recording_error_incomplete")
+                .replace("{file}", &kept.display().to_string());
         }
         RecordingError::SaveFailed => "recording_error_save",
         RecordingError::Discovery(details) => {

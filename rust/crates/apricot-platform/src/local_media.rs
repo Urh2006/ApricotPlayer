@@ -19,7 +19,7 @@ pub const MEDIA_EXTENSIONS: &[&str] = &[
     "wmv",
 ];
 
-const VIDEO_EXTENSIONS: &[&str] = &[
+pub(crate) const VIDEO_EXTENSIONS: &[&str] = &[
     "3g2", "3gp", "asf", "avi", "divx", "flv", "m2ts", "m2v", "m4v", "mkv", "mov", "mp2v", "mp4",
     "mpe", "mpeg", "mpg", "mpv", "mts", "mxf", "ogm", "ogv", "ogx", "rm", "rmvb", "ts", "vob",
     "webm", "wmv",
@@ -59,6 +59,24 @@ pub fn scan_local_media_folder_with_cancel(
     folder: &Path,
     cancelled: &AtomicBool,
 ) -> Result<Vec<MediaItem>, LocalMediaError> {
+    scan(folder, cancelled, true)
+}
+
+/// The media directly in `folder`, without its subfolders: a file opened
+/// with its folder never walks a whole music library (review 2.1).
+///
+/// # Errors
+///
+/// Returns the same root errors as [`scan_local_media_folder`].
+pub fn scan_local_media_folder_shallow(folder: &Path) -> Result<Vec<MediaItem>, LocalMediaError> {
+    scan(folder, &AtomicBool::new(false), false)
+}
+
+fn scan(
+    folder: &Path,
+    cancelled: &AtomicBool,
+    recursive: bool,
+) -> Result<Vec<MediaItem>, LocalMediaError> {
     check_cancelled(cancelled)?;
     if !folder.exists() {
         return Err(LocalMediaError::Missing);
@@ -73,6 +91,9 @@ pub fn scan_local_media_folder_with_cancel(
     let mut directories = Vec::new();
     let mut files = Vec::new();
     collect_entries(root_entries, &mut directories, &mut files, cancelled)?;
+    if !recursive {
+        directories.clear();
+    }
     while let Some(directory) = directories.pop() {
         check_cancelled(cancelled)?;
         let Ok(entries) = fs::read_dir(directory) else {
@@ -327,6 +348,17 @@ mod tests {
         assert_eq!(items[2].title, "track10");
         assert!(items.iter().all(|item| item.local_path.is_some()));
         assert!(items.iter().all(|item| item.url.is_none()));
+    }
+
+    #[test]
+    fn the_shallow_scan_stays_in_the_folder() {
+        let temporary = tempdir().expect("temporary folder");
+        fs::write(temporary.path().join("a.mp3"), b"").expect("a");
+        fs::create_dir(temporary.path().join("deep")).expect("deep");
+        fs::write(temporary.path().join("deep").join("b.mp3"), b"").expect("b");
+        let items = super::scan_local_media_folder_shallow(temporary.path()).expect("scan");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "a");
     }
 
     #[test]

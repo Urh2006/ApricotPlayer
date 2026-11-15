@@ -110,6 +110,15 @@ impl SleepTimer {
         self.faded.then_some(self.original_volume)
     }
 
+    /// The volume the user set last: the fade starts from it and a cancel
+    /// returns to it, never to a louder one from when the timer started
+    /// (review 2.1).
+    pub fn follow_volume(&mut self, volume: f64) {
+        if volume.is_finite() {
+            self.original_volume = volume;
+        }
+    }
+
     pub fn tick(&mut self, now: Instant, playing: bool) -> Vec<TimerEffect> {
         let delta = now
             .saturating_duration_since(self.previous_tick)
@@ -144,10 +153,9 @@ impl SleepTimer {
     /// Only natural media/chapter completion can trigger an end timer. A manual
     /// change deliberately leaves it armed for the newly chosen media.
     pub fn natural_end(&self, chapter: bool) -> Option<TimerAction> {
+        // The end of the file also ends its last chapter (review 2.1).
         match (self.options.mode, chapter) {
-            (TimerMode::TrackEnd, false) | (TimerMode::ChapterEnd, true) => {
-                Some(self.options.action)
-            }
+            (TimerMode::TrackEnd, false) | (TimerMode::ChapterEnd, _) => Some(self.options.action),
             _ => None,
         }
     }
@@ -822,8 +830,45 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(timer.natural_end(false), None);
         assert_eq!(timer.natural_end(true), Some(TimerAction::Pause));
+        // The last chapter ends with the file.
+        assert_eq!(timer.natural_end(false), Some(TimerAction::Pause));
+        let track = SleepTimer::new(
+            SleepTimerOptions {
+                mode: TimerMode::TrackEnd,
+                ..SleepTimerOptions::default()
+            },
+            Instant::now(),
+            50.0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(track.natural_end(true), None);
+        assert_eq!(track.natural_end(false), Some(TimerAction::Pause));
+    }
+
+    /// Review 2.1: lowering the volume during a timer is respected by its
+    /// fade and by the volume it restores.
+    #[test]
+    fn the_fade_follows_the_volume_set_meanwhile() {
+        let now = Instant::now();
+        let mut timer = SleepTimer::new(
+            SleepTimerOptions {
+                seconds: 90.0,
+                fade_seconds: 30.0,
+                ..SleepTimerOptions::default()
+            },
+            now,
+            80.0,
+            true,
+        )
+        .unwrap();
+        timer.follow_volume(10.0);
+        assert_eq!(
+            timer.tick(now + Duration::from_secs(75), false),
+            vec![TimerEffect::Warning, TimerEffect::Volume(5.0)]
+        );
+        assert_eq!(timer.restore_volume(), Some(10.0));
     }
     #[test]
     fn range_precision_and_seek_constraints_are_explicit() {

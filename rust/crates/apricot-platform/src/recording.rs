@@ -40,6 +40,8 @@ pub enum RecordingError {
     NoneOpened,
     /// `FFmpeg` failed; its own report follows.
     NotCompleted(String),
+    /// The recording stopped early; what was recorded is kept in this file.
+    Incomplete(PathBuf),
     SaveFailed,
     /// Listing the sources failed, with the system's report.
     Discovery(String),
@@ -261,6 +263,18 @@ impl RecordingSession {
             .as_ref()
             .is_some_and(|worker| !worker.is_finished())
     }
+    /// Stops and waits until the file is saved or the failure is known,
+    /// so quitting never leaves a recording unfinished (review 2.1).
+    pub fn finish(&mut self) -> Option<Result<PathBuf, RecordingError>> {
+        self.stop();
+        let worker = self.worker.take()?;
+        let _ = worker.join();
+        self.events.try_iter().find_map(|event| match event {
+            RecordingEvent::Finished(result) => Some(result),
+            _ => None,
+        })
+    }
+
     pub fn poll(&mut self) -> Vec<RecordingEvent> {
         let events = self.events.try_iter().collect();
         if self.worker.as_ref().is_some_and(JoinHandle::is_finished)
@@ -274,7 +288,7 @@ impl RecordingSession {
 
 impl Drop for RecordingSession {
     fn drop(&mut self) {
-        self.stop();
+        let _ = self.finish();
     }
 }
 
@@ -475,8 +489,9 @@ fn record(
         } else if deadline.elapsed() > Duration::from_millis(500) {
             deadline = Instant::now();
         }
+        // Every source stopped (a device was unplugged): what came before
+        // is still a recording, finished below like a normal stop.
         if capture_workers.iter().all(JoinHandle::is_finished) {
-            write_error = true;
             break;
         }
     }
@@ -498,16 +513,36 @@ fn record(
         }
     };
     let errors = errors.join().unwrap_or_default();
-    if write_error || !status.is_some_and(|status| status.success()) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(RecordingError::NotCompleted(errors.trim().to_owned()));
+    let completed = !write_error && status.is_some_and(|status| status.success());
+    let recorded = std::fs::metadata(&temporary).is_ok_and(|metadata| metadata.len() > 0);
+    if !completed {
+        if !recorded {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(RecordingError::NotCompleted(errors.trim().to_owned()));
+        }
+        // Never throw away what was recorded: it stays, visible, beside
+        // the name the recording was to have.
+        let kept = crate::file_operations::available_path(&incomplete_name(output));
+        return match std::fs::rename(&temporary, &kept) {
+            Ok(()) => Err(RecordingError::Incomplete(kept)),
+            Err(_) => Err(RecordingError::Incomplete(temporary)),
+        };
     }
-    if output.exists() {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(RecordingError::DestinationExists);
-    }
-    std::fs::rename(&temporary, output).map_err(|_| RecordingError::SaveFailed)?;
-    Ok(output.to_owned())
+    // A file that took the name meanwhile keeps it; the recording takes
+    // the next free one.
+    let saved = crate::file_operations::available_path(output);
+    std::fs::rename(&temporary, &saved).map_err(|_| RecordingError::SaveFailed)?;
+    Ok(saved)
+}
+
+/// "Recording 2026-11-15.flac" becomes "Recording 2026-11-15 (incomplete).flac".
+fn incomplete_name(output: &Path) -> PathBuf {
+    let stem = output.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = output
+        .extension()
+        .map(|extension| format!(".{}", extension.to_string_lossy()))
+        .unwrap_or_default();
+    output.with_file_name(format!("{stem} (incomplete){extension}"))
 }
 
 /// `FFmpeg` reads the mixed 48 kHz stereo floats from its input and never
@@ -565,6 +600,20 @@ pub fn encoder_arguments(settings: &RecordingSettings, output: &Path) -> Vec<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 2.1: a recording that stops early keeps its sound under a
+    /// visible name beside the one it was to have.
+    #[test]
+    fn an_early_stop_is_kept_as_an_incomplete_file() {
+        assert_eq!(
+            incomplete_name(Path::new("/Rec/Recording 2026-11-15 10-00-00.flac")),
+            Path::new("/Rec/Recording 2026-11-15 10-00-00 (incomplete).flac")
+        );
+        assert_eq!(
+            incomplete_name(Path::new("/Rec/take")),
+            Path::new("/Rec/take (incomplete)")
+        );
+    }
 
     #[test]
     #[allow(clippy::float_cmp)] // Exact binary fractions.

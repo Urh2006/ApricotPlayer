@@ -107,6 +107,9 @@ impl crate::Shell {
             .map(|mut keys| keys.drain(..).collect())
             .unwrap_or_default();
         for key in keys {
+            if !self.application.player_session().is_open() {
+                continue;
+            }
             let paused = self.application.player_session().is_paused();
             let action = match key {
                 Key::Toggle => Some("player_play_pause"),
@@ -114,8 +117,30 @@ impl crate::Shell {
                 Key::Pause | Key::Stop if !paused => Some("player_play_pause"),
                 Key::Next => Some("player_next"),
                 Key::Previous => Some("player_previous"),
-                Key::SeekBy(seconds) if seconds >= 0.0 => Some("player_seek_forward"),
-                Key::SeekBy(_) => Some("player_seek_back"),
+                // The step the system asks for (a headset's 15 seconds),
+                // not the player's own (review 2.1).
+                Key::SeekBy(seconds) if seconds.is_finite() && seconds != 0.0 => {
+                    self.seek_player(ui, seconds);
+                    None
+                }
+                // The position slider of the system's controls; silent, as a
+                // slider is (review 2.1).
+                Key::SetPosition(seconds) if seconds.is_finite() => {
+                    let seconds = self
+                        .application
+                        .playback_features()
+                        .ranges
+                        .constrain(seconds)
+                        .max(0.0);
+                    let _ = self.execute_player_command(
+                        ui,
+                        apricot_playback::PlaybackCommand::SeekAbsolute {
+                            seconds,
+                            exact: true,
+                        },
+                    );
+                    None
+                }
                 _ => None,
             };
             if let Some(action) = action

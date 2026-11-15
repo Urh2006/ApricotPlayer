@@ -68,6 +68,32 @@ pub struct IptvSource {
     pub prefer_hls: bool,
 }
 
+/// A web address that carries a login or a token: a user name or password,
+/// a query (`?token=`, `?username=`), or the Xtream form
+/// `/live/USER/PASS/123.ts`. Such addresses never go into history.
+#[must_use]
+pub fn address_is_private(address: &str) -> bool {
+    let Ok(url) = Url::parse(address.trim()) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return true;
+    }
+    if url.query().is_some_and(|query| !query.is_empty()) {
+        return true;
+    }
+    let segments: Vec<_> = url
+        .path_segments()
+        .map(Iterator::collect)
+        .unwrap_or_default();
+    segments.iter().enumerate().any(|(index, segment)| {
+        matches!(*segment, "live" | "movie" | "series" | "timeshift") && segments.len() >= index + 4
+    })
+}
+
 impl IptvSource {
     /// Protects the login with the system's credential protection.
     ///
@@ -91,6 +117,49 @@ impl IptvSource {
         )
         .map_err(|_| IptvError::CredentialsSave)?;
         Ok(())
+    }
+
+    /// Sets a playlist's address. One that carries a login or a token
+    /// (review 2.1) is kept with the system's credential protection, and
+    /// the settings file only shows where it goes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the system cannot protect it.
+    pub fn set_playlist_address(&mut self, address: &str) -> Result<(), IptvError> {
+        if !address_is_private(address) {
+            address.clone_into(&mut self.address);
+            self.protected_credentials.clear();
+            return Ok(());
+        }
+        let bytes = serde_json::to_vec(&serde_json::json!({ "address": address }))
+            .map_err(|_| IptvError::CredentialsSave)?;
+        self.protected_credentials = crate::audiovault_credentials::protect_data(
+            &bytes,
+            CREDENTIAL_ENTROPY,
+            "ApricotPlayer IPTV",
+        )
+        .map_err(|_| IptvError::CredentialsSave)?;
+        self.address = Url::parse(address).map_or_else(
+            |_| String::new(),
+            |url| {
+                format!(
+                    "{}://{}/…",
+                    url.scheme(),
+                    url.host_str().unwrap_or_default()
+                )
+            },
+        );
+        Ok(())
+    }
+
+    /// The address a playlist is read from, unprotected when needed.
+    #[must_use]
+    pub fn playlist_address(&self) -> String {
+        self.credentials()
+            .ok()
+            .and_then(|value| value["address"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| self.address.clone())
     }
 
     /// The saved login, empty for a playlist source.
@@ -151,8 +220,12 @@ impl IptvChannel {
         item.metadata
             .insert("iptv_channel_id".into(), self.id.clone().into());
         // Provider addresses carry the login, so they stay out of history
-        // and resume positions.
-        if source.kind != SourceKind::Playlist {
+        // and resume positions; so do playlist entries with a login or a
+        // token in the address, and every entry of a protected playlist.
+        if source.kind != SourceKind::Playlist
+            || !source.protected_credentials.is_empty()
+            || address_is_private(&self.url)
+        {
             item.metadata
                 .insert("apricot_private_address".into(), true.into());
         }
@@ -395,7 +468,8 @@ impl IptvClient {
     pub fn load(&self, source: &IptvSource) -> Result<Vec<IptvChannel>, IptvError> {
         match source.kind {
             SourceKind::Playlist => {
-                let path = Path::new(&source.address);
+                let address = source.playlist_address();
+                let path = Path::new(&address);
                 let (bytes, base) = if path.is_file() {
                     let length = path
                         .metadata()
@@ -409,7 +483,7 @@ impl IptvClient {
                         Url::from_file_path(path).ok(),
                     )
                 } else {
-                    let url = http_address(&source.address)?;
+                    let url = http_address(&address)?;
                     (self.bytes(url.clone(), &[])?, Some(url))
                 };
                 let text = decode_playlist(&bytes);
@@ -814,6 +888,59 @@ fn value_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn addresses_with_a_login_or_token_are_private() {
+        for private in [
+            "https://user:pass@example.invalid/list.m3u",
+            "https://example.invalid/get.php?username=u&password=p&type=m3u",
+            "https://example.invalid/live/USER/PASS/123.ts",
+            "http://example.invalid/movie/USER/PASS/9.mkv",
+            "https://cdn.example.invalid/stream.m3u8?token=abc",
+        ] {
+            assert!(address_is_private(private), "{private}");
+        }
+        for public in [
+            "https://example.invalid/free/news.m3u8",
+            "https://example.invalid/live/news.m3u8",
+            "/Users/me/tv.m3u",
+            "",
+        ] {
+            assert!(!address_is_private(public), "{public}");
+        }
+    }
+
+    #[test]
+    fn credentialed_playlist_entries_stay_out_of_history() {
+        let source = IptvSource {
+            id: "one".into(),
+            name: "Home".into(),
+            kind: SourceKind::Playlist,
+            address: "https://example.invalid/free.m3u".into(),
+            protected_credentials: String::new(),
+            epg_address: String::new(),
+            prefer_hls: false,
+        };
+        let channel = |url: &str| IptvChannel {
+            id: "c".into(),
+            name: "News".into(),
+            group: String::new(),
+            number: String::new(),
+            epg_id: String::new(),
+            logo: String::new(),
+            url: url.into(),
+            kind: ChannelKind::Live,
+            metadata: BTreeMap::new(),
+        };
+        let private = channel("https://example.invalid/live/USER/PASS/123.ts")
+            .media(&source)
+            .expect("item");
+        assert!(private.has_private_address());
+        let public = channel("https://example.invalid/free/news.m3u8")
+            .media(&source)
+            .expect("item");
+        assert!(!public.has_private_address());
+    }
 
     #[test]
     fn playlist_keeps_quoted_commas_and_relative_urls() {

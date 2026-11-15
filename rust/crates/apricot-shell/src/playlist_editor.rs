@@ -14,7 +14,8 @@ use apricot_storage::UserPlaylist;
 use crate::{FeatureForm, FormField, FormValue, FormValues};
 
 /// File types the editor imports; HLS streams stay one live entry.
-pub const PLAYLIST_IMPORT_EXTENSIONS: [&str; 6] = ["m3u", "m3u8", "pls", "xspf", "asx", "cue"];
+pub const PLAYLIST_IMPORT_EXTENSIONS: [&str; 7] =
+    ["m3u", "m3u8", "pls", "xspf", "asx", "cue", "json"];
 
 /// What the editor needs from the native window.
 pub trait PlaylistEditorUi {
@@ -61,11 +62,24 @@ fn entry_label(catalog: &TranslationCatalog, item: &MediaItem) -> String {
     item.title.clone()
 }
 
-/// Edits playlist `index`; `Ok(true)` when it was saved.
+/// Shows a failed action's message in a read-only form so the editor stays
+/// open and the draft is kept.
+fn show_error(ui: &mut dyn PlaylistEditorUi, catalog: &TranslationCatalog, message: &str) {
+    let mut form = FeatureForm::localized(
+        catalog,
+        catalog.text("playlist_edit"),
+        vec![FormField::read_only("error", message, "")],
+    );
+    catalog.text("ok").clone_into(&mut form.submit);
+    let _ = ui.form(&form);
+}
+
+/// Edits playlist `index`; `Ok(true)` when it was saved. A failed action shows
+/// its message and leaves the editor open with the draft intact.
 ///
 /// # Errors
 ///
-/// Returns a message when the playlist cannot be read or saved.
+/// Returns a message when the playlist does not exist.
 #[allow(clippy::too_many_lines)] // One dialog loop with its actions.
 pub fn edit(
     application: &mut Application,
@@ -157,11 +171,10 @@ pub fn edit(
             .unwrap_or(0);
         last_action = Some(action);
         match action {
-            0 => {
-                return application
-                    .replace_user_playlist(index, draft, now())
-                    .map_err(|error| error.to_string());
-            }
+            0 => match application.replace_user_playlist(index, draft.clone(), now()) {
+                Ok(saved) => return Ok(saved),
+                Err(error) => show_error(ui, &catalog, &error.to_string()),
+            },
             1 => {
                 if let Some(path) = ui.open_file(
                     catalog.text("playlist_editor_add_file"),
@@ -197,7 +210,7 @@ pub fn edit(
                         draft.items.push(item);
                         selected = draft.items.len() - 1;
                     }
-                    None => return Err(catalog.text("subtitles_url_invalid").to_owned()),
+                    None => show_error(ui, &catalog, catalog.text("subtitles_url_invalid")),
                 }
             }
             3 => {
@@ -220,17 +233,20 @@ pub fn edit(
                 )) else {
                     continue;
                 };
-                if values.get("kind").and_then(FormValue::choice) == Some(1) {
-                    draft.items.extend(
-                        apricot_platform::local_media::scan_local_media_folder(&folder)
-                            .map_err(|error| error.to_string())?,
-                    );
+                let added = if values.get("kind").and_then(FormValue::choice) == Some(1) {
+                    apricot_platform::local_media::scan_local_media_folder(&folder)
+                        .map_err(|error| error.to_string())
                 } else {
-                    draft
-                        .items
-                        .push(apricot_platform::playlist_file::folder_reference(&folder)?);
+                    apricot_platform::playlist_file::folder_reference(&folder)
+                        .map(|item| vec![item])
+                };
+                match added {
+                    Ok(items) => {
+                        draft.items.extend(items);
+                        selected = draft.items.len().saturating_sub(1);
+                    }
+                    Err(error) => show_error(ui, &catalog, &error),
                 }
-                selected = draft.items.len().saturating_sub(1);
             }
             4 => {
                 let Some(path) = ui.open_file(
@@ -239,13 +255,16 @@ pub fn edit(
                 ) else {
                     continue;
                 };
-                let parsed =
-                    apricot_platform::playlist_file::read_local(&path).map_err(|error| {
-                        catalog
+                match apricot_platform::playlist_file::read_local(&path) {
+                    Ok(parsed) => draft.items.extend(parsed.items),
+                    Err(error) => show_error(
+                        ui,
+                        &catalog,
+                        &catalog
                             .text("playlist_import_failed")
-                            .replace("{error}", &error)
-                    })?;
-                draft.items.extend(parsed.items);
+                            .replace("{error}", &error),
+                    ),
+                }
             }
             5 => {
                 let name = format!("{}.m3u8", crate::safe_path_component(&draft.title));
@@ -256,7 +275,9 @@ pub fn edit(
                 ) else {
                     continue;
                 };
-                export(&catalog, &draft, &path)?;
+                if let Err(error) = export(&catalog, &draft, &path) {
+                    show_error(ui, &catalog, &error);
+                }
             }
             6 => {
                 if selected < draft.items.len() && !marked.remove(&selected) {
@@ -296,8 +317,10 @@ pub fn edit(
                     .unwrap_or(1.0)
                     .round() as usize
                     - 1;
-                move_entries(&mut draft.items, &indices, destination)?;
-                marked.clear();
+                match move_entries(&mut draft.items, &indices, destination) {
+                    Ok(()) => marked.clear(),
+                    Err(error) => show_error(ui, &catalog, &error),
+                }
             }
             _ => {
                 if marked.is_empty() {
@@ -625,6 +648,78 @@ mod tests {
         assert_eq!(
             value["items"][0]["metadata"]["apricot_folder_reference"],
             serde_json::json!(true)
+        );
+    }
+
+    #[test]
+    fn a_failed_action_shows_its_error_and_keeps_the_draft() {
+        let directory = tempfile::tempdir().expect("folder");
+        let missing = directory.path().join("missing.m3u");
+        let mut application = application(directory.path());
+        application
+            .create_user_playlist_with_items("Other", Vec::new(), 2.0)
+            .expect("second playlist");
+        let index = application
+            .user_playlists()
+            .iter()
+            .position(|playlist| playlist.title == "Mix")
+            .expect("mix");
+        let mut ui = Script::default();
+        ui.files.push_back(missing);
+        ui.forms.extend([
+            // Import fails: the message is shown and the editor stays open.
+            vec![("name", FormValue::Text("Kept".into())), action(4)],
+            vec![],
+            // A link that is not a web address.
+            vec![action(2)],
+            vec![("url", FormValue::Text("nonsense".into()))],
+            vec![],
+            // Save collides with the other playlist's name, then is corrected.
+            vec![("name", FormValue::Text("Other".into())), action(0)],
+            vec![],
+            vec![("name", FormValue::Text("Fixed".into())), action(0)],
+        ]);
+
+        assert_eq!(edit(&mut application, index, &mut ui), Ok(true));
+        assert_eq!(application.user_playlists()[index].title, "Fixed");
+        let error_form = &ui.seen[1];
+        assert!(matches!(
+            error_form.fields[0].kind,
+            crate::FormFieldKind::ReadOnly { .. }
+        ));
+        assert!(!error_form.fields[0].label.is_empty());
+        // The draft title typed before the failure survived into the next form.
+        assert!(matches!(
+            &ui.seen[2].fields[0].kind,
+            crate::FormFieldKind::Text { value, .. } if value == "Kept"
+        ));
+    }
+
+    #[test]
+    fn json_export_imports_back_with_folder_references_and_duplicates() {
+        let directory = tempfile::tempdir().expect("folder");
+        let media = directory.path().join("media");
+        std::fs::create_dir_all(&media).expect("media");
+        let song = media.join("song.ogg");
+        std::fs::write(&song, b"x").expect("song");
+        let catalog = apricot_app::embedded_catalog("en");
+        let mut playlist = UserPlaylist::new("Mix", 1.0);
+        playlist.items.push(crate::local_file_item(&song));
+        playlist.items.push(crate::local_file_item(&song));
+        playlist
+            .items
+            .push(apricot_platform::playlist_file::folder_reference(&media).expect("ref"));
+        let json = directory.path().join("mix.json");
+        export(&catalog, &playlist, &json).expect("json");
+        assert!(PLAYLIST_IMPORT_EXTENSIONS.contains(&"json"));
+
+        let parsed = apricot_platform::playlist_file::read_local(&json).expect("import");
+        assert_eq!(parsed.title, "Mix");
+        assert_eq!(parsed.items.len(), 3);
+        assert_eq!(parsed.items[0].local_path, parsed.items[1].local_path);
+        assert_eq!(
+            parsed.items[2].metadata.get("apricot_folder_reference"),
+            Some(&serde_json::json!(true))
         );
     }
 

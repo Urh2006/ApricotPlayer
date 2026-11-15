@@ -41,6 +41,8 @@ pub(crate) struct PlayerRuntime {
     /// Windows `preparing_player_generation`: the player page shows an item
     /// whose stream is still being resolved.
     pub(crate) preparing_generation: Option<u64>,
+    /// The generation whose CUE track end was reached (review 2.1).
+    segment_ended: Option<u64>,
 }
 
 /// Python `format_rate_for_speech`.
@@ -489,6 +491,7 @@ impl Shell {
         None
     }
 
+    #[allow(clippy::too_many_lines)] // One arm per playback event, as on Windows.
     pub fn poll_playback(&mut self, ui: &mut dyn ShellUi) -> bool {
         if self.windows_import_committed {
             return false;
@@ -550,6 +553,33 @@ impl Shell {
                     }
                     self.update_integrations();
                 }
+                // A CUE track ends at its own end time, inside the file.
+                PlaybackEvent::Position { elapsed, .. }
+                    if self.player.segment_ended != Some(update.generation)
+                        && self
+                            .application
+                            .player_session()
+                            .current_item()
+                            .and_then(|item| segment_time(item, "apricot_segment_end"))
+                            .is_some_and(|end| elapsed >= end) =>
+                {
+                    self.player.segment_ended = Some(update.generation);
+                    if let Some(commands) =
+                        crate::playback_features::natural_playback_end(&mut self.application, false)
+                    {
+                        for command in commands {
+                            self.execute_player_command(ui, command);
+                        }
+                        ui.set_status(&self.text("sleep_timer_finished"), true);
+                        continue;
+                    }
+                    if let Some(running) = self.playback_ended(ui) {
+                        return running;
+                    }
+                    // Without Autoplay next the file would run into the next
+                    // track: it pauses at this one's end.
+                    let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(true));
+                }
                 PlaybackEvent::Position { .. } | PlaybackEvent::AudioDevices(_) => {}
                 PlaybackEvent::PreviewFinished => {
                     if self.player.clip_preview == Some(update.generation) {
@@ -568,6 +598,17 @@ impl Shell {
                             self.execute_player_command(ui, command);
                         }
                         ui.set_status(&self.text("sleep_timer_finished"), true);
+                        continue;
+                    }
+                    // "Stop after this chapter" at the end of the last one:
+                    // nothing plays on (review 2.1).
+                    if self.application.playback_features().chapter_stop
+                        && !apricot_app::chapters::session_chapters(
+                            self.application.player_session(),
+                        )
+                        .is_empty()
+                    {
+                        let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(true));
                         continue;
                     }
                     if self.player.clip_preview.take().is_some() {
@@ -1220,11 +1261,44 @@ impl Shell {
             self.close_player_runtime(ui);
         }
         self.spotify_shutdown();
+        // A recording in progress is finished and saved, not cut off.
+        self.sources.finish_recording();
         apricot_platform::stop_playback_resolver();
     }
+}
+
+/// The start or end time in seconds of a CUE track (`apricot_segment_start`,
+/// `apricot_segment_end`), when the item is one.
+pub(crate) fn segment_time(item: &MediaItem, key: &str) -> Option<f64> {
+    item.metadata
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
 }
 
 fn nonempty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+#[cfg(test)]
+mod segment_tests {
+    /// Review 2.1: CUE tracks carry their own start and end times.
+    #[test]
+    fn cue_tracks_have_their_own_start_and_end() {
+        let mut item = super::local_file_item(std::path::Path::new("/Music/album.flac"));
+        assert_eq!(super::segment_time(&item, "apricot_segment_start"), None);
+        item.metadata
+            .insert("apricot_segment_start".into(), serde_json::json!(185.5));
+        item.metadata
+            .insert("apricot_segment_end".into(), serde_json::json!(402.0));
+        assert_eq!(
+            super::segment_time(&item, "apricot_segment_start"),
+            Some(185.5)
+        );
+        assert_eq!(
+            super::segment_time(&item, "apricot_segment_end"),
+            Some(402.0)
+        );
+    }
 }

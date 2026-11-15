@@ -1,6 +1,10 @@
 //! Bounded playlist parsing shared by library import and source adapters.
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
-use std::{collections::BTreeMap, io::Read, path::Path};
+use std::{
+    collections::BTreeMap,
+    io::Read,
+    path::{Path, PathBuf},
+};
 use url::Url;
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq)]
@@ -182,26 +186,50 @@ fn location(
             .as_bytes()
             .get(2)
             .is_some_and(|b| matches!(b, b'/' | b'\\'));
-    let path = Path::new(value);
-    let parsed = if windows_absolute || path.is_absolute() {
-        Url::from_file_path(path).ok()
+    let unresolved = "A playlist entry could not be resolved";
+    // Local references stay filesystem paths so `#`, `?` and `%` in file names
+    // are kept; only real URLs and web-relative entries go through `Url`.
+    let mut web = None;
+    let local = if Path::new(value).is_absolute() {
+        Some(PathBuf::from(value))
+    } else if windows_absolute {
+        return Err(unresolved.into());
+    } else if let Ok(url) = Url::parse(value) {
+        if url.scheme() == "file" {
+            Some(
+                url.to_file_path()
+                    .map_err(|()| "A local playlist path is invalid")?,
+            )
+        } else {
+            web = Some(url);
+            None
+        }
     } else {
-        Url::parse(value)
-            .ok()
-            .or_else(|| base.join(&value.replace('\\', "/")).ok())
-    }
-    .ok_or("A playlist entry could not be resolved")?;
-    let mut item = if parsed.scheme() == "file" {
-        let path = parsed
-            .to_file_path()
-            .map_err(|()| "A local playlist path is invalid")?;
+        let relative = value.replace('\\', "/");
+        if base.scheme() == "file" {
+            let folder = base
+                .to_file_path()
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+                .ok_or(unresolved)?;
+            Some(folder.join(relative))
+        } else {
+            web = Some(base.join(&relative).map_err(|_| unresolved)?);
+            None
+        }
+    };
+    let mut item = if let Some(path) = local {
         let name = path
             .file_stem()
             .map_or_else(|| value.into(), |v| v.to_string_lossy().into_owned());
         MediaItem {
             id: MediaId(path.to_string_lossy().into_owned()),
             source: MediaSource::Local,
-            kind: MediaKind::Audio,
+            kind: if is_video(&path) {
+                MediaKind::Video
+            } else {
+                MediaKind::Audio
+            },
             title: name,
             url: None,
             stream_url: None,
@@ -212,7 +240,8 @@ fn location(
             metadata: BTreeMap::new(),
         }
     } else {
-        MediaItem::from_direct_link(parsed.as_str())
+        let url = web.ok_or(unresolved)?;
+        MediaItem::from_direct_link(url.as_str())
             .ok_or("The playlist contains an unsupported address")?
     };
     if !title.is_empty() {
@@ -221,6 +250,16 @@ fn location(
     item.duration_seconds = duration;
     Ok(item)
 }
+fn is_video(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            crate::local_media::VIDEO_EXTENSIONS
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
 fn parse_pls(text: &str, base: &Url) -> Result<Vec<MediaItem>, String> {
     let mut entries = BTreeMap::<u32, (String, String, Option<f64>)>::new();
     for line in text.lines().map(str::trim) {
@@ -515,5 +554,29 @@ mod tests {
         std::fs::write(root.path().join("b.mp3"), b"").unwrap();
         assert_eq!(first.len(), 1);
         assert_eq!(resolve_folders(&[reference], &cancel).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn local_entries_keep_special_characters_and_detect_video() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("review");
+        let base = Url::from_file_path(folder.join("list.m3u")).unwrap();
+        let text = "music/Track#1.mp3\na?b.mp3\n100%.mp3\nmovie.mp4\nsub\\clip.MKV\nhttps://example.org/a.mp3";
+        let list = parse(text, &base).unwrap();
+        let path = |item: &MediaItem| item.local_path.clone().unwrap();
+        let expected = |relative: &str| folder.join(relative).to_string_lossy().into_owned();
+        assert_eq!(path(&list.items[0]), expected("music/Track#1.mp3"));
+        assert_eq!(path(&list.items[1]), expected("a?b.mp3"));
+        assert_eq!(path(&list.items[2]), expected("100%.mp3"));
+        assert_eq!(list.items[0].title, "Track#1");
+        assert_eq!(list.items[0].kind, MediaKind::Audio);
+        assert_eq!(list.items[3].kind, MediaKind::Video);
+        assert_eq!(path(&list.items[4]), expected("sub/clip.MKV"));
+        assert_eq!(list.items[4].kind, MediaKind::Video);
+        assert!(list.items[5].local_path.is_none());
+        assert_eq!(
+            list.items[5].url.as_ref().unwrap().as_str(),
+            "https://example.org/a.mp3"
+        );
     }
 }

@@ -16195,6 +16195,8 @@ unsafe fn rename_active_file(window: HWND) {
     };
     match apricot_shell::file_tools::rename_from_values(&catalog, &path, &values) {
         Ok(renamed) => {
+            // The player and its list follow the file (review 2.1).
+            state.application.relink_local_file(&path, &renamed);
             let name = renamed
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
@@ -16307,14 +16309,9 @@ unsafe fn handle_media_key(window: HWND, code: usize, milliseconds: isize) {
         2 | 5 if !paused => activate_action(window, "player_play_pause"),
         3 => activate_action(window, "player_next"),
         4 => activate_action(window, "player_previous"),
-        6 => activate_action(
-            window,
-            if milliseconds >= 0 {
-                "player_seek_forward"
-            } else {
-                "player_seek_back"
-            },
-        ),
+        // The step the system asks for, not the player's own (review 2.1).
+        #[allow(clippy::cast_precision_loss)] // Milliseconds of a seek.
+        6 if milliseconds != 0 => seek_player(window, milliseconds as f64 / 1000.0),
         // The overlay's position slider moves the player without speech.
         #[allow(clippy::cast_precision_loss)] // Milliseconds of a position.
         7 => {

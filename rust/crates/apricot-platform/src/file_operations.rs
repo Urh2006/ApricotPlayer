@@ -218,15 +218,50 @@ pub fn available_path(path: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
+/// The same file on disk: one path, or two hard links to it.
 fn same_file(first: &Path, second: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(first), Ok(second)) = (fs::metadata(first), fs::metadata(second)) {
+            return first.dev() == second.dev() && first.ino() == second.ino();
+        }
+    }
     match (fs::canonicalize(first), fs::canonicalize(second)) {
         (Ok(first), Ok(second)) => first == second,
         _ => false,
     }
 }
 
+/// A hidden name beside `target` for a copy in progress.
+fn partial_path(target: &Path) -> PathBuf {
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let directory = target.parent().unwrap_or_else(|| Path::new(""));
+    (0..u32::MAX)
+        .map(|number| directory.join(format!(".{name}.{number}.apricot-partial")))
+        .find(|candidate| !candidate.exists())
+        .unwrap_or_else(|| directory.join(format!(".{name}.apricot-partial")))
+}
+
+/// Copies `source` beside `target` first, so `target` (an existing file,
+/// or another hard link to `source`) is untouched until the copy is whole.
+fn copy_beside(source: &Path, target: &Path) -> Result<PathBuf, String> {
+    let partial = partial_path(target);
+    if let Err(error) = fs::copy(source, &partial) {
+        let _ = fs::remove_file(&partial);
+        return Err(error.to_string());
+    }
+    Ok(partial)
+}
+
 /// Copies or moves `source` into `directory`. `collision` decides what
 /// happens when the name is taken; with `None` a taken name is skipped.
+/// A failure never leaves the destination with less than it had: an
+/// existing file is only replaced by a complete copy, and a move removes
+/// the original before it replaces anything.
 ///
 /// # Errors
 ///
@@ -244,6 +279,17 @@ pub fn transfer(
         let same = same_file(source, &target);
         match collision.unwrap_or(Collision::Skip) {
             Collision::Skip => return Ok(TransferOutcome::Skipped),
+            // Two hard links of one file: moving keeps the destination's
+            // link and removes the source's.
+            Collision::Replace | Collision::KeepBoth
+                if same && mode == TransferMode::Move && source != target =>
+            {
+                if fs::canonicalize(source).ok() != fs::canonicalize(&target).ok() {
+                    fs::remove_file(source).map_err(|error| error.to_string())?;
+                    return Ok(TransferOutcome::Done(target));
+                }
+                return Ok(TransferOutcome::Skipped);
+            }
             // A file never replaces itself, and moving it to its own folder
             // changes nothing.
             Collision::Replace if same => return Ok(TransferOutcome::Skipped),
@@ -256,19 +302,27 @@ pub fn transfer(
     }
     match mode {
         TransferMode::Copy => {
-            fs::copy(source, &target).map_err(|error| error.to_string())?;
-        }
-        TransferMode::Move => {
-            if fs::rename(source, &target).is_err() {
-                // Another drive: copy, then remove the original only when
-                // the copy is complete.
-                fs::copy(source, &target).map_err(|error| error.to_string())?;
-                if let Err(error) = fs::remove_file(source) {
-                    let _ = fs::remove_file(&target);
-                    return Err(error.to_string());
-                }
+            let partial = copy_beside(source, &target)?;
+            if let Err(error) = fs::rename(&partial, &target) {
+                let _ = fs::remove_file(&partial);
+                return Err(error.to_string());
             }
         }
+        TransferMode::Move => match fs::rename(source, &target) {
+            Ok(()) => {}
+            // Another drive: a complete copy, then the original goes, and
+            // only then the copy takes the name.
+            Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+                let partial = copy_beside(source, &target)?;
+                if let Err(error) = fs::remove_file(source) {
+                    let _ = fs::remove_file(&partial);
+                    return Err(error.to_string());
+                }
+                fs::rename(&partial, &target)
+                    .map_err(|error| format!("{error}: {}", partial.display()))?;
+            }
+            Err(error) => return Err(error.to_string()),
+        },
     }
     Ok(TransferOutcome::Done(target))
 }
@@ -362,6 +416,78 @@ mod tests {
             Ok(TransferOutcome::Done(root.path().join("song (2).mp3")))
         );
         assert!(source.exists());
+    }
+
+    /// Review 2.1: two hard links of one file are one file. Replacing one
+    /// with the other must not truncate both.
+    #[cfg(unix)]
+    #[test]
+    fn hard_links_are_never_emptied() {
+        let root = tempfile::tempdir().expect("folder");
+        let from = root.path().join("from");
+        let to = root.path().join("to");
+        fs::create_dir_all(&from).expect("from");
+        fs::create_dir_all(&to).expect("to");
+        let source = from.join("song.mp3");
+        write(&source, "twenty-four bytes of song");
+        fs::hard_link(&source, to.join("song.mp3")).expect("link");
+        assert_eq!(
+            transfer(&source, &to, TransferMode::Copy, Some(Collision::Replace)),
+            Ok(TransferOutcome::Skipped)
+        );
+        assert_eq!(
+            fs::read_to_string(&source).unwrap(),
+            "twenty-four bytes of song"
+        );
+        assert_eq!(
+            transfer(&source, &to, TransferMode::Move, Some(Collision::Replace)),
+            Ok(TransferOutcome::Done(to.join("song.mp3")))
+        );
+        assert!(!source.exists());
+        assert_eq!(
+            fs::read_to_string(to.join("song.mp3")).unwrap(),
+            "twenty-four bytes of song"
+        );
+    }
+
+    /// Review 2.1: a move whose original cannot be removed keeps the file
+    /// it was to replace.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_move_keeps_the_destination() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("folder");
+        let from = root.path().join("locked");
+        let to = root.path().join("to");
+        fs::create_dir_all(&from).expect("from");
+        fs::create_dir_all(&to).expect("to");
+        let source = from.join("song.mp3");
+        write(&source, "new");
+        write(&to.join("song.mp3"), "old");
+        fs::set_permissions(&from, fs::Permissions::from_mode(0o555)).expect("lock");
+        let result = transfer(&source, &to, TransferMode::Move, Some(Collision::Replace));
+        fs::set_permissions(&from, fs::Permissions::from_mode(0o755)).expect("unlock");
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(fs::read_to_string(&source).unwrap(), "new");
+        assert_eq!(fs::read_to_string(to.join("song.mp3")).unwrap(), "old");
+        // No partial copy stays behind.
+        assert_eq!(fs::read_dir(&to).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_replacing_copy_leaves_no_partial_file() {
+        let root = tempfile::tempdir().expect("folder");
+        let source = root.path().join("song.mp3");
+        let to = root.path().join("to");
+        fs::create_dir_all(&to).expect("to");
+        write(&source, "new");
+        write(&to.join("song.mp3"), "old");
+        assert_eq!(
+            transfer(&source, &to, TransferMode::Copy, Some(Collision::Replace)),
+            Ok(TransferOutcome::Done(to.join("song.mp3")))
+        );
+        assert_eq!(fs::read_to_string(to.join("song.mp3")).unwrap(), "new");
+        assert_eq!(fs::read_dir(&to).unwrap().count(), 1);
     }
 
     #[test]

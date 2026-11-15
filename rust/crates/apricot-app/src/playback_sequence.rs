@@ -36,6 +36,27 @@ pub struct PlaybackSequence {
     current_identity: Option<String>,
 }
 
+impl PlaybackSequence {
+    /// A renamed local file keeps its place in the playing list.
+    pub fn relink_local_file(&mut self, old: &str, new: &str) {
+        let current = self
+            .items
+            .iter()
+            .find(|item| item.stable_identity() == self.current_identity)
+            .is_some_and(|item| item.local_path.as_deref() == Some(old));
+        for item in &mut self.items {
+            let _ = item.relink_local_file(old, new);
+        }
+        if current {
+            self.current_identity = self
+                .items
+                .iter()
+                .find(|item| item.local_path.as_deref() == Some(new))
+                .and_then(MediaItem::stable_identity);
+        }
+    }
+}
+
 pub fn playlist_entry_identity(item: &MediaItem) -> Option<String> {
     let identity = item.stable_identity()?;
     Some(

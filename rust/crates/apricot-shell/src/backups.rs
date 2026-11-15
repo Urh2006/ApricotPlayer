@@ -281,6 +281,33 @@ pub fn run(
 }
 
 impl crate::Shell {
+    /// Imported settings are heard at once on a playing item: audio
+    /// processing, transitions and the equalizer (Windows
+    /// `WM_APPLY_AUDIO_PROCESSING`; review 2.1).
+    fn reapply_imported_audio(&mut self, ui: &mut dyn crate::ShellUi) {
+        if !self.application.player_session().is_open() {
+            return;
+        }
+        let transitions = crate::playback_features::running_transition_options(&self.application);
+        let _ = self.execute_player_command(
+            ui,
+            apricot_playback::PlaybackCommand::SetTransitions(transitions),
+        );
+        let filter = crate::playback_features::processing_chain_filter(&self.application);
+        let _ = self.execute_player_command(
+            ui,
+            apricot_playback::PlaybackCommand::RemoveAudioFilter("@apricot_processing".to_owned()),
+        );
+        if let Some(filter) = filter {
+            let _ = self.execute_player_command(
+                ui,
+                apricot_playback::PlaybackCommand::AddAudioFilter(filter),
+            );
+        }
+        self.application.set_player_equalizer(None);
+        self.apply_player_equalizer(ui);
+    }
+
     /// The settings and bookmark import and export actions.
     pub(crate) fn run_backup(&mut self, ui: &mut dyn crate::ShellUi, backup: Backup) {
         let catalog = self.catalog();
@@ -294,6 +321,7 @@ impl crate::Shell {
         };
         if report.settings_imported {
             self.apply_integrations();
+            self.reapply_imported_audio(ui);
         }
         if !report.message.is_empty() {
             ui.set_status(&report.message, true);

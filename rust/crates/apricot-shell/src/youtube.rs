@@ -907,8 +907,11 @@ impl Shell {
             return;
         }
         self.cancel_youtube_work();
-        let start_position_seconds =
-            start_position_seconds.or_else(|| self.application.playback_resume_position(&item));
+        // A CUE track starts at its own start time; the file's resume
+        // position belongs to the whole file (review 2.1).
+        let start_position_seconds = start_position_seconds
+            .or_else(|| crate::player::segment_time(&item, "apricot_segment_start"))
+            .or_else(|| self.application.playback_resume_position(&item));
         if !preserve_sequence {
             self.application.prepare_standalone_playback();
         }

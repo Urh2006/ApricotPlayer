@@ -1942,6 +1942,12 @@ pub fn tick_playback_features(
             }
         }
     }
+    // The fade follows the volume the user set; fades never change it.
+    if let Some(volume) = app.player_session().audio().map(|audio| audio.volume)
+        && let Some(timer) = app.playback_features_mut().timer.as_mut()
+    {
+        timer.follow_volume(volume);
+    }
     for effect in app
         .playback_features_mut()
         .take_timer_effects(Instant::now(), playing)
