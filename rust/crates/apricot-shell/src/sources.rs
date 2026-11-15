@@ -258,6 +258,13 @@ impl SourcesController {
                 let address = source.address.clone();
                 protected |= source.set_playlist_address(&address).is_ok();
             }
+            // Guide addresses with a login are protected too (review 2.1).
+            if source.protected_epg.is_empty()
+                && apricot_platform::iptv::address_is_private(&source.epg_address)
+            {
+                let address = source.epg_address.clone();
+                protected |= source.set_epg_address(&address).is_ok();
+            }
         }
         if protected {
             let _ = self.save_iptv(environment);
@@ -395,6 +402,16 @@ impl SourcesController {
         }
     }
 
+    /// Stop and Pause of the running recording, for a window that holds
+    /// this controller out of reach (review 2.1).
+    #[must_use]
+    pub fn recording_controls(&self) -> Option<recording::RecordingControls> {
+        self.recorder
+            .as_ref()
+            .filter(|recorder| recorder.is_active())
+            .map(RecordingSession::controls)
+    }
+
     #[must_use]
     pub fn is_recording(&self) -> bool {
         self.recorder
@@ -438,6 +455,9 @@ impl SourcesController {
                                 .replace("{name}", &name),
                         });
                     }
+                    // A pause said by the global key while a list window
+                    // held this controller is not said twice.
+                    RecordingEvent::Paused(_) if recorder.take_spoken_pause() => {}
                     RecordingEvent::Paused(paused) => ui.status(
                         catalog.text(if paused {
                             "recording_paused"
@@ -1377,7 +1397,7 @@ impl SourcesController {
                 FormField::file(
                     "epg",
                     catalog.text("iptv_guide_address"),
-                    old.as_ref().map_or("", |source| &source.epg_address),
+                    old.as_ref().map(IptvSource::epg_url).unwrap_or_default(),
                     &["xml", "gz"],
                     catalog.text("browse"),
                 ),
@@ -1429,9 +1449,14 @@ impl SourcesController {
                 },
                 address,
                 protected_credentials: String::new(),
-                epg_address: text(&values, "epg").trim().to_owned(),
+                epg_address: String::new(),
+                protected_epg: String::new(),
                 prefer_hls: checked(&values, "hls"),
             };
+            if let Err(error) = source.set_epg_address(&text(&values, "epg")) {
+                ui.error(&iptv_error(&catalog, error));
+                continue;
+            }
             let protected = if source.kind == SourceKind::Playlist {
                 source.set_playlist_address(&text(&values, "address"))
             } else {
@@ -1488,10 +1513,11 @@ impl SourcesController {
                 .load(&source)
                 .map_err(|error| iptv_error(&catalog, error))?;
             let mut warning = None;
-            let guide = if source.epg_address.trim().is_empty() {
+            let guide_address = source.epg_url();
+            let guide = if guide_address.trim().is_empty() {
                 EpgGuide::default()
             } else {
-                client.epg(&source.epg_address).unwrap_or_else(|error| {
+                client.epg(&guide_address).unwrap_or_else(|error| {
                     warning = Some(
                         catalog
                             .text("iptv_guide_failed")
@@ -2533,7 +2559,11 @@ fn recording_error(catalog: &TranslationCatalog, error: &RecordingError) -> Stri
                 .text("recording_error_incomplete")
                 .replace("{file}", &kept.display().to_string());
         }
-        RecordingError::SaveFailed => "recording_error_save",
+        RecordingError::SaveFailed(kept) => {
+            return catalog
+                .text("recording_error_save_kept")
+                .replace("{file}", &kept.display().to_string());
+        }
         RecordingError::Discovery(details) => {
             return catalog
                 .text("recording_error_discovery")
@@ -2850,6 +2880,7 @@ mod tests {
             address: "https://example.test/list.m3u".into(),
             protected_credentials: String::new(),
             epg_address: String::new(),
+            protected_epg: String::new(),
             prefer_hls: false,
         });
         controller.iptv_active = controller.iptv_sources.first().cloned();

@@ -414,17 +414,30 @@ fn compare_paths(left: &Path, right: &Path) -> Ordering {
     parts(left).cmp(&parts(right))
 }
 
-/// Python `candidate.resolve() == source.resolve()` on Windows paths.
+/// Python `candidate.resolve() == source.resolve()`: one file on disk. Two
+/// existing paths are compared by the file they open, so `track.FLAC` and
+/// `track.flac` are one file on a case-insensitive disk and two on a
+/// case-sensitive one (review 2.1); a missing path is only itself.
 fn same_path(left: &Path, right: &Path) -> bool {
-    let resolve = |path: &Path| {
-        fs::canonicalize(path)
-            .or_else(|_| std::path::absolute(path))
-            .unwrap_or_else(|_| path.to_path_buf())
-            .to_string_lossy()
-            .trim_start_matches(r"\\?\")
-            .to_lowercase()
-    };
-    resolve(left) == resolve(right)
+    if let (Ok(first), Ok(second)) = (fs::metadata(left), fs::metadata(right)) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            return first.dev() == second.dev() && first.ino() == second.ino();
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (first, second);
+            // The final path keeps the case the disk stored, so two names
+            // of one file give one path.
+            return match (fs::canonicalize(left), fs::canonicalize(right)) {
+                (Ok(first), Ok(second)) => first == second,
+                _ => false,
+            };
+        }
+    }
+    let absolute = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    absolute(left) == absolute(right)
 }
 
 /// Python `unique_converter_output_path`: "name (2).ext" and onward when the
@@ -1165,6 +1178,30 @@ fn lower_extension(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// Review 2.1: names that differ only in case are one file only where
+    /// the disk says so; two real files are never taken for one.
+    #[test]
+    fn same_path_follows_the_disk_not_the_letters() {
+        let folder = tempfile::tempdir().expect("folder");
+        let upper = folder.path().join("track.FLAC");
+        std::fs::write(&upper, b"a").expect("upper");
+        let lower = folder.path().join("track.flac");
+        let case_insensitive = lower.exists();
+        if case_insensitive {
+            assert!(super::same_path(&upper, &lower));
+        } else {
+            std::fs::write(&lower, b"b").expect("lower");
+            assert!(!super::same_path(&upper, &lower));
+        }
+        let other = folder.path().join("other.flac");
+        std::fs::write(&other, b"c").expect("other");
+        assert!(!super::same_path(&upper, &other));
+        assert!(!super::same_path(
+            &upper,
+            &folder.path().join("missing.flac")
+        ));
+    }
+
     use std::{
         ffi::OsString,
         fs,

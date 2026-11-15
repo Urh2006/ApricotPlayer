@@ -39,6 +39,9 @@ pub struct ClipExportRequest {
     /// 2.1: the player's audio effects for an audio clip (`-af`), `None`
     /// keeps the original sound.
     pub audio_filter: Option<String>,
+    /// The user chose an existing file in Save As and confirmed replacing
+    /// it; it is replaced only by a finished clip (review 2.1).
+    pub replace_existing: bool,
 }
 
 #[derive(Debug, Error)]
@@ -136,14 +139,20 @@ pub fn export_marked_clip(request: &ClipExportRequest) -> Result<PathBuf, ClipEx
             "FFmpeg produced an empty clip".to_owned(),
         ));
     }
-    temporary
-        .persist_noclobber(&request.output_path)
-        .map_err(|error| ClipExportError::Publish(error.to_string()))?;
+    if request.replace_existing {
+        temporary
+            .persist(&request.output_path)
+            .map_err(|error| ClipExportError::Publish(error.to_string()))?;
+    } else {
+        temporary
+            .persist_noclobber(&request.output_path)
+            .map_err(|error| ClipExportError::Publish(error.to_string()))?;
+    }
     Ok(request.output_path.clone())
 }
 
 fn validate_request(request: &ClipExportRequest) -> Result<(), ClipExportError> {
-    if request.output_path.exists() {
+    if request.output_path.exists() && !request.replace_existing {
         return Err(ClipExportError::InvalidConfiguration(
             "the output file already exists".to_owned(),
         ));
@@ -252,20 +261,56 @@ pub fn build_clip_export_arguments(
                     OsString::from("-shortest"),
                 ]);
             } else {
-                arguments.extend([OsString::from("-map"), OsString::from("0")]);
+                arguments.extend([
+                    OsString::from("-map"),
+                    OsString::from("0:v:0?"),
+                    OsString::from("-map"),
+                    OsString::from("0:a?"),
+                ]);
             }
             arguments.extend([
                 OsString::from("-t"),
                 OsString::from(format!("{duration:.3}")),
-                OsString::from("-c"),
-                OsString::from("copy"),
-                OsString::from("-avoid_negative_ts"),
-                OsString::from("make_zero"),
             ]);
+            // Copying streams can only cut at a keyframe, seconds before the
+            // marked start; the picture is encoded again so the clip holds
+            // exactly the marked part (review 2.1).
+            arguments.extend(video_codec_arguments(&request.output_path));
         }
     }
     arguments.push(request.output_path.as_os_str().to_owned());
     Ok(arguments)
+}
+
+/// Encoders for an exact video clip, chosen by the clip's container.
+fn video_codec_arguments(output: &std::path::Path) -> Vec<OsString> {
+    let webm = output
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("webm"));
+    let values: &[&str] = if webm {
+        &[
+            "-c:v",
+            "libvpx-vp9",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            "-b:v",
+            "0",
+            "-crf",
+            "32",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "160k",
+        ]
+    } else {
+        &[
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a",
+            "aac", "-b:a", "192k",
+        ]
+    };
+    values.iter().map(OsString::from).collect()
 }
 
 fn add_input(
@@ -380,6 +425,7 @@ mod tests {
             audio_quality: "320kbps".to_owned(),
             headers: String::new(),
             audio_filter: None,
+            replace_existing: false,
         }
     }
 
@@ -400,6 +446,20 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair == ["-map", "1:a:0?"]));
         assert_eq!(args.iter().filter(|value| *value == "-ss").count(), 2);
         assert!(args.windows(2).any(|pair| pair == ["-t", "7.500"]));
+    }
+
+    /// Review 2.1: a video clip is encoded again, so it starts at the marked
+    /// time instead of the keyframe before it.
+    #[test]
+    fn video_export_cuts_exactly_instead_of_copying() {
+        let mut request = request(ClipExportMode::Video);
+        request.start_seconds = 1.2;
+        request.end_seconds = 1.8;
+        let args = build_clip_export_arguments(&request).expect("arguments");
+        assert!(!args.iter().any(|value| value == "copy"), "{args:?}");
+        let position = |value: &str| args.iter().position(|item| item == value).expect(value);
+        assert_eq!(args[position("-t") + 1], "0.600");
+        assert!(position("-c:v") > position("-i"));
     }
 
     #[test]

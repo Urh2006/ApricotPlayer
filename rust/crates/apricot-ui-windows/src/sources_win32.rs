@@ -81,6 +81,61 @@ pub(super) unsafe fn environment(window: HWND) -> Option<SourcesEnvironment> {
         language: settings.language.clone(),
     })
 }
+/// Takes the controller out for a call that may open a window.
+fn lend(state: &mut super::WindowState) -> apricot_shell::sources::SourcesController {
+    let controller = std::mem::take(&mut state.source_tools);
+    if state.source_tools_out == 0 {
+        state.lent_recording = controller.recording_controls();
+    }
+    state.source_tools_out += 1;
+    controller
+}
+
+/// Puts the controller back; the outermost call ends the lending.
+fn give_back(
+    state: &mut super::WindowState,
+    controller: apricot_shell::sources::SourcesController,
+) {
+    state.source_tools_out = state.source_tools_out.saturating_sub(1);
+    // Only the outermost call holds the real controller.
+    if state.source_tools_out == 0 {
+        state.source_tools = controller;
+        state.lent_recording = None;
+    }
+}
+
+/// The global recording keys while the controller is out in an open
+/// window: Stop and Pause reach the running recording, and Start never
+/// begins a second one (review 2.1).
+unsafe fn lent_recording_action(window: HWND, id: &str) -> bool {
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    if state.source_tools_out == 0 {
+        return false;
+    }
+    let key = match (id, state.lent_recording.clone()) {
+        ("recording_stop", Some(controls)) => {
+            controls.stop();
+            "recording_finishing"
+        }
+        ("recording_pause", Some(controls)) => {
+            if controls.toggle_pause() {
+                "recording_paused"
+            } else {
+                "recording_resumed"
+            }
+        }
+        ("recording_start", Some(_)) => "recording_already_active",
+        ("recording_start", None) => "recording_close_window_first",
+        ("recording_stop" | "recording_pause", None) => "recording_not_active",
+        _ => return false,
+    };
+    let text = super::catalog_text(&state.application, key);
+    super::set_status(state, &text, true);
+    true
+}
+
 pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
     if !matches!(
         id,
@@ -96,17 +151,20 @@ pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
     ) {
         return false;
     }
+    if lent_recording_action(window, id) {
+        return true;
+    }
     let Some(environment) = environment(window) else {
         return true;
     };
     let Some(state) = state_mut(window) else {
         return true;
     };
-    let mut controller = std::mem::take(&mut state.source_tools);
+    let mut controller = lend(state);
     let handled = controller.action(&mut Ui { window }, &environment, id);
     let busy = controller.is_busy();
     if let Some(state) = state_mut(window) {
-        state.source_tools = controller;
+        give_back(state, controller);
     }
     if busy {
         SetTimer(Some(window), TIMER, 50, None);
@@ -140,7 +198,7 @@ pub(super) unsafe fn resume_after_player(
     let Some(state) = state_mut(window) else {
         return false;
     };
-    let mut controller = std::mem::take(&mut state.source_tools);
+    let mut controller = lend(state);
     let resumed = controller.resume_after_player(
         &mut Ui { window },
         &environment,
@@ -149,7 +207,7 @@ pub(super) unsafe fn resume_after_player(
     );
     let busy = controller.is_busy();
     if let Some(state) = state_mut(window) {
-        state.source_tools = controller;
+        give_back(state, controller);
     }
     if busy {
         SetTimer(Some(window), TIMER, 50, None);
@@ -165,10 +223,10 @@ pub(super) unsafe fn ensure_loaded(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    let mut controller = std::mem::take(&mut state.source_tools);
+    let mut controller = lend(state);
     controller.ensure_loaded(&mut Ui { window }, &environment);
     if let Some(state) = state_mut(window) {
-        state.source_tools = controller;
+        give_back(state, controller);
     }
 }
 /// The player went to the main menu: nothing to go back to.
@@ -184,10 +242,10 @@ pub(super) unsafe fn poll(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    let mut controller = std::mem::take(&mut state.source_tools);
+    let mut controller = lend(state);
     let busy = controller.poll(&mut Ui { window }, &environment);
     if let Some(state) = state_mut(window) {
-        state.source_tools = controller;
+        give_back(state, controller);
     }
     // A list shown while polling runs its own message loop, where this
     // timer polls the empty stand-in controller and stops; work the list
@@ -218,7 +276,7 @@ pub(super) unsafe fn metadata(window: HWND) {
         .and_then(|item| item.metadata.get("iptv_channel_id"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
-    let mut controller = std::mem::take(&mut state.source_tools);
+    let mut controller = lend(state);
     controller.stream_metadata(
         &mut Ui { window },
         station.as_deref(),
@@ -227,16 +285,16 @@ pub(super) unsafe fn metadata(window: HWND) {
         iptv.as_deref(),
     );
     if let Some(state) = state_mut(window) {
-        state.source_tools = controller;
+        give_back(state, controller);
     }
 }
 pub(super) unsafe fn playback_started(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    let mut controller = std::mem::take(&mut state.source_tools);
+    let mut controller = lend(state);
     controller.playback_started(&mut Ui { window });
     if let Some(state) = state_mut(window) {
-        state.source_tools = controller;
+        give_back(state, controller);
     }
 }

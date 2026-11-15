@@ -124,7 +124,7 @@ define_class!(
         fn should_terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
             if let Some(controller) = self.ivars().controller.borrow().as_ref() {
                 controller.mark_exiting();
-                controller.shutdown();
+                let _ = controller.shutdown();
             }
             NSApplicationTerminateReply::TerminateNow
         }

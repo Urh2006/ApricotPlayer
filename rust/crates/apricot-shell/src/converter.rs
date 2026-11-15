@@ -5,6 +5,8 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use apricot_app::DownloadChoice;
@@ -284,7 +286,8 @@ impl ConverterDialog {
 /// A message from a conversion worker (Windows `ConversionMessage`).
 enum ConversionMessage {
     Folder(FolderConversionEvent),
-    FileFinished(Result<PathBuf, String>),
+    /// The result and the Cancel flag of a single file conversion.
+    FileFinished(Result<PathBuf, String>, Arc<AtomicBool>),
     FolderFinished(Result<FolderConversionOutcome, String>),
 }
 
@@ -294,7 +297,7 @@ enum ConversionMessage {
 #[derive(Default)]
 pub(crate) struct ConversionState {
     pending: Vec<Receiver<ConversionMessage>>,
-    /// The Cancel flags of the folder conversions that run.
+    /// The Cancel flags of the conversions that run.
     cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     progress_open: bool,
     clip_exports: Vec<ClipExport>,
@@ -486,10 +489,16 @@ impl Shell {
                     self.text("unsupported_input_format"),
                 );
                 let job = FileConversionJob { options, ..job };
+                // A single file stops on Cancel too (review 2.1).
+                let cancel = Arc::new(AtomicBool::new(false));
+                self.conversions.cancels.push(Arc::clone(&cancel));
                 std::thread::spawn(move || {
-                    let result =
-                        run_file_conversion(&job, &apricot_platform::run_ffmpeg_conversion);
-                    let _ = sender.send(ConversionMessage::FileFinished(result));
+                    let result = run_file_conversion(&job, &|program, arguments| {
+                        apricot_platform::run_ffmpeg_conversion_cancellable(
+                            program, arguments, &cancel,
+                        )
+                    });
+                    let _ = sender.send(ConversionMessage::FileFinished(result, cancel));
                 });
             }
             ConverterStart::Folder {
@@ -574,8 +583,8 @@ impl Shell {
         }
     }
 
-    /// Stops the folder conversions that run: no further file starts and
-    /// the running `FFmpeg` is stopped.
+    /// Stops the conversions that run: no further file starts and the
+    /// running `FFmpeg` is stopped.
     pub(crate) fn cancel_conversions(&mut self, ui: &mut dyn ShellUi) {
         if self.conversions.cancels.is_empty() {
             ui.set_status(&self.text("conversion_none_running"), true);
@@ -630,11 +639,31 @@ impl Shell {
                     );
                 }
             }
-            ConversionMessage::FileFinished(Ok(path)) => {
-                let name = path.file_name().unwrap_or_default().to_string_lossy();
-                let text = catalog.text("conversion_done").replace("{title}", &name);
-                ui.set_status(&text, false);
-                self.finish_conversion_message(ui, &text);
+            ConversionMessage::FileFinished(result, cancel) => {
+                self.conversions
+                    .cancels
+                    .retain(|flag| !Arc::ptr_eq(flag, &cancel));
+                match result {
+                    Ok(path) => {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        let text = catalog.text("conversion_done").replace("{title}", &name);
+                        ui.set_status(&text, false);
+                        self.finish_conversion_message(ui, &text);
+                    }
+                    Err(_) if cancel.load(Ordering::Acquire) => {
+                        let text = catalog.text("conversion_file_stopped");
+                        ui.set_status(text, false);
+                        self.finish_conversion_message(ui, text);
+                    }
+                    Err(error) => {
+                        self.close_conversion_progress(ui);
+                        let text = catalog.text("conversion_failed").replace(
+                            "{error}",
+                            &apricot_app::comments::friendly_error(&catalog, &error),
+                        );
+                        ui.show_error(&text);
+                    }
+                }
             }
             ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::NoMediaFiles)) => {
                 ui.show_error(catalog.text("conversion_no_media_files"));
@@ -661,8 +690,7 @@ impl Shell {
                     ));
                 }
             }
-            ConversionMessage::FileFinished(Err(error))
-            | ConversionMessage::FolderFinished(Err(error)) => {
+            ConversionMessage::FolderFinished(Err(error)) => {
                 self.close_conversion_progress(ui);
                 let text = catalog.text("conversion_failed").replace(
                     "{error}",
@@ -738,6 +766,7 @@ impl Shell {
                 return;
             }
         };
+        let mut replace_existing = false;
         if settings.ask_download_location_each_time {
             let default_name = output
                 .file_name()
@@ -750,7 +779,11 @@ impl Shell {
                 &default_name,
                 &[extension.as_str()],
             ) {
-                Some(path) => output = path,
+                Some(path) => {
+                    // Save As already asked before an existing file is taken.
+                    replace_existing = path.exists();
+                    output = path;
+                }
                 None => return,
             }
         }
@@ -770,6 +803,7 @@ impl Shell {
             audio_quality: settings.audio_quality,
             headers: clip_http_headers(&item),
             audio_filter,
+            replace_existing,
         };
         let reserved = output;
         let (sender, receiver) = mpsc::sync_channel(1);

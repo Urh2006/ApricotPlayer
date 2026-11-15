@@ -8,7 +8,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread::{self, JoinHandle},
@@ -42,7 +42,9 @@ pub enum RecordingError {
     NotCompleted(String),
     /// The recording stopped early; what was recorded is kept in this file.
     Incomplete(PathBuf),
-    SaveFailed,
+    /// The recording is whole but could not take its name; it is kept in
+    /// this file.
+    SaveFailed(PathBuf),
     /// Listing the sources failed, with the system's report.
     Discovery(String),
     Unsupported,
@@ -190,9 +192,33 @@ pub enum RecordingEvent {
     Finished(Result<PathBuf, RecordingError>),
 }
 
+/// Stop and Pause of a running recording, usable while its session is out
+/// of reach, such as inside an open list window (review 2.1).
+#[derive(Clone, Debug)]
+pub struct RecordingControls {
+    stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+    pauses_spoken: Arc<AtomicUsize>,
+}
+
+impl RecordingControls {
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Release);
+    }
+    /// Pauses or resumes; `true` when it is now paused. The caller says so,
+    /// so the session's own Paused event for it is not spoken again.
+    pub fn toggle_pause(&self) -> bool {
+        let paused = !self.paused.load(Ordering::Acquire);
+        self.paused.store(paused, Ordering::Release);
+        self.pauses_spoken.fetch_add(1, Ordering::AcqRel);
+        paused
+    }
+}
+
 pub struct RecordingSession {
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
+    pauses_spoken: Arc<AtomicUsize>,
     events: Receiver<RecordingEvent>,
     worker: Option<JoinHandle<()>>,
 }
@@ -235,9 +261,29 @@ impl RecordingSession {
         Ok(Self {
             stop,
             paused,
+            pauses_spoken: Arc::default(),
             events,
             worker: Some(worker),
         })
+    }
+
+    #[must_use]
+    pub fn controls(&self) -> RecordingControls {
+        RecordingControls {
+            stop: Arc::clone(&self.stop),
+            paused: Arc::clone(&self.paused),
+            pauses_spoken: Arc::clone(&self.pauses_spoken),
+        }
+    }
+
+    /// `true` once for each pause or resume that `RecordingControls`
+    /// already said: its Paused event is then left unspoken.
+    pub fn take_spoken_pause(&self) -> bool {
+        self.pauses_spoken
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_sub(1)
+            })
+            .is_ok()
     }
 
     pub fn pause(&self, paused: bool) {
@@ -257,11 +303,11 @@ impl RecordingSession {
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::Acquire)
     }
+    /// Recording, or ended with its last events not yet polled: the poll
+    /// that reads Finished is the one that makes it inactive (review 2.1).
     #[must_use]
     pub fn is_active(&self) -> bool {
-        self.worker
-            .as_ref()
-            .is_some_and(|worker| !worker.is_finished())
+        self.worker.is_some()
     }
     /// Stops and waits until the file is saved or the failure is known,
     /// so quitting never leaves a recording unfinished (review 2.1).
@@ -276,13 +322,14 @@ impl RecordingSession {
     }
 
     pub fn poll(&mut self) -> Vec<RecordingEvent> {
-        let events = self.events.try_iter().collect();
+        // A worker that ended has sent its last event, so the events are read
+        // after it is joined: Finished is never left behind (review 2.1).
         if self.worker.as_ref().is_some_and(JoinHandle::is_finished)
             && let Some(worker) = self.worker.take()
         {
             let _ = worker.join();
         }
-        events
+        self.events.try_iter().collect()
     }
 }
 
@@ -480,10 +527,25 @@ fn record(
         output: output.to_owned(),
         sources: successful,
     });
+    // The encoder is fed by its own thread, so an encoder that stops
+    // reading (a full disk, a lost network folder) can never hold Stop or
+    // quitting: a block that waits too long ends the recording, and the
+    // encoder is ended if its input still does not close (review 2.1).
+    let (blocks, encoder_blocks) = mpsc::sync_channel::<Vec<u8>>(100);
+    let writer = thread::spawn(move || {
+        for bytes in encoder_blocks {
+            if input.write_all(&bytes).is_err() {
+                return false;
+            }
+        }
+        true
+    });
+    let mut stalled_since: Option<Instant> = None;
     let mut deadline = Instant::now();
     let interval = Duration::from_millis(20);
     let mut was_paused = false;
     let mut write_error = false;
+    let mut sources_lost = false;
     while !stop.load(Ordering::Acquire) {
         let is_paused = paused.load(Ordering::Acquire);
         if was_paused != is_paused {
@@ -499,9 +561,19 @@ fn record(
                 .into_iter()
                 .flat_map(|sample| sample.clamp(-1.0, 1.0).to_le_bytes())
                 .collect();
-            if input.write_all(&bytes).is_err() {
-                write_error = true;
-                break;
+            match blocks.try_send(bytes) {
+                Ok(()) => stalled_since = None,
+                Err(mpsc::TrySendError::Full(_)) => {
+                    let since = *stalled_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() > Duration::from_secs(10) {
+                        write_error = true;
+                        break;
+                    }
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    write_error = true;
+                    break;
+                }
             }
         }
         deadline += interval;
@@ -511,15 +583,27 @@ fn record(
             deadline = Instant::now();
         }
         // Every source stopped (a device was unplugged): what came before
-        // is still a recording, finished below like a normal stop.
+        // is kept as an incomplete recording, not told as a normal one.
         if capture_workers.iter().all(JoinHandle::is_finished) {
+            sources_lost = true;
             break;
         }
     }
     stop.store(true, Ordering::Release);
-    drop(input);
+    drop(blocks);
     for worker in capture_workers {
         let _ = worker.join();
+    }
+    let writing_ends = Instant::now() + Duration::from_secs(15);
+    while !writer.is_finished() && Instant::now() < writing_ends {
+        thread::sleep(Duration::from_millis(25));
+    }
+    if !writer.is_finished() {
+        // The encoder never read the rest: ending it closes the pipe.
+        let _ = encoder.kill();
+    }
+    if !writer.join().unwrap_or(false) {
+        write_error = true;
     }
     let end = Instant::now() + Duration::from_secs(15);
     let status = loop {
@@ -534,7 +618,7 @@ fn record(
         }
     };
     let errors = errors.join().unwrap_or_default();
-    let completed = !write_error && status.is_some_and(|status| status.success());
+    let completed = !write_error && !sources_lost && status.is_some_and(|status| status.success());
     let recorded = std::fs::metadata(&temporary).is_ok_and(|metadata| metadata.len() > 0);
     if !completed {
         if !recorded {
@@ -552,7 +636,7 @@ fn record(
     // A file that took the name meanwhile keeps it; the recording takes
     // the next free one.
     let saved = crate::file_operations::available_path(output);
-    std::fs::rename(&temporary, &saved).map_err(|_| RecordingError::SaveFailed)?;
+    std::fs::rename(&temporary, &saved).map_err(|_| RecordingError::SaveFailed(temporary))?;
     Ok(saved)
 }
 
@@ -620,6 +704,43 @@ pub fn encoder_arguments(settings: &RecordingSettings, output: &Path) -> Vec<Str
 
 #[cfg(test)]
 mod tests {
+    /// Review 2.1: a worker that sends Finished and ends between two polls
+    /// is still told, and the session stays active until it is.
+    #[test]
+    fn the_last_event_of_a_finished_worker_is_never_lost() {
+        use std::sync::{Arc, atomic::AtomicBool, mpsc};
+        let (send, events) = mpsc::channel();
+        let (go, wait) = mpsc::channel::<()>();
+        let worker = std::thread::spawn(move || {
+            let _ = wait.recv();
+            let _ = send.send(super::RecordingEvent::Finished(Ok("done.flac".into())));
+        });
+        let mut session = super::RecordingSession {
+            stop: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
+            pauses_spoken: Arc::default(),
+            events,
+            worker: Some(worker),
+        };
+        assert!(session.poll().is_empty());
+        assert!(session.is_active());
+        go.send(()).expect("go");
+        let mut finished = false;
+        for _ in 0..200 {
+            finished = session
+                .poll()
+                .iter()
+                .any(|event| matches!(event, super::RecordingEvent::Finished(Ok(_))));
+            if finished {
+                break;
+            }
+            assert!(session.is_active(), "inactive before Finished was read");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(finished);
+        assert!(!session.is_active());
+    }
+
     use super::*;
 
     /// Review 2.1: a recording that stops early keeps its sound under a

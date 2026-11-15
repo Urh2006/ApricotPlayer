@@ -699,8 +699,9 @@ impl MainWindowController {
         }
     }
 
-    /// Saves the player position before the application ends.
-    pub fn shutdown(&self) {
+    /// Saves the player position before the application ends. `false` when
+    /// the shell is busy (a modal window is open) and nothing was saved yet.
+    pub fn shutdown(&self) -> bool {
         if let Some(page) = self.ivars().page.borrow().as_ref() {
             page.render_host().cancel_pending_setup();
         }
@@ -717,9 +718,10 @@ impl MainWindowController {
         }
         self.ivars().global_hotkey.borrow_mut().take();
         self.ivars().global_shortcuts.borrow_mut().take();
-        self.with_shell(|shell, ui| shell.shutdown(ui));
+        let done = self.with_shell(|shell, ui| shell.shutdown(ui)).is_some();
         self.ivars().global_hotkey.borrow_mut().take();
         self.ivars().global_shortcuts.borrow_mut().take();
+        done
     }
 
     /// The id of the screen field that sent an action.
@@ -3286,7 +3288,15 @@ impl ShellUi for MacUi<'_> {
 
     fn exit(&mut self) {
         self.controller.mark_exiting();
-        NSApplication::sharedApplication(self.controller.mtm()).terminate(None);
+        // Exit is asked from inside the shell, which is still borrowed here;
+        // quitting after this call returns lets applicationShouldTerminate
+        // run the shell's shutdown, so a recording and the position are
+        // saved (review 2.1).
+        dispatch2::DispatchQueue::main().exec_async(|| {
+            if let Some(mtm) = MainThreadMarker::new() {
+                NSApplication::sharedApplication(mtm).terminate(None);
+            }
+        });
     }
 }
 
@@ -3541,7 +3551,7 @@ pub fn audit_background(application: Application, media: &std::path::Path) -> Re
             .view()
             .isHidden()
     );
-    controller.shutdown();
+    let _ = controller.shutdown();
     window.orderOut(None);
     println!("native-probe PASS: Escape, AX buttons, pause, focus preservation, Close");
     Ok(())

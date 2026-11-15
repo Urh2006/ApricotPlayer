@@ -64,8 +64,26 @@ pub struct IptvSource {
     pub protected_credentials: String,
     #[serde(default)]
     pub epg_address: String,
+    /// A guide address with a login in it, kept with the system's
+    /// credential protection; `epg_address` then only shows where it goes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub protected_epg: String,
     #[serde(default)]
     pub prefer_hls: bool,
+}
+
+/// Where a protected address goes, without its login: `https://host/…`.
+fn masked_address(address: &str) -> String {
+    Url::parse(address).map_or_else(
+        |_| String::new(),
+        |url| {
+            format!(
+                "{}://{}/…",
+                url.scheme(),
+                url.host_str().unwrap_or_default()
+            )
+        },
+    )
 }
 
 /// A web address that carries a login or a token: a user name or password,
@@ -122,17 +140,42 @@ impl IptvSource {
             "ApricotPlayer IPTV",
         )
         .map_err(|_| IptvError::CredentialsSave)?;
-        self.address = Url::parse(address).map_or_else(
-            |_| String::new(),
-            |url| {
-                format!(
-                    "{}://{}/…",
-                    url.scheme(),
-                    url.host_str().unwrap_or_default()
-                )
-            },
-        );
+        self.address = masked_address(address);
         Ok(())
+    }
+
+    /// Sets the guide address; one with a login or a token is protected like
+    /// the playlist address (review 2.1).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the system cannot protect it.
+    pub fn set_epg_address(&mut self, address: &str) -> Result<(), IptvError> {
+        let address = address.trim();
+        if !address_is_private(address) {
+            address.clone_into(&mut self.epg_address);
+            self.protected_epg.clear();
+            return Ok(());
+        }
+        self.protected_epg = crate::audiovault_credentials::protect_data(
+            address.as_bytes(),
+            CREDENTIAL_ENTROPY,
+            "ApricotPlayer IPTV",
+        )
+        .map_err(|_| IptvError::CredentialsSave)?;
+        self.epg_address = masked_address(address);
+        Ok(())
+    }
+
+    /// The address the guide is read from, unprotected when needed.
+    #[must_use]
+    pub fn epg_url(&self) -> String {
+        if self.protected_epg.is_empty() {
+            return self.epg_address.clone();
+        }
+        crate::audiovault_credentials::unprotect_data(&self.protected_epg, CREDENTIAL_ENTROPY)
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_default()
     }
 
     /// The address a playlist is read from, unprotected when needed.
@@ -892,6 +935,34 @@ mod tests {
         }
     }
 
+    /// Review 2.1: a guide address with a password is saved protected and
+    /// still reads back for loading the guide.
+    #[test]
+    fn a_guide_address_with_a_login_is_saved_protected() {
+        let mut source = IptvSource {
+            id: "one".into(),
+            name: "Home".into(),
+            kind: SourceKind::Xtream,
+            address: "https://example.invalid".into(),
+            protected_credentials: String::new(),
+            epg_address: String::new(),
+            protected_epg: String::new(),
+            prefer_hls: false,
+        };
+        let secret = "https://example.invalid/xmltv.php?username=USER&password=FAKE_SECRET";
+        source.set_epg_address(secret).expect("protect");
+        let saved = serde_json::to_string(&source).expect("json");
+        assert!(!saved.contains("FAKE_SECRET"), "{saved}");
+        assert_eq!(source.epg_address, "https://example.invalid/…");
+        let restored: IptvSource = serde_json::from_str(&saved).expect("read");
+        assert_eq!(restored.epg_url(), secret);
+        source
+            .set_epg_address("https://example.invalid/guide.xml")
+            .expect("plain");
+        assert!(source.protected_epg.is_empty());
+        assert_eq!(source.epg_url(), "https://example.invalid/guide.xml");
+    }
+
     #[test]
     fn credentialed_playlist_entries_stay_out_of_history() {
         let source = IptvSource {
@@ -901,6 +972,7 @@ mod tests {
             address: "https://example.invalid/free.m3u".into(),
             protected_credentials: String::new(),
             epg_address: String::new(),
+            protected_epg: String::new(),
             prefer_hls: false,
         };
         let channel = |url: &str| IptvChannel {

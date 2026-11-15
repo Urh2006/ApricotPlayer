@@ -339,17 +339,44 @@ pub fn transfer(
             // then the original goes. Any failure leaves the original or a
             // whole copy under the real name, never only a hidden file.
             Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
-                let partial = copy_beside(source, &target)?;
-                if let Err(error) = fs::rename(&partial, &target) {
-                    let _ = fs::remove_file(&partial);
-                    return Err(error.to_string());
-                }
-                fs::remove_file(source).map_err(|error| error.to_string())?;
+                move_across_devices(source, &target)?;
             }
             Err(error) => return Err(error.to_string()),
         },
     }
     Ok(TransferOutcome::Done(target))
+}
+
+/// A move to another drive: the original goes only after its whole copy has
+/// the name, and a file the copy replaced is kept aside until then, so a
+/// failure at any step leaves both files as they were (review 2.1).
+fn move_across_devices(source: &Path, target: &Path) -> Result<(), String> {
+    let partial = copy_beside(source, target)?;
+    let previous = target.exists().then(|| partial_path(target));
+    if let Some(previous) = &previous
+        && let Err(error) = fs::rename(target, previous)
+    {
+        let _ = fs::remove_file(&partial);
+        return Err(error.to_string());
+    }
+    let restore = |partial: &Path| {
+        let _ = fs::remove_file(partial);
+        if let Some(previous) = &previous {
+            let _ = fs::rename(previous, target);
+        }
+    };
+    if let Err(error) = fs::rename(&partial, target) {
+        restore(&partial);
+        return Err(error.to_string());
+    }
+    if let Err(error) = fs::remove_file(source) {
+        restore(target);
+        return Err(error.to_string());
+    }
+    if let Some(previous) = &previous {
+        let _ = fs::remove_file(previous);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -521,6 +548,38 @@ mod tests {
         assert!(result.is_err(), "{result:?}");
         assert_eq!(fs::read_to_string(&source).unwrap(), "new");
         assert_eq!(fs::read_to_string(to.join("song.mp3")).unwrap(), "old");
+        assert_eq!(fs::read_dir(&to).unwrap().count(), 1);
+    }
+
+    /// Review 2.1: a move to another drive whose original cannot be removed
+    /// keeps the file it was to replace.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_move_across_drives_keeps_the_destination() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().expect("folder");
+        let to = root.path().join("to");
+        fs::create_dir_all(&to).expect("to");
+        let source = root.path().join("song.mp3");
+        let target = to.join("song.mp3");
+        write(&source, "new");
+        write(&target, "old");
+        // Reading and writing are shared, deleting is not.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2)
+            .open(&source)
+            .expect("hold");
+        let result = super::move_across_devices(&source, &target);
+        drop(held);
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(fs::read_to_string(&source).unwrap(), "new");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "old");
+        assert_eq!(fs::read_dir(&to).unwrap().count(), 1);
+        // Without the hold the same move completes.
+        assert_eq!(super::move_across_devices(&source, &target), Ok(()));
+        assert!(!source.exists());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
         assert_eq!(fs::read_dir(&to).unwrap().count(), 1);
     }
 

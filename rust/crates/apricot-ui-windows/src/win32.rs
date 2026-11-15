@@ -505,7 +505,11 @@ struct PendingEditSave {
 /// `folder_conversion_worker`.
 enum ConversionMessage {
     Folder(apricot_app::converter::FolderConversionEvent),
-    FileFinished(std::result::Result<PathBuf, String>),
+    /// The result and the Cancel flag of a single file conversion.
+    FileFinished(
+        std::result::Result<PathBuf, String>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ),
     FolderFinished(std::result::Result<apricot_app::converter::FolderConversionOutcome, String>),
 }
 
@@ -551,6 +555,11 @@ struct PendingLocalFolderScan {
 #[allow(clippy::struct_excessive_bools)]
 struct WindowState {
     source_tools: apricot_shell::sources::SourcesController,
+    /// Set while `source_tools` is out in an open Radio, IPTV or Recording
+    /// window, with the running recording's Stop and Pause, so the global
+    /// recording keys still reach it (review 2.1).
+    source_tools_out: u32,
+    lent_recording: Option<apricot_platform::recording::RecordingControls>,
     list: HWND,
     open: HWND,
     search_label: HWND,
@@ -2181,6 +2190,8 @@ unsafe fn create_controls(
         application,
         settings_open: false,
         source_tools: apricot_shell::sources::SourcesController::default(),
+        source_tools_out: 0,
+        lent_recording: None,
         modal_open: false,
         tray_icon_added: false,
         focus_before_deactivation: HWND::default(),
@@ -8777,6 +8788,7 @@ pub(crate) unsafe fn export_clip_range(
         })
         .unwrap_or_default();
     let mut output = apricot_shell::free_clip_path(&folder, &stem, &extension, &reserved);
+    let mut replace_existing = false;
     if settings.ask_download_location_each_time {
         let catalog = apricot_app::embedded_catalog(&settings.language);
         let default_name = output.file_name().unwrap_or_default().to_string_lossy();
@@ -8789,7 +8801,11 @@ pub(crate) unsafe fn export_clip_range(
             &extension.to_ascii_uppercase(),
             catalog.text("all_files"),
         ) {
-            Ok(Some(path)) => output = path,
+            Ok(Some(path)) => {
+                // Save As already asked before an existing file is taken.
+                replace_existing = path.exists();
+                output = path;
+            }
             Ok(None) => return,
             Err(error) => {
                 show_error_message(window, &error);
@@ -8813,6 +8829,7 @@ pub(crate) unsafe fn export_clip_range(
         audio_quality: settings.audio_quality,
         headers: clip_http_headers(&item),
         audio_filter,
+        replace_existing,
     };
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
@@ -16625,7 +16642,7 @@ unsafe fn poll_search_suggestions(window: HWND) {
     submit_search(window);
 }
 
-/// Stops the folder conversions that run.
+/// Stops the conversions that run.
 unsafe fn cancel_conversions(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
@@ -16714,9 +16731,16 @@ unsafe fn start_conversion(window: HWND, start: crate::converter_win32::Converte
                 catalog_text(&state.application, "unsupported_input_format"),
             );
             let job = FileConversionJob { options, ..job };
+            // A single file stops on Cancel too (review 2.1).
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            state
+                .conversion_cancels
+                .push(std::sync::Arc::clone(&cancel));
             std::thread::spawn(move || {
-                let result = run_file_conversion(&job, &apricot_platform::run_ffmpeg_conversion);
-                let _ = sender.send(ConversionMessage::FileFinished(result));
+                let result = run_file_conversion(&job, &|program, arguments| {
+                    apricot_platform::run_ffmpeg_conversion_cancellable(program, arguments, &cancel)
+                });
+                let _ = sender.send(ConversionMessage::FileFinished(result, cancel));
             });
         }
         ConverterStart::Folder {
@@ -16862,11 +16886,35 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
                 );
             }
         }
-        ConversionMessage::FileFinished(Ok(path)) => {
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            let text = catalog.text("conversion_done").replace("{title}", &name);
-            set_status(state, &text, false);
-            finish_conversion_message(window, &text);
+        ConversionMessage::FileFinished(result, cancel) => {
+            state
+                .conversion_cancels
+                .retain(|flag| !std::sync::Arc::ptr_eq(flag, &cancel));
+            match result {
+                Ok(path) => {
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    let text = catalog.text("conversion_done").replace("{title}", &name);
+                    set_status(state, &text, false);
+                    finish_conversion_message(window, &text);
+                }
+                Err(_) if cancel.load(std::sync::atomic::Ordering::Acquire) => {
+                    let text = catalog.text("conversion_file_stopped");
+                    set_status(state, text, false);
+                    finish_conversion_message(window, text);
+                }
+                Err(error) => {
+                    close_conversion_progress(state);
+                    let text = catalog.text("conversion_failed").replace(
+                        "{error}",
+                        &apricot_app::comments::friendly_error(&catalog, &error),
+                    );
+                    show_message_box(
+                        window,
+                        &text,
+                        windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+                    );
+                }
+            }
         }
         ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::NoMediaFiles)) => {
             show_message_box(
@@ -16898,8 +16946,7 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
                 );
             }
         }
-        ConversionMessage::FileFinished(Err(error))
-        | ConversionMessage::FolderFinished(Err(error)) => {
+        ConversionMessage::FolderFinished(Err(error)) => {
             close_conversion_progress(state);
             let text = catalog.text("conversion_failed").replace(
                 "{error}",
