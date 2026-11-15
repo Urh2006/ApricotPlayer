@@ -1,3 +1,60 @@
+# v2.1.0-beta.5 - Third review: files, recordings, radio and playback
+
+**2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This beta fixes what a third careful review found in the 2.1 betas, most of all problems that could lose files or recordings. Everything from the earlier 2.1 betas is still included.
+
+## Changed
+
+- Radio station lists show only the station's name. Stations with the same name also say their format and bit rate, so you can tell them apart; everything else is in Details.
+- The radio window stays open while you copy a station's name or address, add or remove a favorite or read its details, so the screen reader no longer announces the whole window again.
+- A video clip from the marked part is now encoded again, so it starts and ends exactly at the marks instead of at the nearest key frame. It takes a little longer than before.
+
+## Fixed
+
+### Your files and recordings
+
+- Converting with "Replace originals" on a disk that tells capital letters apart no longer overwrites another file whose name differs only in capitals.
+- Moving a file to another drive with Replace keeps the file it was to replace until the original is gone, so a failed move never loses it.
+- When a recording device is unplugged, the recording is kept as an incomplete recording and you are told so, instead of it being reported as a normal recording.
+- A recording that could not take its name tells you where it was kept.
+- Stop and quitting can no longer hang when the recording folder stops accepting data, for example a network folder that went away.
+- The end of a recording is never missed, so you always hear whether it was saved.
+- Choosing an existing file in Save As for a marked part and confirming Replace now replaces it.
+- Cancel now also stops the conversion of a single file; the original stays as it was.
+- Quitting with Exit on the Mac now finishes a recording and saves the playback position.
+- The global recording keys now stop, pause and resume a recording while a Radio, IPTV or Recording window is open, and Start never begins a second recording.
+
+### Privacy
+
+- An IPTV programme guide address with a user name or password in it is now stored protected, like the other IPTV logins. Addresses saved by earlier betas are protected at the next start.
+
+### Playback
+
+- While a window such as the equalizer is open on Windows, a sleep timer, an A-B loop and the end of a CUE track still act on time.
+- "Stop after this chapter" at the last chapter is no longer skipped by the crossfade into the next item.
+- A sleep timer set to the end of the track now also stops a Spotify song that goes on to the next one by itself.
+- After a CUE track ends, Play starts it again from its beginning instead of playing the rest of the album, and seeking stays inside the track.
+- On Windows, the tracks of an imported CUE sheet now start and end at their own times, as on the Mac.
+- Renaming the playing file of a saved playlist keeps Next, Previous and the position working.
+- In the equalizer (F4), Cancel also brings back the advanced settings you saved meanwhile, and F4 opens again on the profile you confirmed for what is playing.
+
+### Radio, IPTV and podcasts
+
+- Countries, regions and other radio lists whose first page is empty after your filters now read on, so the matching stations are found.
+- Choosing a region keeps its country, so regions with the same name in different countries stay apart.
+- Saving radio filters for all lists now keeps the filters you set there before.
+- Refresh in radio favorites or history shows that list again instead of another catalogue list, and clearing the history also clears the list you see.
+- Radio and IPTV results that arrive after you went to another screen no longer open over it.
+- IPTV Now playing tells the programme of the channel that plays, even after you browsed another source.
+- Refreshing a podcast keeps the episode you selected, even when new episodes arrive at the top.
+- A podcast search or category that answers after you left no longer opens its results over another screen.
+
+### Spotify
+
+- A playlist subscription check that fails now waits for the next interval instead of trying again every minute, and a failure in the background is said in the status line instead of a message box.
+- Moving several of your own songs in a subscribed playlist no longer reports that someone else changed the order.
+
+The Mac version requires an Apple silicon Mac running macOS 27 or later. After copying ApricotPlayer to Applications, you may need to approve its first launch in System Settings, Privacy & Security, using Open Anyway. Download only the official release files.
+
 # v2.1.0-beta.4 - Safer files and recordings
 
 **2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This beta fixes problems found in two careful reviews of the first three betas, most of all ones that could lose files or recordings. Everything from the earlier 2.1 betas is still included.
