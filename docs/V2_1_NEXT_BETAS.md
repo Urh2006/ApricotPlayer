@@ -6,6 +6,10 @@ Urh se je 14. 11. 2026 odločil, da gredo v beto 2 samo izbira velikosti skoka (
 
 - Predlogi med samim tipkanjem niso dodani: samodejen seznam med tipkanjem bi prekinjal bralnik zaslona. Predlogi ostanejo na Ctrl+Shift+Down.
 
+## Po 2.1
+
+- Filmi in serije za vire Stalker (Urh 15. 11. 2026: za pozneje). Zdaj Stalker podpira samo Live TV.
+
 ## Že obstaja, zato ni v seznamu
 
 - Razlaga nastavitve na F1 in kratki oglasi (Ctrl+Alt+Shift+V) sta v beti 3.
