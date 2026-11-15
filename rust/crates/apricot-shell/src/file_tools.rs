@@ -140,11 +140,25 @@ pub fn rename_from_values(
 #[must_use]
 pub fn browser_address(item: Option<&MediaItem>, channel: bool) -> Option<String> {
     let item = item?;
-    let address = if channel {
+    let text = |key: &str| {
         item.metadata
-            .get("channel_url")
+            .get(key)
             .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)?
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let address = if channel {
+        // yt-dlp search results name the channel by its id or handle only.
+        text("channel_url")
+            .map(str::to_owned)
+            .or_else(|| {
+                text("channel_id").map(|id| format!("https://www.youtube.com/channel/{id}"))
+            })
+            .or_else(|| {
+                text("uploader_id")
+                    .filter(|handle| handle.starts_with('@'))
+                    .map(|handle| format!("https://www.youtube.com/{handle}"))
+            })?
     } else {
         item.url.as_ref()?.to_string()
     };
@@ -305,6 +319,32 @@ impl crate::Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_search_result_channel_opens_by_its_id_or_handle() {
+        let mut item = crate::player::local_file_item(std::path::Path::new("/Music/a.mp3"));
+        item.source = apricot_core::MediaSource::Youtube;
+        item.local_path = None;
+        item.metadata.clear();
+        item.url = url::Url::parse("https://www.youtube.com/watch?v=abc").ok();
+        assert_eq!(browser_address(Some(&item), true), None);
+        item.metadata
+            .insert("uploader_id".to_owned(), "@ChromeDevs".into());
+        assert_eq!(
+            browser_address(Some(&item), true).as_deref(),
+            Some("https://www.youtube.com/@ChromeDevs")
+        );
+        item.metadata
+            .insert("channel_id".to_owned(), "UCnUYZLuoy1rq1aVMwx4aTzw".into());
+        assert_eq!(
+            browser_address(Some(&item), true).as_deref(),
+            Some("https://www.youtube.com/channel/UCnUYZLuoy1rq1aVMwx4aTzw")
+        );
+        assert_eq!(
+            browser_address(Some(&item), false).as_deref(),
+            Some("https://www.youtube.com/watch?v=abc")
+        );
+    }
 
     #[test]
     fn the_recent_form_opens_files_folders_or_clears() {

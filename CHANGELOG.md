@@ -19,7 +19,7 @@ The keys below are the Windows defaults. On the Mac, Command takes the place of 
 - Ctrl+Alt+V opens the file or folder on the clipboard, copied in the file manager or as a path.
 - Alt+Shift+F copies the selected or playing file so you can paste it in a folder.
 - Shift+F2 renames the selected or playing file. A name without an extension keeps the current one. In Favorites, Shift+F2 renames the favorite.
-- Alt+Shift+E shows the file selected in its folder, and Alt+Enter opens its properties.
+- Alt+Shift+E shows the file selected in its folder, and Alt+Enter opens its properties. On the Mac these are Finder and its Get Info window; the first Get Info asks once whether ApricotPlayer may control Finder.
 - While listening, Ctrl+K marks or unmarks the playing file, K tells how many files are marked, and Alt+Shift+K opens Manage files with all of them marked, to copy, move or delete them together.
 
 ### YouTube

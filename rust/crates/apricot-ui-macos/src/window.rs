@@ -3021,6 +3021,116 @@ impl ShellUi for MacUi<'_> {
         })
     }
 
+    /// Files copied in Finder (file URLs), or absolute paths copied as text,
+    /// one per line.
+    fn clipboard_paths(&mut self) -> Vec<std::path::PathBuf> {
+        let pasteboard = objc2_app_kit::NSPasteboard::generalPasteboard();
+        let mut paths = Vec::new();
+        if let Some(items) = pasteboard.pasteboardItems() {
+            for item in &items {
+                // SAFETY: AppKit's static pasteboard type.
+                let url = item.stringForType(unsafe { objc2_app_kit::NSPasteboardTypeFileURL });
+                if let Some(path) = url
+                    .and_then(|url| objc2_foundation::NSURL::URLWithString(&url))
+                    .filter(|url| url.isFileURL())
+                    .and_then(|url| url.path())
+                {
+                    paths.push(std::path::PathBuf::from(path.to_string()));
+                }
+            }
+        }
+        if paths.is_empty()
+            // SAFETY: as above.
+            && let Some(text) = pasteboard.stringForType(unsafe { objc2_app_kit::NSPasteboardTypeString })
+        {
+            for line in text.to_string().lines() {
+                let line = line.trim().trim_matches('"');
+                let path = line.strip_prefix("file://").map_or_else(
+                    || std::path::PathBuf::from(line),
+                    |rest| {
+                        objc2_foundation::NSURL::URLWithString(&NSString::from_str(&format!(
+                            "file://{rest}"
+                        )))
+                        .and_then(|url| url.path())
+                        .map_or_else(
+                            || std::path::PathBuf::from(rest),
+                            |path| path.to_string().into(),
+                        )
+                    },
+                );
+                if path.is_absolute() && path.exists() {
+                    paths.push(path);
+                }
+            }
+        }
+        paths
+    }
+
+    /// The files as Finder copies them, so Paste in Finder puts them there.
+    fn copy_files_to_clipboard(&mut self, paths: &[std::path::PathBuf]) -> bool {
+        let urls: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(
+                    &path.to_string_lossy(),
+                ))
+            })
+            .collect();
+        if urls.is_empty() {
+            return false;
+        }
+        let pasteboard = objc2_app_kit::NSPasteboard::generalPasteboard();
+        pasteboard.clearContents();
+        let array = objc2_foundation::NSArray::from_retained_slice(&urls);
+        // SAFETY: NSURL implements NSPasteboardWriting.
+        unsafe { msg_send![&*pasteboard, writeObjects: &*array] }
+    }
+
+    /// Finder opens the folder with the file selected.
+    fn reveal_file(&mut self, path: &std::path::Path) -> bool {
+        if !path.exists() {
+            return false;
+        }
+        let url =
+            objc2_foundation::NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        objc2_app_kit::NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(
+            &objc2_foundation::NSArray::from_retained_slice(&[url]),
+        );
+        true
+    }
+
+    /// Finder's Get Info window of the file.
+    fn show_file_properties(&mut self, path: &std::path::Path) -> bool {
+        if !path.exists() {
+            return false;
+        }
+        // AppleScript strings escape backslashes and quotes.
+        let quoted = path
+            .to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        let source = format!(
+            "tell application \"Finder\"\nactivate\nopen information window of (POSIX file \"{quoted}\" as alias)\nend tell"
+        );
+        // SAFETY: `alloc` of NSAppleScript; `initWithSource:` takes it.
+        let allocated: objc2::rc::Allocated<objc2_foundation::NSAppleScript> = unsafe {
+            msg_send![
+                <objc2_foundation::NSAppleScript as objc2::ClassType>::class(),
+                alloc
+            ]
+        };
+        let Some(script) = objc2_foundation::NSAppleScript::initWithSource(
+            allocated,
+            &NSString::from_str(&source),
+        ) else {
+            return false;
+        };
+        let mut error = None;
+        // SAFETY: the error dictionary is written only on failure.
+        let _ = unsafe { script.executeAndReturnError(Some(&mut error)) };
+        error.is_none()
+    }
+
     fn set_window_title(&mut self, title: &str) {
         if let Some(window) = self.controller.window() {
             window.setTitle(&NSString::from_str(title));
