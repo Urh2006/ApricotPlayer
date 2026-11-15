@@ -94,6 +94,7 @@ const AUDIO_DEVICE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 impl Application {
     pub fn new(settings: SettingsController, menu_availability: MainMenuAvailability) -> Self {
+        apricot_core::set_short_announcements(settings.current().announcement_verbosity == "short");
         Self {
             settings,
             menu_availability,
@@ -801,6 +802,24 @@ impl Application {
         item: &MediaItem,
     ) -> Result<Option<MediaItem>, MediaCollectionControllerError> {
         self.state.favorites.remove_item(item)
+    }
+
+    /// 2.1: switches between full and short announcements and saves it;
+    /// the sentence to speak, in its full form.
+    pub fn toggle_announcement_verbosity(&mut self) -> String {
+        let short = self.settings().announcement_verbosity != "short";
+        let _ = self.set_string_setting(
+            SettingId::AnnouncementVerbosity,
+            if short { "short" } else { "full" },
+        );
+        let _ = self.save_settings();
+        embedded_catalog(&self.settings().language)
+            .full_text(if short {
+                "announcements_short_on"
+            } else {
+                "announcements_full_on"
+            })
+            .to_owned()
     }
 
     /// 2.1: makes `items` the playing list, as a folder opened with a file.
@@ -3097,6 +3116,9 @@ impl Application {
     /// Returns an error without committing the draft if persistence fails.
     pub fn save_settings(&mut self) -> Result<(), SettingsControllerError> {
         let _ = self.settings.save()?;
+        apricot_core::set_short_announcements(
+            self.settings.current().announcement_verbosity == "short",
+        );
         if let Some(spotify) = self.spotify_settings_draft {
             if spotify != self.saved_spotify_settings() {
                 apricot_spotify::settings::save(&spotify)

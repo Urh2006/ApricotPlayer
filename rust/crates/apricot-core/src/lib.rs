@@ -22,7 +22,9 @@ pub use announcement::{
 pub use audio::{EqualizerBand, FactoryEqualizerPreset};
 pub use context_menu::{CONTEXT_MENUS, ContextMenuDefinition};
 pub use error::{AppError, ErrorDomain, RecoveryAction};
-pub use locale::{LanguageDefinition, TranslationCatalog};
+pub use locale::{
+    LanguageDefinition, TranslationCatalog, set_short_announcements, short_announcements,
+};
 pub use media::{MediaId, MediaItem, MediaKind, MediaSource};
 pub use menu::{CUSTOMIZABLE_MAIN_MENU, MainMenuDefinition, PERMANENT_MAIN_MENU_IDS};
 pub use navigation::{FocusId, NavigationStack, Route, RouteFrame};

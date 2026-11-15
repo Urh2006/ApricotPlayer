@@ -633,6 +633,11 @@ impl Shell {
                 self.manage_marked_files(ui);
                 return;
             }
+            "toggle_announcement_verbosity" => {
+                let message = self.application.toggle_announcement_verbosity();
+                ui.set_status(&message, true);
+                return;
+            }
             "open_in_browser" | "open_channel_in_browser" => {
                 self.open_active_in_browser(ui, action_id == "open_channel_in_browser");
                 return;

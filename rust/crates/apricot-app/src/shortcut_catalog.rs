@@ -308,6 +308,7 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("player_mark_file", "files"),
     ("player_marked_count", "files"),
     ("player_manage_marked", "files"),
+    ("toggle_announcement_verbosity", "system"),
 ];
 
 /// The category an action is listed under; unknown ids fall back to General.

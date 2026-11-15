@@ -13769,6 +13769,12 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_recents" => open_recents(window),
         "rename_file" => rename_active_file(window),
         "player_manage_marked" => file_operations::manage_marked(window),
+        "toggle_announcement_verbosity" => {
+            if let Some(state) = state_mut(window) {
+                let message = state.application.toggle_announcement_verbosity();
+                set_status(state, &message, true);
+            }
+        }
         "open_in_browser" | "open_channel_in_browser" => {
             open_active_in_browser(window, action_id == "open_channel_in_browser");
         }

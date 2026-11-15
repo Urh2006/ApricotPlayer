@@ -529,6 +529,16 @@ fn general_controls(
             catalog,
         ),
         choice_labeled(
+            SettingId::AnnouncementVerbosity,
+            "announcement_verbosity",
+            &settings.announcement_verbosity,
+            &[
+                ("full", "announcement_verbosity_full"),
+                ("short", "announcement_verbosity_short"),
+            ],
+            catalog,
+        ),
+        choice_labeled(
             SettingId::YtdlpUpdateChannel,
             "ytdlp_update_channel",
             &settings.ytdlp_update_channel,
@@ -1882,7 +1892,7 @@ mod tests {
         let mac = usize::from(cfg!(target_os = "macos"));
         // 2.1 adds the yt-dlp channel and appends "Media controls",
         // "Global shortcuts" and the four import and export commands.
-        assert_eq!(model.controls.len(), 25 + mac);
+        assert_eq!(model.controls.len(), 26 + mac);
         assert!(matches!(
             &model.controls[0],
             SettingsControl::Choice {
@@ -2023,7 +2033,7 @@ mod tests {
             // shortcuts and the four import and export commands.
             (
                 SettingsSection::General,
-                25 + usize::from(cfg!(target_os = "macos")),
+                26 + usize::from(cfg!(target_os = "macos")),
             ),
             // 19 Python items, Spotify, the four 2.1 entries and the reset button.
             (SettingsSection::MainMenu, 25),

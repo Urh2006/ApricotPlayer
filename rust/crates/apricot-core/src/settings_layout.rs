@@ -72,6 +72,7 @@ const GENERAL: &[SettingId] = &[
     SettingId::ShowShortcutsInLabels,
     SettingId::AutoUpdateYtdlp,
     SettingId::YtdlpUpdateChannel,
+    SettingId::AnnouncementVerbosity,
     SettingId::AutoUpdateApp,
     SettingId::AppUpdateIntervalHours,
     SettingId::AppUpdateNotifications,
@@ -305,8 +306,8 @@ mod tests {
                 .iter()
                 .flat_map(|section| section.reset_fields)
                 .count(),
-            // 112 Python placements and seven 2.1 settings.
-            119
+            // 112 Python placements and eight 2.1 settings.
+            120
         );
         assert!(
             SETTINGS_SECTIONS
@@ -325,7 +326,7 @@ mod tests {
         {
             *placement_counts.entry(*id).or_default() += 1;
         }
-        assert_eq!(placement_counts.len(), 118);
+        assert_eq!(placement_counts.len(), 119);
         assert_eq!(
             placement_counts.get(&SettingId::AppUpdateNotifications),
             Some(&2)

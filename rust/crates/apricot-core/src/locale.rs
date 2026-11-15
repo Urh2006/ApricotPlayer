@@ -1,6 +1,26 @@
 //! Shipped language identities and platform-neutral translation lookup.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+/// 2.1: short announcements, Settings, General, "Announcements". A key
+/// with a `_short` variant is spoken in that shorter form while it is on.
+static SHORT_ANNOUNCEMENTS: AtomicBool = AtomicBool::new(false);
+
+/// Turns the short announcements on or off for every catalog.
+pub fn set_short_announcements(short: bool) {
+    SHORT_ANNOUNCEMENTS.store(short, Ordering::Relaxed);
+}
+
+/// Whether announcements use their short forms.
+pub fn short_announcements() -> bool {
+    SHORT_ANNOUNCEMENTS.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LanguageDefinition {
@@ -144,6 +164,24 @@ impl TranslationCatalog {
     }
 
     pub fn text<'a>(&'a self, key: &'a str) -> &'a str {
+        if short_announcements() {
+            let short = format!("{key}_short");
+            if let Some(text) = self
+                .selected
+                .get(&short)
+                .or_else(|| self.english.get(&short))
+            {
+                return text;
+            }
+        }
+        self.selected
+            .get(key)
+            .or_else(|| self.english.get(key))
+            .map_or(key, String::as_str)
+    }
+
+    /// The full form of `key`, whatever the announcement length.
+    pub fn full_text<'a>(&'a self, key: &'a str) -> &'a str {
         self.selected
             .get(key)
             .or_else(|| self.english.get(key))
@@ -161,6 +199,27 @@ impl TranslationCatalog {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn short_announcements_use_the_short_form_only_where_one_exists() {
+        let english = std::collections::BTreeMap::from([
+            ("volume".to_owned(), "Volume: {volume}".to_owned()),
+            ("volume_short".to_owned(), "{volume}".to_owned()),
+            ("label".to_owned(), "Label".to_owned()),
+        ]);
+        let catalog =
+            super::TranslationCatalog::new("en", english, std::collections::BTreeMap::new());
+        super::set_short_announcements(true);
+        let short = (
+            catalog.text("volume").to_owned(),
+            catalog.text("label").to_owned(),
+        );
+        let full = catalog.full_text("volume").to_owned();
+        super::set_short_announcements(false);
+        assert_eq!(short, ("{volume}".to_owned(), "Label".to_owned()));
+        assert_eq!(full, "Volume: {volume}");
+        assert_eq!(catalog.text("volume"), "Volume: {volume}");
+    }
+
     use std::collections::{BTreeMap, HashSet};
 
     use super::{LANGUAGES, TranslationCatalog};
