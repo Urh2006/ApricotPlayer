@@ -2655,6 +2655,18 @@ unsafe fn is_section_list_commit_key(message: &MSG) -> bool {
                 && !GetKeyState(i32::from(VK_SHIFT.0)).is_negative())
 }
 
+/// The setting a control changes, for its F1 help.
+fn bound_setting(binding: &ControlBinding) -> Option<SettingId> {
+    match binding {
+        ControlBinding::Text(setting)
+        | ControlBinding::Checkbox(setting)
+        | ControlBinding::Integer { setting, .. }
+        | ControlBinding::IntegerSlider { setting, .. }
+        | ControlBinding::Choice { setting, .. } => Some(*setting),
+        _ => None,
+    }
+}
+
 unsafe extern "system" fn settings_control_proc(
     window: HWND,
     message: u32,
@@ -2683,6 +2695,24 @@ unsafe extern "system" fn settings_control_proc(
             return LRESULT(code | DLGC_WANTMESSAGE_CODE);
         }
         return LRESULT(code);
+    }
+    // 2.1: F1 says what the setting with the focus does.
+    if message == WM_KEYDOWN
+        && wparam.0 == 0x70
+        && let Ok(parent) = GetParent(window)
+        && let Some(state) = state(parent)
+        && let Some(setting) = state
+            .controls
+            .iter()
+            .find(|bound| bound.control == window)
+            .and_then(|bound| bound_setting(&bound.binding))
+    {
+        let catalog = settings_catalog(state);
+        state.announcer.announce(
+            &apricot_app::settings_model::setting_help(&catalog, setting),
+            true,
+        );
+        return LRESULT(0);
     }
     if (message == WM_KEYDOWN || message == WM_CHAR)
         && let Ok(parent) = GetParent(window)

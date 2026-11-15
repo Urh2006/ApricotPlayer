@@ -2,19 +2,13 @@
 
 Urh se je 14. 11. 2026 odločil, da gredo v beto 2 samo izbira velikosti skoka (custom seek), skoki na odstotek, globalne bližnjice ter hiter vklop odstranjevanja tišine in prostorskega zvoka. Spodnje funkcije pridejo pozneje, po sklopih, v naslednjih betah ali po 2.1, odvisno od stabilnosti. Vse so lastna implementacija; bližnjice je treba izbrati brez konfliktov na Windows in Macu (tipka F je na primer že prikaz formata).
 
-## Datoteke
-
-
 ## YouTube
 
 - Predlogi med samim tipkanjem niso dodani: samodejen seznam med tipkanjem bi prekinjal bralnik zaslona. Predlogi ostanejo na Ctrl+Shift+Down.
 
-## Ostalo
-
-- Razlaga nastavitve na F1, ko je fokus na njej.
-- Dve ravni zgovornosti (polna in kratka) s hitrim preklopom.
-
 ## Že obstaja, zato ni v seznamu
+
+- Razlaga nastavitve na F1 in kratki oglasi (Ctrl+Alt+Shift+V) sta v beti 3.
 
 - Korak ravnovesja in prostorskega zvoka: okno Audio processing (F5).
 - Brisanje izvirnikov po pretvorbi: "Replace the original files" v pretvorniku.

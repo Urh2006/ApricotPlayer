@@ -1756,6 +1756,18 @@ fn seek_amount_choice(
     )
 }
 
+/// 2.1: what a setting does, spoken when F1 is pressed on its control.
+#[must_use]
+pub fn setting_help(catalog: &TranslationCatalog, setting: SettingId) -> String {
+    let key = format!("setting_help_{}", setting.key());
+    let text = catalog.text(&key);
+    if text == key {
+        catalog.text("setting_help_missing").to_owned()
+    } else {
+        text.to_owned()
+    }
+}
+
 fn choice_raw(
     setting: SettingId,
     label_key: &str,
@@ -1859,6 +1871,43 @@ mod tests {
     use crate::english_catalog;
 
     use super::{SettingsControl, SettingsScreenModel};
+
+    #[test]
+    fn every_setting_control_has_its_own_f1_help() {
+        let catalog = english_catalog();
+        let settings = SettingsDocument {
+            show_advanced_network_settings: true,
+            ..SettingsDocument::default()
+        };
+        let missing = catalog.text("setting_help_missing").to_owned();
+        let mut checked = 0;
+        for section in SettingsSection::ALL {
+            let model = SettingsScreenModel::build(
+                &catalog,
+                &settings,
+                Path::new(r"C:\Profile\settings.json"),
+                *section,
+            );
+            for control in &model.controls {
+                let setting = match control {
+                    SettingsControl::Text { setting, .. }
+                    | SettingsControl::Choice { setting, .. }
+                    | SettingsControl::Checkbox { setting, .. }
+                    | SettingsControl::Integer { setting, .. }
+                    | SettingsControl::IntegerSlider { setting, .. } => *setting,
+                    _ => continue,
+                };
+                assert_ne!(
+                    super::setting_help(&catalog, setting),
+                    missing,
+                    "{} has no F1 help",
+                    setting.key()
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 100, "only {checked} settings were checked");
+    }
 
     #[test]
     fn settings_shell_has_all_sections_in_canonical_order() {
