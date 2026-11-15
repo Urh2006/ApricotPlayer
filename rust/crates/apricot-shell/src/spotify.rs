@@ -102,6 +102,9 @@ impl SelectedAccount {
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)] // As on Windows.
 pub(crate) struct SpotifyState {
+    /// When Next, Previous or a list edge was asked, so that track change
+    /// is not a natural end for the sleep timer.
+    manual_change: Option<std::time::Instant>,
     service: Option<Arc<SpotifyService>>,
     receiver: Option<Receiver<SpotifyEvent>>,
     pub(crate) epochs: SpotifyEpochs,
@@ -1349,8 +1352,19 @@ impl Shell {
                 }
             }
         }
+        let timer_end = crate::playback_features::spotify_track_end(
+            &mut self.application,
+            self.spotify.manual_change.take(),
+        );
         if !self.application.replace_current_player_item(item.clone()) {
             return false;
+        }
+        if let Some(commands) = timer_end {
+            for command in commands {
+                self.execute_player_command(ui, command);
+            }
+            ui.set_status(&self.text("sleep_timer_finished"), true);
+            return true;
         }
         self.announce_playing(ui, &item);
         if let Err(error) = self
@@ -1399,6 +1413,12 @@ impl Shell {
         };
         let player = playback.player_state().unwrap_or_default();
         let mut smart_start = None;
+        if matches!(
+            action_id,
+            "player_next" | "player_previous" | "spotify_first_track" | "spotify_last_track"
+        ) {
+            self.spotify.manual_change = Some(std::time::Instant::now());
+        }
         let key = match action_id {
             "player_next" => {
                 playback.next();

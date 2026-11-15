@@ -122,6 +122,9 @@ pub(crate) struct EqualizerDialogState {
     db_range: i64,
     original_equalizer: Option<EqualizerSession>,
     original_db_range: i64,
+    /// What Cancel puts back besides the bands (review 2.1).
+    original_advanced: serde_json::Value,
+    original_session_preset: Option<String>,
     compare_showing_original: bool,
     accepted: bool,
 }
@@ -210,7 +213,8 @@ impl Shell {
             .audio()
             .and_then(|audio| audio.equalizer.clone());
         let (_, gains) = settings.base_state(original_equalizer.as_ref(), &device);
-        let active_preset = settings.effective_preset(&device);
+        // The profile confirmed for this session, not the global one.
+        let active_preset = self.application.equalizer_dialog_preset();
         let db_range = settings.db_range();
         // The shown profile's advanced settings shape what is heard.
         self.application
@@ -223,6 +227,12 @@ impl Shell {
             db_range,
             original_equalizer,
             original_db_range: db_range,
+            original_advanced: self.application.equalizer_advanced_profiles(),
+            original_session_preset: self
+                .application
+                .playback_features()
+                .equalizer_session_preset
+                .clone(),
             compare_showing_original: false,
             accepted: false,
         });
@@ -523,8 +533,15 @@ impl Shell {
         let mut settings = self.equalizer_settings();
         settings.db_range = state.original_db_range;
         let _ = self.update_equalizer_settings(&settings, false);
+        // Cancel brings back all that was heard before F4: the bands, the
+        // advanced settings Advanced saved meanwhile and the profile.
+        self.application
+            .restore_equalizer_advanced_profiles(state.original_advanced);
         self.application
             .set_player_equalizer(state.original_equalizer);
+        self.application
+            .playback_features_mut()
+            .equalizer_session_preset = state.original_session_preset;
         self.apply_player_equalizer(ui);
         ui.set_status(&self.text("equalizer_closed"), true);
     }

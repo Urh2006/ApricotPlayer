@@ -521,7 +521,17 @@ impl Shell {
         if moved_on {
             return running;
         }
+        // The finished track waits at its own start, so Play hears it again
+        // instead of the rest of the album file (review 2.1).
         let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(true));
+        let start = segment_time(&item, "apricot_segment_start").unwrap_or(0.0);
+        let _ = self.execute_player_command(
+            ui,
+            PlaybackCommand::SeekAbsolute {
+                seconds: start,
+                exact: true,
+            },
+        );
         None
     }
 
@@ -777,12 +787,25 @@ impl Shell {
     pub(crate) fn seek_player(&mut self, ui: &mut dyn ShellUi, seconds: f64) {
         self.player.clip_preview = None;
         self.application.playback_features_mut().note_manual_seek();
+        let wanted = self.application.player_session().position_seconds() + seconds;
+        if let Some(target) =
+            apricot_app::playback_features::segment_target(&self.application, wanted)
+        {
+            let _ = self.execute_player_command(
+                ui,
+                PlaybackCommand::SeekAbsolute {
+                    seconds: target,
+                    exact: true,
+                },
+            );
+            return;
+        }
         if self.application.playback_features().ranges.repeat {
             let target = self
                 .application
                 .playback_features()
                 .ranges
-                .constrain(self.application.player_session().position_seconds() + seconds);
+                .constrain(wanted);
             let _ = self.execute_player_command(
                 ui,
                 PlaybackCommand::SeekAbsolute {
@@ -809,6 +832,8 @@ impl Shell {
             .playback_features()
             .ranges
             .constrain(seconds);
+        let seconds = apricot_app::playback_features::segment_target(&self.application, seconds)
+            .unwrap_or(seconds);
         if self.execute_player_command(
             ui,
             PlaybackCommand::SeekAbsolute {

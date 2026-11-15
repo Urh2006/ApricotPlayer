@@ -126,6 +126,27 @@ pub(super) unsafe fn dispatch(window: HWND, owner: HWND, action: &str) -> bool {
     true
 }
 
+/// The timer and range part of `tick` while a modal window is open: its
+/// pauses, stops, volume fades and loop seeks happen on time, but nothing
+/// starts the next item until the window closes (review 2.1).
+pub(super) unsafe fn tick_transport(window: HWND) {
+    let commands = {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        let mut ui = Ui {
+            owner: window,
+            announcer: &state.announcer,
+            sender: state.playback.as_ref().map(PlaybackRuntime::command_sender),
+            generation: state.application.player_session().generation(),
+        };
+        features::tick_playback_features(&mut state.application, &mut ui)
+    };
+    for command in commands {
+        let _ = execute_player_command(window, command);
+    }
+}
+
 pub(super) unsafe fn tick(window: HWND) {
     let commands = {
         let Some(state) = state_mut(window) else {

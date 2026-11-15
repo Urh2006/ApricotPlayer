@@ -683,6 +683,9 @@ struct WindowState {
     download_progress_task_id: Option<u64>,
     /// The generation whose CUE track end was reached (review 2.1).
     segment_ended: Option<u64>,
+    /// Player events that arrived while a modal window was open, handled
+    /// in order once it closes (review 2.1).
+    deferred_playback: std::collections::VecDeque<apricot_playback::PlaybackUpdate>,
     /// Running clip exports and the target each one reserved.
     clip_exports: Vec<(Receiver<std::result::Result<PathBuf, String>>, PathBuf)>,
     pending_bpm: Vec<PendingBpmAnalysis>,
@@ -2244,6 +2247,7 @@ unsafe fn create_controls(
         download_progress_task_ids: HashSet::new(),
         download_progress_task_id: None,
         segment_ended: None,
+        deferred_playback: std::collections::VecDeque::new(),
         clip_exports: Vec::new(),
         pending_bpm: Vec::new(),
         pending_edit_saves: Vec::new(),
@@ -10684,22 +10688,57 @@ unsafe fn poll_youtube_api_metadata(window: HWND) {
     }
 }
 
+/// While a modal window is open the player keeps time: positions are taken
+/// in, so a sleep timer, an A-B loop and the end of a CUE track still act
+/// on time, and every other event waits for the window to close (review
+/// 2.1).
+unsafe fn poll_playback_while_modal(window: HWND) {
+    loop {
+        let Some(state) = state_mut(window) else {
+            return;
+        };
+        let Some(runtime) = state.playback.as_ref() else {
+            return;
+        };
+        let Ok(Some(update)) = runtime.poll_update() else {
+            break;
+        };
+        match update.event {
+            PlaybackEvent::Position { elapsed, .. } if state.deferred_playback.is_empty() => {
+                if state
+                    .application
+                    .apply_playback_event(update.generation, update.event.clone())
+                {
+                    let _ = cue_track_position_inner(window, update.generation, elapsed, false);
+                }
+            }
+            _ => state.deferred_playback.push_back(update),
+        }
+    }
+    playback_features::tick_transport(window);
+}
+
 #[allow(clippy::too_many_lines)]
 unsafe fn poll_playback_runtime(window: HWND) {
     if state(window).is_some_and(|state| state.modal_open) {
+        poll_playback_while_modal(window);
         return;
     }
     playback_features::tick(window);
     loop {
         let update = {
-            let Some(state) = state(window) else {
+            let Some(state) = state_mut(window) else {
                 return;
             };
-            let Some(runtime) = state.playback.as_ref() else {
-                stop_playback_timer(window);
-                return;
-            };
-            runtime.poll_update()
+            if let Some(update) = state.deferred_playback.pop_front() {
+                Ok(Some(update))
+            } else {
+                let Some(runtime) = state.playback.as_ref() else {
+                    stop_playback_timer(window);
+                    return;
+                };
+                runtime.poll_update()
+            }
         };
         let update = match update {
             Ok(Some(update)) => update,
@@ -10898,6 +10937,17 @@ fn segment_time(item: &apricot_core::MediaItem, key: &str) -> Option<f64> {
 /// runs into the next track. Seeking back before the end arms it again.
 /// `true` when the playback poll must return because the item changed.
 unsafe fn cue_track_position(window: HWND, generation: u64, elapsed: f64) -> bool {
+    cue_track_position_inner(window, generation, elapsed, true)
+}
+
+/// `cue_track_position`; without `navigate` (a modal window is open) the
+/// end only stops the track, which waits at its start.
+unsafe fn cue_track_position_inner(
+    window: HWND,
+    generation: u64,
+    elapsed: f64,
+    navigate: bool,
+) -> bool {
     let Some(state) = state_mut(window) else {
         return false;
     };
@@ -10949,11 +10999,12 @@ unsafe fn cue_track_position(window: HWND, generation: u64, elapsed: f64) -> boo
         return false;
     };
     mark_current_podcast_episode_played(state);
-    let autoplay_next = state
-        .application
-        .player_session()
-        .enabled_toggles()
-        .contains(&SessionToggle::AutoplayNext);
+    let autoplay_next = navigate
+        && state
+            .application
+            .player_session()
+            .enabled_toggles()
+            .contains(&SessionToggle::AutoplayNext);
     if autoplay_next {
         // CUE tracks share one file, so a new generation, not the item's
         // identity, tells that the next track started.
@@ -10970,7 +11021,16 @@ unsafe fn cue_track_position(window: HWND, generation: u64, elapsed: f64) -> boo
             state.application.settings().announce_playback_finished,
         );
     }
+    // The finished track waits at its own start, so Play hears it again
+    // instead of the rest of the album file (review 2.1).
     let _ = execute_player_command(window, PlaybackCommand::SetPaused(true));
+    let _ = execute_player_command(
+        window,
+        PlaybackCommand::SeekAbsolute {
+            seconds: start,
+            exact: true,
+        },
+    );
     false
 }
 
@@ -15583,12 +15643,27 @@ unsafe fn toggle_player_pause(window: HWND) {
 unsafe fn seek_player(window: HWND, seconds: f64) {
     if let Some(state) = state_mut(window) {
         state.application.playback_features_mut().note_manual_seek();
+        let wanted = state.application.player_session().position_seconds() + seconds;
+        // A CUE track keeps its seeks inside itself (review 2.1).
+        if let Some(target) =
+            apricot_app::playback_features::segment_target(&state.application, wanted)
+        {
+            state.clip_preview = None;
+            let _ = execute_player_command(
+                window,
+                PlaybackCommand::SeekAbsolute {
+                    seconds: target,
+                    exact: true,
+                },
+            );
+            return;
+        }
         if state.application.playback_features().ranges.repeat {
             let target = state
                 .application
                 .playback_features()
                 .ranges
-                .constrain(state.application.player_session().position_seconds() + seconds);
+                .constrain(wanted);
             state.clip_preview = None;
             let _ = execute_player_command(
                 window,
@@ -15617,11 +15692,13 @@ unsafe fn seek_player(window: HWND, seconds: f64) {
 unsafe fn seek_player_absolute(window: HWND, seconds: f64, announcement_key: &str) {
     let seconds = if let Some(state) = state_mut(window) {
         state.application.playback_features_mut().note_manual_seek();
-        state
+        let seconds = state
             .application
             .playback_features()
             .ranges
-            .constrain(seconds)
+            .constrain(seconds);
+        apricot_app::playback_features::segment_target(&state.application, seconds)
+            .unwrap_or(seconds)
     } else {
         seconds
     };
@@ -18720,13 +18797,45 @@ impl crate::equalizer_win32::EqualizerDialogHost for PlayerEqualizerHost {
         }
     }
 
-    fn set_session_preset(&mut self, preset_id: String) {
+    fn set_session_preset(&mut self, preset_id: Option<String>) {
         // SAFETY: The host is only used on the UI thread while the main window lives.
         if let Some(state) = unsafe { state_mut(self.window) } {
             state
                 .application
                 .playback_features_mut()
-                .equalizer_session_preset = Some(preset_id);
+                .equalizer_session_preset = preset_id;
+        }
+    }
+
+    fn session_preset(&self) -> Option<String> {
+        // SAFETY: As above.
+        unsafe { state(self.window) }.and_then(|state| {
+            state
+                .application
+                .playback_features()
+                .equalizer_session_preset
+                .clone()
+        })
+    }
+
+    fn dialog_preset(&self) -> Option<String> {
+        // SAFETY: As above.
+        unsafe { state(self.window) }.map(|state| state.application.equalizer_dialog_preset())
+    }
+
+    fn advanced_profiles(&self) -> serde_json::Value {
+        // SAFETY: As above.
+        unsafe { state(self.window) }.map_or(serde_json::Value::Null, |state| {
+            state.application.equalizer_advanced_profiles()
+        })
+    }
+
+    fn restore_advanced_profiles(&mut self, profiles: serde_json::Value) {
+        // SAFETY: As above.
+        if let Some(state) = unsafe { state_mut(self.window) } {
+            state
+                .application
+                .restore_equalizer_advanced_profiles(profiles);
         }
     }
 

@@ -53,6 +53,9 @@ enum ReturnTo {
 
 #[derive(Default)]
 pub(super) struct SpotifyState {
+    /// When Next, Previous or a list edge was asked, so that track change
+    /// is not a natural end for the sleep timer.
+    manual_change: std::cell::Cell<Option<std::time::Instant>>,
     service: Option<Arc<SpotifyService>>,
     receiver: Option<Receiver<SpotifyEvent>>,
     epochs: SpotifyEpochs,
@@ -1760,8 +1763,26 @@ unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack) -> bool {
             }
         }
     }
+    let timer_end = apricot_shell::playback_features::spotify_track_end(
+        &mut state.application,
+        state.spotify.manual_change.take(),
+    );
     if !state.application.replace_current_player_item(item.clone()) {
         return false;
+    }
+    if let Some(commands) = timer_end {
+        for command in commands {
+            let _ = super::execute_player_command(window, command);
+        }
+        let Some(state) = state_mut(window) else {
+            return true;
+        };
+        set_status(
+            state,
+            &super::catalog_text(&state.application, "sleep_timer_finished"),
+            true,
+        );
+        return true;
     }
     super::spotify_browse::announce_playing(state, &item);
     let timestamp = std::time::SystemTime::now()
@@ -1814,6 +1835,13 @@ pub(super) unsafe fn transport(window: HWND, action_id: &str) -> bool {
     };
     let player = playback.player_state().unwrap_or_default();
     let mut smart_start = None;
+    if matches!(
+        action_id,
+        "player_next" | "player_previous" | "spotify_first_track" | "spotify_last_track"
+    ) {
+        let now = std::time::Instant::now();
+        state.spotify.manual_change.set(Some(now));
+    }
     let key = match action_id {
         "player_next" => {
             playback.next();

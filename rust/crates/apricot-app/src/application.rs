@@ -2430,6 +2430,44 @@ impl Application {
         )
     }
 
+    /// The profile F4 opens with: the one confirmed for this session, else
+    /// the effective profile (review 2.1).
+    pub fn equalizer_dialog_preset(&self) -> String {
+        self.state
+            .player
+            .audio()
+            .is_some_and(|audio| audio.equalizer.is_some())
+            .then(|| {
+                self.state
+                    .playback_features
+                    .equalizer_session_preset
+                    .clone()
+            })
+            .flatten()
+            .unwrap_or_else(|| {
+                self.equalizer_settings()
+                    .effective_preset(&self.equalizer_device_key())
+            })
+    }
+
+    /// Every profile's advanced settings, for F4 Cancel to put back.
+    pub fn equalizer_advanced_profiles(&self) -> serde_json::Value {
+        serde_json::json!(crate::equalizer_advanced::profiles_from_settings(
+            self.settings.current()
+        ))
+    }
+
+    /// F4 Cancel: the advanced settings from before F4 opened, saved again
+    /// when Advanced had saved others (review 2.1).
+    pub fn restore_equalizer_advanced_profiles(&mut self, profiles: serde_json::Value) {
+        if self.equalizer_advanced_profiles() == profiles {
+            return;
+        }
+        self.settings
+            .set_extension(crate::equalizer_advanced::ADVANCED_SETTINGS_KEY, profiles);
+        let _ = self.save_settings();
+    }
+
     /// The profile whose advanced settings shape the player equalizer: the
     /// one shown in an open equalizer dialog, else the effective profile.
     pub fn equalizer_graph_preset(&self) -> String {
@@ -3695,8 +3733,27 @@ mod tests {
         }));
         app.playback_features_mut().equalizer_session_preset = Some("custom_2".to_owned());
         assert_eq!(app.equalizer_graph_preset(), "custom_2");
+        // F4 opens again on the confirmed profile, not the global one.
+        assert_eq!(app.equalizer_dialog_preset(), "custom_2");
         app.set_player_equalizer(None);
         assert_eq!(app.equalizer_graph_preset(), global);
+        assert_eq!(app.equalizer_dialog_preset(), global);
+    }
+
+    /// Review 2.1: F4 Cancel puts back advanced settings that Advanced saved
+    /// while F4 was open.
+    #[test]
+    fn f4_cancel_restores_the_advanced_settings() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let before = app.equalizer_advanced_profiles();
+        let mut shelf = crate::equalizer_advanced::AdvancedEqualizer::default();
+        shelf.low_shelf.gain = 6.0;
+        app.set_equalizer_advanced("flat", &shelf);
+        assert_ne!(app.equalizer_advanced_profiles(), before);
+        app.restore_equalizer_advanced_profiles(before.clone());
+        assert_eq!(app.equalizer_advanced_profiles(), before);
+        assert!(app.equalizer_advanced("flat").is_default());
     }
 
     /// Review 2.1: a CUE track counts its own time: elapsed, length and the

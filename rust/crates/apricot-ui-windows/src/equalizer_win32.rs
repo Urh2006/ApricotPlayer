@@ -65,8 +65,21 @@ pub trait EqualizerDialogHost {
     /// sound while the dialog is open; `None` when it closes.
     fn set_preview_preset(&mut self, _preset_id: Option<String>) {}
     /// The profile OK confirmed, whose advanced settings keep shaping the
-    /// session equalizer after the dialog closes.
-    fn set_session_preset(&mut self, _preset_id: String) {}
+    /// session equalizer after the dialog closes; `None` forgets it.
+    fn set_session_preset(&mut self, _preset_id: Option<String>) {}
+    fn session_preset(&self) -> Option<String> {
+        None
+    }
+    /// The profile the dialog opens with: the session's, else the effective
+    /// one (review 2.1).
+    fn dialog_preset(&self) -> Option<String> {
+        None
+    }
+    /// Every profile's advanced settings, and putting them back on Cancel.
+    fn advanced_profiles(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+    fn restore_advanced_profiles(&mut self, _profiles: serde_json::Value) {}
     /// The advanced settings an exported profile carries, if any.
     fn advanced_payload(&self, _preset_id: &str) -> Option<serde_json::Value> {
         None
@@ -164,6 +177,9 @@ struct DialogState {
     db_range: i64,
     original_equalizer: Option<EqualizerSession>,
     original_db_range: i64,
+    /// What Cancel puts back besides the bands (review 2.1).
+    original_advanced: serde_json::Value,
+    original_session_preset: Option<String>,
     compare_showing_original: bool,
     accepted: bool,
 }
@@ -209,8 +225,12 @@ unsafe fn show_win32(owner: HWND, host: Box<dyn EqualizerDialogHost>) -> Result<
     let device = host.device_key();
     let original_equalizer = host.session_equalizer();
     let (_, gains) = settings.base_state(original_equalizer.as_ref(), &device);
-    let active_preset = settings.effective_preset(&device);
+    let active_preset = host
+        .dialog_preset()
+        .unwrap_or_else(|| settings.effective_preset(&device));
     let db_range = settings.db_range();
+    let original_advanced = host.advanced_profiles();
+    let original_session_preset = host.session_preset();
     let mut host = host;
     host.set_preview_preset(Some(active_preset.clone()));
     let title = wide(catalog.text("equalizer"));
@@ -249,6 +269,8 @@ unsafe fn show_win32(owner: HWND, host: Box<dyn EqualizerDialogHost>) -> Result<
             db_range,
             original_equalizer,
             original_db_range: db_range,
+            original_advanced,
+            original_session_preset,
             compare_showing_original: false,
             accepted: false,
         },
@@ -349,9 +371,17 @@ fn finish(state: &mut DialogState) {
     let mut settings = state.host.settings();
     settings.db_range = state.original_db_range;
     let _ = state.host.update_settings(&settings, false);
+    // Cancel brings back all that was heard before F4: the bands, the
+    // advanced settings Advanced saved meanwhile and the profile.
+    state
+        .host
+        .restore_advanced_profiles(state.original_advanced.clone());
     state
         .host
         .set_session_equalizer(state.original_equalizer.clone());
+    state
+        .host
+        .set_session_preset(state.original_session_preset.clone());
     state.host.apply_to_player();
     state.host.announce(state.catalog.text("equalizer_closed"));
 }
@@ -560,7 +590,7 @@ unsafe fn accept(window: HWND) {
         return;
     }
     let preset = current_preset(state);
-    state.host.set_session_preset(preset);
+    state.host.set_session_preset(Some(preset));
     state.accepted = true;
     let _ = DestroyWindow(window);
 }
@@ -1443,6 +1473,8 @@ mod tests {
                 db_range: 24,
                 original_equalizer: None,
                 original_db_range: 24,
+                original_advanced: serde_json::Value::Null,
+                original_session_preset: None,
                 compare_showing_original: false,
                 accepted: false,
             });

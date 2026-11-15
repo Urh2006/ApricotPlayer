@@ -38,21 +38,20 @@ pub struct PlaybackSequence {
 
 impl PlaybackSequence {
     /// A renamed local file keeps its place in the playing list.
+    /// The playing entry is found by the identity the list uses (a playlist
+    /// entry or CUE track, not only the file), so the same entry stays
+    /// current (review 2.1).
     pub fn relink_local_file(&mut self, old: &str, new: &str) {
-        let current = self
-            .items
-            .iter()
-            .find(|item| item.stable_identity() == self.current_identity)
-            .is_some_and(|item| item.local_path.as_deref() == Some(old));
+        let source = self.source;
+        let current = self.items.iter().position(|item| {
+            sequence_identity(source, item) == self.current_identity
+                && item.local_path.as_deref() == Some(old)
+        });
         for item in &mut self.items {
             let _ = item.relink_local_file(old, new);
         }
-        if current {
-            self.current_identity = self
-                .items
-                .iter()
-                .find(|item| item.local_path.as_deref() == Some(new))
-                .and_then(MediaItem::stable_identity);
+        if let Some(index) = current {
+            self.current_identity = sequence_identity(source, &self.items[index]);
         }
     }
 }
@@ -241,6 +240,35 @@ mod tests {
             duration_seconds: None,
             metadata: BTreeMap::new(),
         }
+    }
+
+    /// Review 2.1: renaming the playing file of a saved playlist keeps that
+    /// entry current, so Next and the position still work.
+    #[test]
+    fn a_renamed_playlist_entry_stays_current() {
+        let local = |path: &str, entry: &str| {
+            let mut item = item(path, MediaKind::Audio);
+            item.source = MediaSource::Local;
+            item.url = None;
+            item.local_path = Some(path.to_owned());
+            item.metadata
+                .insert("apricot_playlist_entry_id".into(), serde_json::json!(entry));
+            item
+        };
+        let items = vec![local("/m/a.mp3", "1"), local("/m/b.mp3", "2")];
+        let mut sequence = PlaybackSequence::default();
+        assert!(sequence.set(
+            PlaybackSequenceSource::UserPlaylist { playlist_index: 0 },
+            &items,
+            &items[0],
+        ));
+        assert_eq!(sequence.position(), Some((0, 2)));
+        sequence.relink_local_file("/m/a.mp3", "/m/renamed.mp3");
+        assert_eq!(sequence.position(), Some((0, 2)));
+        assert_eq!(
+            sequence.relative(1).and_then(|next| next.local_path),
+            Some("/m/b.mp3".to_owned())
+        );
     }
 
     #[test]

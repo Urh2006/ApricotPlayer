@@ -550,6 +550,14 @@ pub fn segment_span(app: &crate::Application) -> Option<(f64, f64)> {
     (end > start).then_some((start, end))
 }
 
+/// A seek target kept inside the CUE track being heard, so seeking never
+/// plays the track before or after it (review 2.1); `None` for other items.
+#[must_use]
+pub fn segment_target(app: &crate::Application, seconds: f64) -> Option<f64> {
+    let (start, end) = segment_span(app)?;
+    Some(seconds.clamp(start, (end - 0.05).max(start)))
+}
+
 /// The part of the file that is the item being heard: a CUE track, or in
 /// audiobook mode the chapter. Time, percentages, Home and End count in it
 /// (review 2.1).

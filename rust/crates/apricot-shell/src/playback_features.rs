@@ -1879,6 +1879,19 @@ pub fn timer_description(app: &Application) -> String {
     )
 }
 
+/// A Spotify track that went on by itself, not by Next or Previous within
+/// the last seconds, ends like a file: a sleep timer set to the end of the
+/// track stops there (review 2.1).
+pub fn spotify_track_end(
+    app: &mut Application,
+    manual_change: Option<Instant>,
+) -> Option<Vec<PlaybackCommand>> {
+    if manual_change.is_some_and(|at| at.elapsed().as_secs_f64() < 5.0) {
+        return None;
+    }
+    natural_playback_end(app, false)
+}
+
 /// Run before normal automatic advance. Returning true consumes the natural end.
 pub fn natural_playback_end(app: &mut Application, chapter: bool) -> Option<Vec<PlaybackCommand>> {
     let action = app
@@ -2093,6 +2106,9 @@ pub fn automatic_crossfade_due(app: &mut Application) -> bool {
                 || (app.settings().autoplay_related && item.youtube_video_id().is_some())
         })
         || app.playback_features().ranges.active.is_some()
+        // "Stop after this chapter" stops at the end of the last chapter,
+        // so the next item never fades in (review 2.1).
+        || app.playback_features().chapter_stop
         || app
             .playback_features()
             .timer
