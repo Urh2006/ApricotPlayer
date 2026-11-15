@@ -689,6 +689,8 @@ pub struct PlaybackFeatures {
     pub last_position: Option<(Instant, f64)>,
     pub manual_seek_at: Option<Instant>,
     pub extra: BTreeMap<String, String>,
+    /// 2.1: local files marked while listening, in the order marked.
+    pub marked_files: Vec<String>,
 }
 
 impl Default for PlaybackFeatures {
@@ -714,6 +716,7 @@ impl Default for PlaybackFeatures {
             last_position: None,
             manual_seek_at: None,
             extra: BTreeMap::new(),
+            marked_files: Vec::new(),
         }
     }
 }

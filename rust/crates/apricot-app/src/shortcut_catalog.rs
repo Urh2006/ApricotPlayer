@@ -305,6 +305,9 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("file_properties", "files"),
     ("open_in_browser", "youtube"),
     ("open_channel_in_browser", "youtube"),
+    ("player_mark_file", "files"),
+    ("player_marked_count", "files"),
+    ("player_manage_marked", "files"),
 ];
 
 /// The category an action is listed under; unknown ids fall back to General.

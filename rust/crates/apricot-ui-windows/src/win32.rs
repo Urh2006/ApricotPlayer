@@ -13768,6 +13768,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_global_shortcuts" => edit_global_shortcuts(window),
         "open_recents" => open_recents(window),
         "rename_file" => rename_active_file(window),
+        "player_manage_marked" => file_operations::manage_marked(window),
         "open_in_browser" | "open_channel_in_browser" => {
             open_active_in_browser(window, action_id == "open_channel_in_browser");
         }

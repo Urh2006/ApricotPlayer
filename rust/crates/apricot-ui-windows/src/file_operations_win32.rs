@@ -66,3 +66,54 @@ pub(super) unsafe fn run(window: HWND, operation: Option<Operation>) {
         show_error_message(window, failures);
     }
 }
+
+/// Manage files on the files marked while listening (Alt+Shift+K).
+pub(super) unsafe fn manage_marked(window: HWND) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    let paths: Vec<std::path::PathBuf> = state
+        .application
+        .playback_features()
+        .marked_files
+        .iter()
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_file())
+        .collect();
+    if paths.is_empty() {
+        set_status(
+            state,
+            &catalog.text("files_marked_count").replace("{count}", "0"),
+            true,
+        );
+        return;
+    }
+    let previous_modal = state.modal_open;
+    state.modal_open = true;
+    let mut ui = FileUi { owner: window };
+    let report = file_manager::manage_marked(&catalog, &paths, &mut ui);
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.modal_open = previous_modal;
+    let Some(report) = report else {
+        return;
+    };
+    let removed: Vec<String> = report
+        .removed
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+    state
+        .application
+        .playback_features_mut()
+        .marked_files
+        .retain(|path| !removed.contains(path));
+    if !report.message.is_empty() {
+        set_status(state, &report.message, true);
+    }
+    if let Some(failures) = &report.failures {
+        show_error_message(window, failures);
+    }
+}

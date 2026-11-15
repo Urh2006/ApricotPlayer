@@ -287,11 +287,35 @@ pub fn manage(
     selected: usize,
     ui: &mut dyn FileManagerUi,
 ) -> Option<Report> {
+    manage_with_marks(catalog, paths, selected, false, ui)
+}
+
+/// [`manage`] with every file already marked, for files marked while
+/// listening.
+pub fn manage_marked(
+    catalog: &TranslationCatalog,
+    paths: &[PathBuf],
+    ui: &mut dyn FileManagerUi,
+) -> Option<Report> {
+    manage_with_marks(catalog, paths, 0, true, ui)
+}
+
+fn manage_with_marks(
+    catalog: &TranslationCatalog,
+    paths: &[PathBuf],
+    selected: usize,
+    all_marked: bool,
+    ui: &mut dyn FileManagerUi,
+) -> Option<Report> {
     if paths.is_empty() {
         return None;
     }
     let mut selected = selected.min(paths.len() - 1);
-    let mut marked = BTreeSet::new();
+    let mut marked: BTreeSet<usize> = if all_marked {
+        (0..paths.len()).collect()
+    } else {
+        BTreeSet::new()
+    };
     let mut last_action = None;
     loop {
         let rows = paths
@@ -437,6 +461,53 @@ impl crate::Shell {
         };
         self.application.remove_local_folder_files(&report.removed);
         self.refresh_local_folder(ui, true, false);
+        if !report.message.is_empty() {
+            ui.set_status(&report.message, true);
+        }
+        if let Some(failures) = &report.failures {
+            ui.show_error(failures);
+        }
+    }
+}
+
+impl crate::Shell {
+    /// Manage files on the files marked while listening.
+    pub(crate) fn manage_marked_files(&mut self, ui: &mut dyn crate::ShellUi) {
+        let catalog = self.catalog();
+        let paths: Vec<PathBuf> = self
+            .application
+            .playback_features()
+            .marked_files
+            .iter()
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+            .collect();
+        if paths.is_empty() {
+            ui.set_status(
+                &catalog.text("files_marked_count").replace("{count}", "0"),
+                true,
+            );
+            return;
+        }
+        let mut adapter = ShellFileUi {
+            ui,
+            yes: catalog.text("yes").to_owned(),
+            no: catalog.text("no").to_owned(),
+        };
+        let report = manage_marked(&catalog, &paths, &mut adapter);
+        let ui = adapter.ui;
+        let Some(report) = report else {
+            return;
+        };
+        let removed: Vec<String> = report
+            .removed
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        self.application
+            .playback_features_mut()
+            .marked_files
+            .retain(|path| !removed.contains(path));
         if !report.message.is_empty() {
             ui.set_status(&report.message, true);
         }

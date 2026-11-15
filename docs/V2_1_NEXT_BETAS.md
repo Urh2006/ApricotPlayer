@@ -4,7 +4,6 @@ Urh se je 14. 11. 2026 odločil, da gredo v beto 2 samo izbira velikosti skoka (
 
 ## Datoteke
 
-- Označevanje datotek med poslušanjem in dejanja nad označenimi (kopiraj, premakni, v odložišče, izbriši).
 
 ## YouTube
 
@@ -14,8 +13,6 @@ Urh se je 14. 11. 2026 odločil, da gredo v beto 2 samo izbira velikosti skoka (
 
 - Razlaga nastavitve na F1, ko je fokus na njej.
 - Dve ravni zgovornosti (polna in kratka) s hitrim preklopom.
-- Pri IPTV možnost HLS za kanale Xtream (iskanje kanalov že obstaja).
-- Pri equalizerju izbira izhodiščnega profila ob novem profilu ter dodatni profili za slušalke, govor in tiho poslušanje.
 
 ## Že obstaja, zato ni v seznamu
 
@@ -25,3 +22,5 @@ Urh se je 14. 11. 2026 odločil, da gredo v beto 2 samo izbira velikosti skoka (
 - Ime ob Previous in Next: Apricot ga že vedno pove ("Playing: ...").
 - Poljuben spletni tok med priljubljenimi: Direct link in nato Ctrl+F; ime priljubljenega se zdaj preimenuje s Shift+F2.
 - Opis videa: okno F7 (Details).
+- HLS za kanale Xtream: možnost v obrazcu vira IPTV.
+- Izhodiščni profil in dodatni preseti v equalizerju: preseti Vocal, Podcast, Laptop headphones in Late night že obstajajo, nov profil pa začne iz prikazanega profila.

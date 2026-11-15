@@ -1227,6 +1227,32 @@ pub fn dispatch_playback_feature(
                 }
             }
         }
+        "player_mark_file" | "player_marked_count" => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            if action == "player_mark_file" {
+                let Some(path) = crate::file_tools::local_file(app.player_session().current_item())
+                else {
+                    ui.announce(catalog.text("local_file_required"));
+                    return Some(commands);
+                };
+                let path = path.to_string_lossy().into_owned();
+                let marks = &mut app.playback_features_mut().marked_files;
+                let key = if let Some(at) = marks.iter().position(|marked| *marked == path) {
+                    marks.remove(at);
+                    "file_unmarked"
+                } else {
+                    marks.push(path);
+                    "file_marked"
+                };
+                let count = marks.len();
+                ui.announce(&catalog.text(key).replace("{count}", &count.to_string()));
+            } else {
+                ui.announce(&catalog.text("files_marked_count").replace(
+                    "{count}",
+                    &app.playback_features().marked_files.len().to_string(),
+                ));
+            }
+        }
         "player_list_info" => {
             let catalog = apricot_app::embedded_catalog(&app.settings().language);
             ui.announce(&list_statistics(app, &catalog));
