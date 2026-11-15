@@ -11,29 +11,33 @@ use apricot_shell::{
 pub(super) const TIMER: usize = 8501;
 struct Ui {
     window: HWND,
-    /// The source list kept open between actions (review 2.1).
-    kept: Option<crate::sources_browser_win32::KeptBrowser>,
+    /// This call showed the list in the main window, which stays between
+    /// its actions and closes with it.
+    showed_list: bool,
 }
 impl Ui {
     const fn new(window: HWND) -> Self {
-        Self { window, kept: None }
+        Self {
+            window,
+            showed_list: false,
+        }
     }
-    /// The window dialogs open over: the kept list, else the main window.
-    fn owner(&self) -> HWND {
-        self.kept.as_ref().map_or(
-            self.window,
-            crate::sources_browser_win32::KeptBrowser::window,
-        )
+    /// The window dialogs open over.
+    const fn owner(&self) -> HWND {
+        self.window
     }
 }
 impl Drop for Ui {
     fn drop(&mut self) {
-        crate::sources_browser_win32::close(&mut self.kept);
+        if self.showed_list {
+            unsafe { super::sources_panel::close(self.window) };
+        }
     }
 }
 impl SourcesUi for Ui {
     fn browse(&mut self, browser: &SourceBrowser) -> Option<SourceSelection> {
-        crate::sources_browser_win32::browse(self.window, &mut self.kept, browser)
+        self.showed_list = true;
+        unsafe { super::sources_panel::browse(self.window, browser) }
     }
     fn form(&mut self, form: &FeatureForm) -> Option<FormValues> {
         crate::feature_form_win32::show(self.owner(), form)
@@ -52,7 +56,9 @@ impl SourcesUi for Ui {
     }
     fn play(&mut self, item: apricot_core::MediaItem) {
         // The player takes the place of the list.
-        crate::sources_browser_win32::close(&mut self.kept);
+        if std::mem::take(&mut self.showed_list) {
+            unsafe { super::sources_panel::close(self.window) };
+        }
         unsafe { start_media_item(self.window, item, None) }
     }
     fn choose_file(&mut self, title: &str) -> Option<PathBuf> {

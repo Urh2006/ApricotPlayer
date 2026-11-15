@@ -1,3 +1,13 @@
+# v2.1.0-beta.6 - Radio, IPTV and Recording in the main window
+
+**2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This beta brings the Radio, IPTV and Recording lists into the main window on Windows. Everything from the earlier 2.1 betas is still included.
+
+## Changed
+
+- On Windows, the Radio, IPTV and Recording lists now open in the main window instead of a separate window. When something plays in the background, Tab goes from the list and its buttons to the player, as on every other screen, and Escape from the player goes back. The screen reader no longer announces a new window when a list opens.
+
+The Mac version requires an Apple silicon Mac running macOS 27 or later. After copying ApricotPlayer to Applications, you may need to approve its first launch in System Settings, Privacy & Security, using Open Anyway. Download only the official release files.
+
 # v2.1.0-beta.5 - Third review: files, recordings, radio and playback
 
 **2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This beta fixes what a third careful review found in the 2.1 betas, most of all problems that could lose files or recordings. Everything from the earlier 2.1 betas is still included.

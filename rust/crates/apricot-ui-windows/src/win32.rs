@@ -2,6 +2,8 @@
 
 #![allow(unsafe_code, unsafe_op_in_unsafe_fn)]
 
+#[path = "sources_panel_win32.rs"]
+mod sources_panel;
 #[path = "sources_win32.rs"]
 mod sources_ui;
 
@@ -683,6 +685,8 @@ struct WindowState {
     download_progress_task_id: Option<u64>,
     /// The generation whose CUE track end was reached (review 2.1).
     segment_ended: Option<u64>,
+    /// The Radio, IPTV and Recording list shown in this window.
+    sources_panel: Option<sources_panel::SourcesPanel>,
     /// The screen a podcast search or category was asked from.
     podcast_search_view: Option<MainView>,
     /// Counts the screens shown, so late source answers stay away from a
@@ -967,7 +971,9 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
         if handle_details_tab_message(window, state, message) {
             return true;
         }
-        let Some(controls) = explicit_view_tab_controls(state) else {
+        let Some(controls) =
+            sources_panel::tab_controls(state).or_else(|| explicit_view_tab_controls(state))
+        else {
             return false;
         };
         controls
@@ -994,6 +1000,9 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
 /// Python `background_player_previous_target`: the screen's list, or its
 /// text field when it has no list.
 unsafe fn background_player_previous_target(state: &WindowState) -> Option<HWND> {
+    if let Some(controls) = sources_panel::tab_controls(state) {
+        return controls.first().copied();
+    }
     [state.list, state.search_edit].into_iter().find(|control| {
         windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(*control).as_bool()
     })
@@ -1427,6 +1436,9 @@ unsafe extern "system" fn window_proc(
 unsafe fn handle_window_command(window: HWND, wparam: WPARAM) {
     let command = wparam.0 & 0xffff;
     let notification = (wparam.0 >> 16) & 0xffff;
+    if sources_panel::command(window, command, notification) {
+        return;
+    }
     let player_activation = state(window).and_then(|state| {
         (state.view == MainView::Player)
             .then(|| state.player_controls.activation_for_command(command))
@@ -2253,6 +2265,7 @@ unsafe fn create_controls(
         download_progress_task_ids: HashSet::new(),
         download_progress_task_id: None,
         segment_ended: None,
+        sources_panel: None,
         podcast_search_view: None,
         view_changes: 0,
         last_shown_view: MainView::MainMenu,
@@ -2984,6 +2997,10 @@ unsafe fn layout_controls_state(window: HWND, state: &mut WindowState) {
         margin,
         status_height,
     );
+    // An open Radio, IPTV or Recording list takes the screen's place.
+    if sources_panel::layout(window, state, width, height) {
+        return;
+    }
     if is_search_screen(state.view) {
         // Laid out after the bottom controls, which it partly overrides.
     } else if state.view == MainView::DirectLink {

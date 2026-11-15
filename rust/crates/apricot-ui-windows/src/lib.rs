@@ -59,7 +59,6 @@ mod shortcut_win32;
 #[cfg(windows)]
 mod sound_win32;
 #[cfg(windows)]
-mod sources_browser_win32;
 #[cfg(windows)]
 mod spotify_devices_win32;
 #[cfg(windows)]
