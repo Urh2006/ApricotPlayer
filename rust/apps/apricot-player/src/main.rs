@@ -431,7 +431,13 @@ mod stable_release_tests {
             defaults.clone(),
         )
         .unwrap();
-        assert_eq!(fresh.update_channel, "stable");
+        // A pre-release such as a 2.1 beta starts new profiles on beta.
+        let expected = if apricot_updater::version_is_prerelease(env!("CARGO_PKG_VERSION")) {
+            "beta"
+        } else {
+            "stable"
+        };
+        assert_eq!(fresh.update_channel, expected);
         for channel in ["stable", "beta"] {
             let existing = SettingsDocument::from_value_with_defaults(
                 &serde_json::json!({"update_channel": channel}),
