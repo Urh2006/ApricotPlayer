@@ -374,9 +374,12 @@ impl SourcesController {
                 .is_some_and(RecordingSession::is_active)
     }
     /// Quitting: the recording is stopped and saved before the app ends.
-    pub fn finish_recording(&mut self) {
-        if let Some(mut recorder) = self.recorder.take() {
-            let _ = recorder.finish();
+    /// The message for the user when it did not end as a normal recording.
+    pub fn finish_recording(&mut self, catalog: &TranslationCatalog) -> Option<String> {
+        let mut recorder = self.recorder.take()?;
+        match recorder.finish()? {
+            Ok(_) => None,
+            Err(error) => Some(recording_error(catalog, &error)),
         }
     }
 

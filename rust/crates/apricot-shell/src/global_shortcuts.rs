@@ -126,7 +126,12 @@ impl crate::Shell {
                     settings = chosen;
                     break;
                 }
-                Err(error) => ui.show_error(&error),
+                // The form opens again with everything that was typed, so
+                // only the wrong field needs a correction (review 2.1).
+                Err(error) => {
+                    ui.show_error(&error);
+                    settings = typed_global_shortcuts(&values, settings);
+                }
             }
         }
         self.application.set_feature_settings(
@@ -142,6 +147,24 @@ impl crate::Shell {
             ),
         }
     }
+}
+
+/// The form's values kept as settings, so a rejected form opens again with
+/// what the user typed (Windows `typed_global_shortcuts`).
+#[must_use]
+pub fn typed_global_shortcuts(
+    values: &FormValues,
+    mut settings: GlobalShortcutSettings,
+) -> GlobalShortcutSettings {
+    if let Some(enabled) = values.get("enabled").and_then(FormValue::checked) {
+        settings.enabled = enabled;
+    }
+    for (action, _) in GLOBAL_ACTIONS {
+        if let Some(text) = values.get(action).and_then(FormValue::text) {
+            settings.bindings.insert(action.to_owned(), text.to_owned());
+        }
+    }
+    settings
 }
 
 /// The platform's form of a chord.
@@ -201,5 +224,21 @@ mod tests {
         chosen.insert("player_next".into(), FormValue::Text(String::new()));
         let settings = global_shortcuts_from_values(&catalog, &chosen).unwrap();
         assert_eq!(settings.binding("player_next"), "");
+    }
+
+    #[test]
+    fn a_rejected_form_keeps_what_was_typed() {
+        let catalog = apricot_app::embedded_catalog("en");
+        let form = global_shortcuts_form(&catalog, &GlobalShortcutSettings::default());
+        let mut typed = values(&form);
+        typed.insert("enabled".into(), FormValue::Checkbox(false));
+        typed.insert("player_next".into(), FormValue::Text("Space".into()));
+        assert!(global_shortcuts_from_values(&catalog, &typed).is_err());
+        let kept = typed_global_shortcuts(&typed, GlobalShortcutSettings::default());
+        assert!(!kept.enabled);
+        assert_eq!(kept.binding("player_next"), "Space");
+        // The form opened again shows the typed text, not the default.
+        let again = global_shortcuts_form(&catalog, &kept);
+        assert_eq!(values(&again).get("player_next"), typed.get("player_next"));
     }
 }

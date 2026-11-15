@@ -429,22 +429,15 @@ impl Shell {
         button: EqualizerButton,
     ) {
         match button {
+            // Advanced changes the shape of the bands, not their gains: the
+            // sliders keep what was moved, and Cancel in F4 still returns to
+            // the sound from before F4 opened (review 2.1).
             EqualizerButton::Advanced => {
                 let preset = self.current_preset(view);
                 self.application
                     .playback_features_mut()
-                    .equalizer_preview_preset = Some(preset.clone());
+                    .equalizer_preview_preset = Some(preset);
                 self.activate_playback_feature(ui, "player_equalizer_advanced");
-                let gains = self.equalizer_settings().gains_for_preset(&preset);
-                if let Some(state) = self.equalizer.as_mut() {
-                    state.gains = gains.clone();
-                    state.original_equalizer = self
-                        .application
-                        .player_session()
-                        .audio()
-                        .and_then(|audio| audio.equalizer.clone());
-                }
-                self.show_gains(view, &gains);
                 self.live_apply(view);
             }
             EqualizerButton::Ok => self.equalizer_accept(view),
@@ -505,6 +498,10 @@ impl Shell {
             self.equalizer_error(view, &error);
             return;
         }
+        let preset = self.current_preset(view);
+        self.application
+            .playback_features_mut()
+            .equalizer_session_preset = Some(preset);
         if let Some(state) = self.equalizer.as_mut() {
             state.accepted = true;
         }

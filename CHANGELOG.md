@@ -1,6 +1,6 @@
 # v2.1.0-beta.4 - Safer files and recordings
 
-**2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This beta fixes problems found in a careful review of the first three betas, most of all ones that could lose files or recordings. Everything from the earlier 2.1 betas is still included.
+**2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This beta fixes problems found in two careful reviews of the first three betas, most of all ones that could lose files or recordings. Everything from the earlier 2.1 betas is still included.
 
 ## Fixed
 
@@ -12,21 +12,32 @@
 - Quitting ApricotPlayer while it records now finishes and saves the recording first.
 - When a recording stops early, for example because a microphone or USB device was unplugged, what was recorded is kept in a file named "(incomplete)" beside the recording, and you are told where it is.
 - If a file with the recording's name appears while you record, the recording is saved under the next free name instead of being lost.
+- Stopping a recording or quitting while the recording is still being prepared now stops it at once.
+- When several sources are recorded together, they now start at the same moment and stay in time.
+- If a recording could not be saved properly when you quit, ApricotPlayer tells you at the next start what happened and where the recorded part is.
+- Converting a folder with "Replace originals" no longer loses a file whose name differs from another only in capital letters, and an original is kept when the converted file cannot take its place.
+- Moving a file to another drive keeps the original until the copy has its final name, so a failed move never leaves only a hidden partial file.
+- A marked part exported with a speed or pitch change now contains the part you marked, and "Export all" gives every part its own file, even when two parts differ only by milliseconds.
 
 ### Privacy
 
 - IPTV channels from an M3U playlist whose address contains a user name, password or token are no longer saved in your history or resume positions.
 - A playlist address with a login in it is now stored protected, like the other IPTV logins.
+- The last player session, which lets you continue where you stopped, no longer keeps IPTV addresses or logins in plain text. An older saved session that contains one is removed.
 
 ### Playback
 
 - Stop during a crossfade now stops the track that was fading out too.
 - Pausing during a crossfade pauses the crossfade; it goes on when you resume.
 - Pressing a seek key several times quickly while seek fades are on now seeks all the steps, not only the last one.
+- Seeking during a crossfade no longer leaves the new track too quiet, and pausing during a seek fade now really pauses.
 - On the Mac, a crossfade no longer lets two players use the same video surface.
 - A sleep timer set to the end of the chapter, and "Stop after this chapter", now also stop at the end of the last chapter instead of playing on.
 - A sleep timer's fade starts from the volume you set last and returns to it if you cancel, instead of jumping back to the volume from when the timer started.
-- Tracks of an imported CUE sheet now start and end at their own times inside the album file.
+- Tracks of an imported CUE sheet now start and end at their own times inside the album file. Every time you reach the end of a track it stops or goes on correctly, also after seeking back, and Repeat repeats the track, not the whole album file. The time, the percentage jumps, Home and End are those of the track.
+- In the equalizer (F4), Advanced keeps the changes you just made, Cancel still returns to how it was before, and the advanced profile you confirmed with OK stays chosen.
+- While an A-B loop is set, jumping to a saved quick position stays inside the loop.
+- The excerpts window tells you when a time is written wrongly instead of quietly keeping the old one.
 - Media controls on the Mac: moving the position in the system's Now Playing now moves playback, and headsets or the system skip by the amount they ask for.
 - Importing settings now applies the announcement length, audio processing and equalizer to what is playing at once.
 
@@ -37,7 +48,17 @@
 - A failed action in the playlist editor, such as a wrong link or an export to a folder you cannot write to, now shows the error and keeps the editor open with your changes.
 - A playlist exported as JSON can be imported again.
 - Videos in imported playlists are recognised as videos.
-- File names with #, ? or % in M3U playlists are found again.
+- File names with #, ? or % in M3U playlists are found again, and relative addresses in XSPF playlists work again.
+
+### Search and settings
+
+- Search suggestions that arrive late no longer open after you left the search or typed something new.
+- F1 in Settings now also explains the Recording settings and the special Spotify settings.
+- On the Mac, a mistake in one global shortcut no longer discards the other shortcuts you typed in the same window.
+
+## Known limitations
+
+- On the Mac, recording only from a microphone still asks for Screen Recording permission, because macOS gives ApricotPlayer all recording sources through the same system service.
 
 The Mac version requires an Apple silicon Mac running macOS 27 or later. After copying ApricotPlayer to Applications, you may need to approve its first launch in System Settings, Privacy & Security, using Open Anyway. Download only the official release files.
 

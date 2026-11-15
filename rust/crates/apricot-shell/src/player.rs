@@ -458,6 +458,75 @@ impl Shell {
     /// Windows `PlaybackEvent::Ended` after a clip preview: a podcast
     /// episode is marked played, then the next item plays (`Some` with
     /// whether a player still runs) or "Playback finished" is said.
+    /// The end of a CUE track inside its album file (review 2.1): Repeat
+    /// starts the track again, a sleep timer or Autoplay next act as at the
+    /// end of a file, and otherwise, or when nothing follows, it pauses so the
+    /// album never runs into the next track. Seeking back before the end
+    /// arms it again. `Some` is `poll_playback`'s answer when it must return.
+    fn cue_track_position(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        generation: u64,
+        elapsed: f64,
+    ) -> Option<bool> {
+        let item = self.application.player_session().current_item()?.clone();
+        segment_time(&item, "apricot_segment_start")?;
+        let repeat = self
+            .application
+            .player_session()
+            .enabled_toggles()
+            .contains(&SessionToggle::Repeat);
+        // The last track ends with the file; only Repeat needs to catch that
+        // end before the file's own loop goes back to the first track.
+        let end = segment_time(&item, "apricot_segment_end").or_else(|| {
+            repeat
+                .then(|| self.application.player_session().duration_seconds())
+                .flatten()
+                .map(|duration| duration - 0.3)
+        })?;
+        if elapsed < end - 0.5 {
+            if self.player.segment_ended == Some(generation) {
+                self.player.segment_ended = None;
+            }
+            return None;
+        }
+        if elapsed < end || self.player.segment_ended == Some(generation) {
+            return None;
+        }
+        self.player.segment_ended = Some(generation);
+        if repeat {
+            let start = segment_time(&item, "apricot_segment_start").unwrap_or(0.0);
+            let _ = self.execute_player_command(
+                ui,
+                PlaybackCommand::SeekAbsolute {
+                    seconds: start,
+                    exact: true,
+                },
+            );
+            return None;
+        }
+        if let Some(commands) =
+            crate::playback_features::natural_playback_end(&mut self.application, false)
+        {
+            for command in commands {
+                self.execute_player_command(ui, command);
+            }
+            ui.set_status(&self.text("sleep_timer_finished"), true);
+            return None;
+        }
+        let running = self.playback_ended(ui);
+        let moved_on = self
+            .application
+            .player_session()
+            .current_item()
+            .is_some_and(|current| current.stable_identity() != item.stable_identity());
+        if moved_on {
+            return running;
+        }
+        let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(true));
+        None
+    }
+
     fn playback_ended(&mut self, ui: &mut dyn ShellUi) -> Option<bool> {
         self.mark_current_podcast_episode_played(ui);
         let autoplay_next = self
@@ -554,33 +623,12 @@ impl Shell {
                     self.update_integrations();
                 }
                 // A CUE track ends at its own end time, inside the file.
-                PlaybackEvent::Position { elapsed, .. }
-                    if self.player.segment_ended != Some(update.generation)
-                        && self
-                            .application
-                            .player_session()
-                            .current_item()
-                            .and_then(|item| segment_time(item, "apricot_segment_end"))
-                            .is_some_and(|end| elapsed >= end) =>
-                {
-                    self.player.segment_ended = Some(update.generation);
-                    if let Some(commands) =
-                        crate::playback_features::natural_playback_end(&mut self.application, false)
-                    {
-                        for command in commands {
-                            self.execute_player_command(ui, command);
-                        }
-                        ui.set_status(&self.text("sleep_timer_finished"), true);
-                        continue;
-                    }
-                    if let Some(running) = self.playback_ended(ui) {
+                PlaybackEvent::Position { elapsed, .. } => {
+                    if let Some(running) = self.cue_track_position(ui, update.generation, elapsed) {
                         return running;
                     }
-                    // Without Autoplay next the file would run into the next
-                    // track: it pauses at this one's end.
-                    let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(true));
                 }
-                PlaybackEvent::Position { .. } | PlaybackEvent::AudioDevices(_) => {}
+                PlaybackEvent::AudioDevices(_) => {}
                 PlaybackEvent::PreviewFinished => {
                     if self.player.clip_preview == Some(update.generation) {
                         self.player.clip_preview = None;
@@ -1261,9 +1309,40 @@ impl Shell {
             self.close_player_runtime(ui);
         }
         self.spotify_shutdown();
-        // A recording in progress is finished and saved, not cut off.
-        self.sources.finish_recording();
+        // A recording in progress is finished and saved, not cut off; a
+        // failure or a kept "(incomplete)" file is told at the next start.
+        let catalog = self.catalog();
+        if let Some(message) = self.sources.finish_recording(&catalog) {
+            self.application
+                .set_feature_settings(RECORDING_NOTICE_KEY, serde_json::json!(message));
+            let _ = self.application.save_settings();
+        }
         apricot_platform::stop_playback_resolver();
+    }
+}
+
+/// Settings key of the message about a recording that quitting could not
+/// finish normally (review 2.1).
+const RECORDING_NOTICE_KEY: &str = "recording_exit_notice";
+
+impl Shell {
+    /// At start: what happened to a recording at the last quit.
+    pub fn announce_recording_notice(&mut self, ui: &mut dyn ShellUi) {
+        let Some(message) = self
+            .application
+            .settings()
+            .preserved
+            .get(RECORDING_NOTICE_KEY)
+            .and_then(serde_json::Value::as_str)
+            .filter(|message| !message.is_empty())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        self.application
+            .set_feature_settings(RECORDING_NOTICE_KEY, serde_json::json!(""));
+        let _ = self.application.save_settings();
+        ui.show_error(&message);
     }
 }
 
@@ -1283,6 +1362,28 @@ fn nonempty(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod segment_tests {
+    /// Review 2.1: a CUE track's end works again after seeking back.
+    #[test]
+    fn the_end_of_a_cue_track_rearms_after_seeking_back() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        let mut item = super::local_file_item(std::path::Path::new("/Music/album.flac"));
+        item.metadata
+            .insert("apricot_segment_start".into(), serde_json::json!(10.0));
+        item.metadata
+            .insert("apricot_segment_end".into(), serde_json::json!(20.0));
+        let generation = shell.application.start_player_item(item);
+        assert_eq!(shell.cue_track_position(&mut ui, generation, 15.0), None);
+        assert_eq!(shell.player.segment_ended, None);
+        let _ = shell.cue_track_position(&mut ui, generation, 20.1);
+        assert_eq!(shell.player.segment_ended, Some(generation));
+        // Seeking back arms the end again.
+        let _ = shell.cue_track_position(&mut ui, generation, 12.0);
+        assert_eq!(shell.player.segment_ended, None);
+        let _ = shell.cue_track_position(&mut ui, generation, 20.2);
+        assert_eq!(shell.player.segment_ended, Some(generation));
+    }
+
     /// Review 2.1: CUE tracks carry their own start and end times.
     #[test]
     fn cue_tracks_have_their_own_start_and_end() {

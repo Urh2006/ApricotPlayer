@@ -163,7 +163,8 @@ pub struct Shell {
     podcasts: podcasts::PodcastState,
     downloads: downloads::DownloadState,
     conversions: converter::ConversionState,
-    pending_suggestions: Option<youtube_extras::PendingSuggestions>,
+    /// Suggestions on their way, with the query they are for.
+    pending_suggestions: Option<(youtube_extras::PendingSuggestions, String)>,
     integrations: integrations::IntegrationState,
     settings_window: settings_window::SettingsState,
     subscriptions: subscriptions::SubscriptionState,

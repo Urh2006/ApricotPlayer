@@ -533,7 +533,30 @@ pub fn sleep_timer_state(
     )
 }
 
+/// The start and end in the file of a CUE track (`apricot_segment_start`,
+/// `apricot_segment_end`); a last track ends with the file.
+#[must_use]
+pub fn segment_span(app: &crate::Application) -> Option<(f64, f64)> {
+    let session = app.player_session();
+    let item = session.current_item()?;
+    let time = |key: &str| {
+        item.metadata
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+    };
+    let start = time("apricot_segment_start")?;
+    let end = time("apricot_segment_end").or(session.duration_seconds())?;
+    (end > start).then_some((start, end))
+}
+
+/// The part of the file that is the item being heard: a CUE track, or in
+/// audiobook mode the chapter. Time, percentages, Home and End count in it
+/// (review 2.1).
 pub fn chapter_span(app: &crate::Application) -> Option<(f64, f64)> {
+    if let Some(span) = segment_span(app) {
+        return Some(span);
+    }
     if !app.playback_features().audiobook {
         return None;
     }
@@ -686,6 +709,9 @@ pub struct PlaybackFeatures {
     pub applied_generation: Option<u64>,
     /// The equalizer profile shown in an open equalizer dialog.
     pub equalizer_preview_preset: Option<String>,
+    /// The profile confirmed in F4 for this player session; its advanced
+    /// shape stays with its gains (review 2.1).
+    pub equalizer_session_preset: Option<String>,
     /// Consumed by the next player start.
     pub pending_transition: Option<TransitionKind>,
     /// The player generation whose automatic crossfade already started.
@@ -717,6 +743,7 @@ impl Default for PlaybackFeatures {
             chapter_index: None,
             applied_generation: None,
             equalizer_preview_preset: None,
+            equalizer_session_preset: None,
             pending_transition: None,
             crossfade_started_generation: None,
             pending_exports: Vec::new(),

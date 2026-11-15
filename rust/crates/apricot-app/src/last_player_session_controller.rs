@@ -6,6 +6,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
+use apricot_core::MediaItem;
 use apricot_storage::{LastPlayerSession, LastPlayerSessionFile};
 use thiserror::Error;
 
@@ -112,6 +113,17 @@ impl LastPlayerSessionController {
     }
 
     fn loaded(file: LastPlayerSessionFile, session: Option<LastPlayerSession>) -> Self {
+        // Earlier betas saved IPTV logins here: such a snapshot is removed
+        // (review 2.1).
+        let private = session.as_ref().is_some_and(|session| {
+            carries_login(&session.item) || session.sequence.iter().any(carries_login)
+        });
+        let session = if private {
+            let _ = std::fs::remove_file(file.path());
+            None
+        } else {
+            session
+        };
         Self {
             session,
             current_path: Some(file.path().to_path_buf()),
@@ -169,6 +181,24 @@ impl LastPlayerSessionController {
     }
 }
 
+/// An item whose saved form holds a login: marked private, a Stalker token
+/// or cookie, or an IPTV address with a user name, password or token.
+fn carries_login(item: &MediaItem) -> bool {
+    item.has_private_address()
+        || item.metadata.contains_key("stalker_token")
+        || item.metadata.contains_key("stalker_cookie")
+        || (item.metadata.contains_key("iptv_channel_id")
+            && (item
+                .url
+                .as_ref()
+                .is_some_and(|url| apricot_core::url_carries_login(url.as_str()))
+                || item
+                    .metadata
+                    .get("url")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(apricot_core::url_carries_login)))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, fs};
@@ -194,6 +224,40 @@ mod tests {
             duration_seconds: None,
             metadata: BTreeMap::new(),
         }
+    }
+
+    /// Review 2.1: an IPTV login saved by an earlier beta is removed.
+    #[test]
+    fn a_snapshot_with_a_login_is_dropped_and_deleted() {
+        let root = tempdir().expect("temporary directory");
+        let current_path = root.path().join("beta/last_player_session.json");
+        let mut channel = item("channel");
+        channel.local_path = None;
+        channel.url =
+            url::Url::parse("https://example.invalid/live/FAKE_USER/FAKE_PASSWORD/1.ts").ok();
+        channel
+            .metadata
+            .insert("iptv_channel_id".to_owned(), "1".into());
+        LastPlayerSessionFile::new(&current_path)
+            .save(&LastPlayerSession::new(
+                1.0,
+                channel,
+                "iptv",
+                Map::new(),
+                Vec::new(),
+            ))
+            .expect("fixture");
+        assert!(
+            fs::read_to_string(&current_path)
+                .unwrap()
+                .contains("FAKE_PASSWORD")
+        );
+        let controller = LastPlayerSessionController::load(
+            LastPlayerSessionFile::new(&current_path),
+            &LastPlayerSessionFile::new(root.path().join("stable/none.json")),
+        );
+        assert!(controller.session().is_none());
+        assert!(!current_path.exists());
     }
 
     #[test]

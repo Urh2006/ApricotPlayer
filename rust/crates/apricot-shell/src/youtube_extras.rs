@@ -284,10 +284,9 @@ impl Shell {
             return;
         }
         let settings = self.application.settings();
-        self.pending_suggestions = Some(PendingSuggestions::start(
-            &query,
-            &settings.language,
-            &settings.proxy,
+        self.pending_suggestions = Some((
+            PendingSuggestions::start(&query, &settings.language, &settings.proxy),
+            query.trim().to_owned(),
         ));
         ui.set_status(&self.text("search_suggestions_loading"), true);
         ui.set_background_polling(true);
@@ -298,11 +297,18 @@ impl Shell {
         let Some(result) = self
             .pending_suggestions
             .as_ref()
-            .and_then(PendingSuggestions::poll)
+            .and_then(|(pending, _)| pending.poll())
         else {
             return self.pending_suggestions.is_some();
         };
-        self.pending_suggestions = None;
+        let Some((_, query)) = self.pending_suggestions.take() else {
+            return false;
+        };
+        // A late answer belongs only to the search it was asked for: not
+        // after leaving Search, nor for a query typed since (review 2.1).
+        if self.view != crate::View::Search || ui.screen_text("search_query").trim() != query {
+            return false;
+        }
         let catalog = self.catalog();
         let suggestions = match result {
             Ok(suggestions) if !suggestions.is_empty() => suggestions,

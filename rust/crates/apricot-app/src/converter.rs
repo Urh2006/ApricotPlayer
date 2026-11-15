@@ -434,6 +434,15 @@ pub fn unique_output_path(path: &Path, source: Option<&Path>) -> PathBuf {
     unique_output_path_excluding(path, source, &HashSet::new())
 }
 
+/// Case-insensitive key of an output name within its folder.
+fn reservation_key(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    path.parent().unwrap_or(Path::new("")).join(name)
+}
+
 /// `unique_output_path` that also avoids names already given to other files
 /// of the same folder conversion.
 fn unique_output_path_excluding(
@@ -441,6 +450,8 @@ fn unique_output_path_excluding(
     source: Option<&Path>,
     reserved: &HashSet<PathBuf>,
 ) -> PathBuf {
+    // Names compare case-insensitively: Song.mp3 and song.mp3 are one file on
+    // the usual macOS and Windows disks.
     let stem = path
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
@@ -452,7 +463,7 @@ fn unique_output_path_excluding(
     let mut candidate = path.to_path_buf();
     let mut counter = 2;
     while candidate.exists()
-        || reserved.contains(&candidate)
+        || reserved.contains(&reservation_key(&candidate))
         || source.is_some_and(|source| same_path(&candidate, source))
     {
         candidate = path.with_file_name(format!("{stem} ({counter}){suffix}"));
@@ -842,9 +853,15 @@ pub fn replace_converted_original(
         return Err("Converted file was not created".to_owned());
     }
     if !same_path(work_output, final_output) {
+        // Another file's output is never overwritten, nor is its original
+        // removed for it.
+        if final_output.exists() && !same_path(source, final_output) {
+            let _ = fs::remove_file(work_output);
+            return Err("Converted file name is already taken".to_owned());
+        }
         fs::rename(work_output, final_output).map_err(|error| error.to_string())?;
     }
-    if !same_path(source, final_output) && source.exists() {
+    if !same_path(source, final_output) && final_output.exists() && source.exists() {
         fs::remove_file(source).map_err(|error| error.to_string())?;
     }
     Ok(())
@@ -922,9 +939,8 @@ fn plan_folder_conversion(job: &FolderConversionJob, files: &[PathBuf]) -> Vec<P
         .map(|source| {
             let (target, work) = if job.replace_originals {
                 let wanted = source.with_extension(extension);
-                let target = if same_path(&wanted, source)
-                    || (!wanted.exists() && !reserved.contains(&wanted))
-                {
+                let free = !reserved.contains(&reservation_key(&wanted));
+                let target = if free && (same_path(&wanted, source) || !wanted.exists()) {
                     wanted
                 } else {
                     unique_output_path_excluding(&wanted, Some(source), &reserved)
@@ -943,7 +959,7 @@ fn plan_folder_conversion(job: &FolderConversionJob, files: &[PathBuf]) -> Vec<P
                 );
                 (target.clone(), target)
             };
-            reserved.insert(target.clone());
+            reserved.insert(reservation_key(&target));
             PlannedConversion {
                 source: source.clone(),
                 target,
@@ -1672,6 +1688,79 @@ mod tests {
             String::new(),
         );
         assert_eq!(single.output, folder.path().join("song (2) (2).wav"));
+    }
+
+    #[test]
+    fn replacing_originals_keeps_names_that_differ_only_by_case_apart() {
+        for concurrency in [1, 4] {
+            let folder = tempfile::tempdir().expect("folder");
+            fs::write(folder.path().join("Song.wav"), b"wav").expect("wav");
+            fs::write(folder.path().join("song.flac"), b"flac").expect("flac");
+            let job = FolderConversionJob {
+                ffmpeg: Some(PathBuf::from("ffmpeg.exe")),
+                source_folder: folder.path().to_path_buf(),
+                output_folder: folder.path().to_path_buf(),
+                target: "flac".to_owned(),
+                image: None,
+                replace_originals: true,
+                options: ConversionOptions {
+                    concurrency,
+                    ..ConversionOptions::default()
+                },
+                cancel: Arc::default(),
+            };
+            let plan = plan_folder_conversion(
+                &job,
+                &[
+                    folder.path().join("song.flac"),
+                    folder.path().join("Song.wav"),
+                ],
+            );
+            assert_ne!(
+                reservation_key(&plan[0].target),
+                reservation_key(&plan[1].target)
+            );
+            let outcome = run_folder_conversion(
+                &job,
+                &|_, arguments| {
+                    let output = PathBuf::from(arguments.last().expect("output"));
+                    fs::write(output, b"converted").map_err(|error| error.to_string())
+                },
+                &mut |_| {},
+            );
+            assert_eq!(
+                outcome,
+                Ok(FolderConversionOutcome::Done {
+                    converted: 2,
+                    failed: 0,
+                    failures: Vec::new(),
+                    cancelled: false
+                })
+            );
+            let mut names = fs::read_dir(folder.path())
+                .expect("list")
+                .map(|entry| entry.expect("entry").file_name())
+                .collect::<Vec<_>>();
+            names.sort();
+            assert_eq!(names.len(), 2, "{names:?}");
+        }
+    }
+
+    #[test]
+    fn replace_converted_original_keeps_original_when_output_is_taken() {
+        let folder = tempfile::tempdir().expect("folder");
+        let source = folder.path().join("a.wav");
+        let work = folder.path().join(".a.apricot-converting-1.flac");
+        let taken = folder.path().join("b.flac");
+        fs::write(&source, b"a").expect("source");
+        fs::write(&work, b"new").expect("work");
+        fs::write(&taken, b"other").expect("taken");
+        assert!(replace_converted_original(&source, &work, &taken).is_err());
+        assert_eq!(fs::read(&source).expect("source kept"), b"a");
+        assert_eq!(fs::read(&taken).expect("other kept"), b"other");
+        let missing = folder.path().join("missing.flac");
+        assert!(replace_converted_original(&source, &missing, &taken).is_err());
+        assert!(source.exists());
     }
 
     #[test]

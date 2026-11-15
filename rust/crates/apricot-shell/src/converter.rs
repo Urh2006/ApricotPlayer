@@ -3,6 +3,7 @@
 //! `handle_conversion_message`) and the clip export of the player (Windows
 //! `start_clip_export` and `poll_clip_exports`).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
@@ -296,7 +297,51 @@ pub(crate) struct ConversionState {
     /// The Cancel flags of the folder conversions that run.
     cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     progress_open: bool,
-    clip_exports: Vec<Receiver<Result<PathBuf, String>>>,
+    clip_exports: Vec<ClipExport>,
+    /// Target names of the clip exports that run, so that a batch never sends
+    /// two clips to one file before the first file exists.
+    reserved_clips: HashSet<PathBuf>,
+}
+
+/// One running clip export and the target name it reserved.
+struct ClipExport {
+    receiver: Receiver<Result<PathBuf, String>>,
+    reserved: PathBuf,
+}
+
+/// Case-insensitive key of a reserved clip target.
+fn clip_reservation_key(path: &Path) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().to_lowercase())
+}
+
+/// A time in a clip name: "1-05" for whole seconds, "1-05.250" with
+/// milliseconds, so clips that differ only by milliseconds keep apart.
+fn clip_time_label(seconds: f64) -> String {
+    let rounded = (seconds.max(0.0) * 1000.0).round() / 1000.0;
+    let time = std::time::Duration::try_from_secs_f64(rounded).unwrap_or_default();
+    let whole = format_duration(time.as_secs_f64().floor()).replace(':', "-");
+    match time.subsec_millis() {
+        0 => whole,
+        fraction => format!("{whole}.{fraction:03}"),
+    }
+}
+
+/// The first `stem.ext` or `stem (N).ext` in the folder that neither exists
+/// nor is reserved.
+fn free_clip_path(
+    folder: &Path,
+    stem: &str,
+    extension: &str,
+    reserved: &HashSet<PathBuf>,
+) -> PathBuf {
+    let taken = |path: &Path| path.exists() || reserved.contains(&clip_reservation_key(path));
+    let mut output = folder.join(format!("{stem}.{extension}"));
+    let mut counter = 2;
+    while taken(&output) {
+        output = folder.join(format!("{stem} ({counter}).{extension}"));
+        counter += 1;
+    }
+    output
 }
 
 /// Windows `clip_video_extension`.
@@ -356,6 +401,7 @@ fn clip_output_path(
     start: f64,
     end: f64,
     choice: DownloadChoice,
+    reserved: &HashSet<PathBuf>,
 ) -> Result<(PathBuf, PathBuf, String), String> {
     let mut folder_item = item.clone();
     if folder_item.kind == MediaKind::PodcastEpisode {
@@ -371,15 +417,10 @@ fn clip_output_path(
     let stem = format!(
         "{} - {}-{}",
         crate::safe_path_component(&item.title),
-        format_duration(start).replace(':', "-"),
-        format_duration(end).replace(':', "-")
+        clip_time_label(start),
+        clip_time_label(end)
     );
-    let mut output = folder.join(format!("{stem}.{extension}"));
-    let mut counter = 2;
-    while output.exists() {
-        output = folder.join(format!("{stem} ({counter}).{extension}"));
-        counter += 1;
-    }
+    let output = free_clip_path(&folder, &stem, &extension, reserved);
     Ok((folder, output, extension))
 }
 
@@ -679,14 +720,20 @@ impl Shell {
             ui.show_error(&message);
             return;
         };
-        let (folder, mut output, extension) =
-            match clip_output_path(&settings, &item, start, end, choice) {
-                Ok(paths) => paths,
-                Err(error) => {
-                    ui.show_error(&error);
-                    return;
-                }
-            };
+        let (folder, mut output, extension) = match clip_output_path(
+            &settings,
+            &item,
+            start,
+            end,
+            choice,
+            &self.conversions.reserved_clips,
+        ) {
+            Ok(paths) => paths,
+            Err(error) => {
+                ui.show_error(&error);
+                return;
+            }
+        };
         if settings.ask_download_location_each_time {
             let default_name = output
                 .file_name()
@@ -709,7 +756,7 @@ impl Shell {
             external_audio_input: item.external_audio_url.as_ref().map(ToString::to_string),
             start_seconds: start,
             end_seconds: end,
-            output_path: output,
+            output_path: output.clone(),
             mode: if choice == DownloadChoice::Audio {
                 apricot_platform::ClipExportMode::Audio
             } else {
@@ -720,13 +767,19 @@ impl Shell {
             headers: clip_http_headers(&item),
             audio_filter,
         };
+        let reserved = output;
         let (sender, receiver) = mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let result =
                 apricot_platform::export_marked_clip(&request).map_err(|error| error.to_string());
             let _ = sender.send(result);
         });
-        self.conversions.clip_exports.push(receiver);
+        self.conversions
+            .reserved_clips
+            .insert(clip_reservation_key(&reserved));
+        self.conversions
+            .clip_exports
+            .push(ClipExport { receiver, reserved });
         ui.set_status(&self.text("clip_export_started"), true);
         ui.set_background_polling(true);
     }
@@ -734,19 +787,27 @@ impl Shell {
     /// Windows `poll_clip_exports`.
     fn poll_clip_exports(&mut self, ui: &mut dyn ShellUi) {
         let mut completed = Vec::new();
+        let mut released = Vec::new();
         self.conversions
             .clip_exports
-            .retain(|receiver| match receiver.try_recv() {
+            .retain(|export| match export.receiver.try_recv() {
                 Ok(result) => {
                     completed.push(result);
+                    released.push(export.reserved.clone());
                     false
                 }
                 Err(TryRecvError::Empty) => true,
                 Err(TryRecvError::Disconnected) => {
                     completed.push(Err("Clip export worker stopped".to_owned()));
+                    released.push(export.reserved.clone());
                     false
                 }
             });
+        for path in released {
+            self.conversions
+                .reserved_clips
+                .remove(&clip_reservation_key(&path));
+        }
         for result in completed {
             match result {
                 Ok(path) => {
@@ -980,6 +1041,27 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clips_that_differ_only_by_milliseconds_get_distinct_reserved_names() {
+        assert_eq!(clip_time_label(65.0), "1-05");
+        assert_eq!(clip_time_label(65.25), "1-05.250");
+        let folder = tempfile::tempdir().expect("folder");
+        let mut reserved = HashSet::new();
+        let mut names = Vec::new();
+        for (start, end) in [(1.2, 5.0), (1.9, 5.0), (1.2, 5.0)] {
+            let stem = format!("T - {}-{}", clip_time_label(start), clip_time_label(end));
+            let path = free_clip_path(folder.path(), &stem, "mp3", &reserved);
+            reserved.insert(clip_reservation_key(&path));
+            names.push(path);
+        }
+        let unique: HashSet<_> = names
+            .iter()
+            .map(|path| clip_reservation_key(path))
+            .collect();
+        assert_eq!(unique.len(), 3, "{names:?}");
+        assert!(names[2].to_string_lossy().ends_with("(2).mp3"));
+    }
 
     struct View {
         warnings: Vec<String>,

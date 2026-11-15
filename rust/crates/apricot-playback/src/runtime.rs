@@ -57,6 +57,27 @@ struct VolumeFade {
     fade_back: bool,
 }
 
+/// Runs the command a fade waits for at once and restores the volume, so a
+/// different transport command never drops it.
+fn flush_pending_fade(
+    active: &mut Option<(u64, Box<dyn PlaybackEngine>)>,
+    fade: &mut Option<VolumeFade>,
+    target_volume: f64,
+) {
+    let Some(mut task) = fade.take() else {
+        return;
+    };
+    let Some(command) = task.after.take() else {
+        // A plain volume fade: the next command starts its own.
+        *fade = Some(task);
+        return;
+    };
+    if let Some((_, engine)) = active.as_mut() {
+        let _ = engine.execute(command);
+        let _ = engine.execute(PlaybackCommand::SetVolume(target_volume));
+    }
+}
+
 /// A seek that arrives while another waits for its fade: relative steps add
 /// up, an absolute target moves by later relative steps, and a new absolute
 /// target replaces the waiting one. `None` for anything that is not a seek.
@@ -709,7 +730,14 @@ fn playback_worker(
                             }
                             PlaybackCommand::SeekAbsolute { .. }
                             | PlaybackCommand::SeekRelative { .. } => {
-                                outgoing = None;
+                                // A seek ends a crossfade: the new item gets
+                                // its full volume back (review 2.1).
+                                if outgoing.take().is_some()
+                                    && let Some((_, engine)) = active.as_mut()
+                                {
+                                    let _ =
+                                        engine.execute(PlaybackCommand::SetVolume(target_volume));
+                                }
                                 // Seeks during a seek fade add up: five
                                 // presses seek five steps (review 2.1).
                                 if let Some(task) = fade.as_mut()
@@ -719,6 +747,7 @@ fn playback_worker(
                                     task.after = Some(combined);
                                     continue;
                                 }
+                                flush_pending_fade(&mut active, &mut fade, target_volume);
                                 if transition_options.seek_fade_seconds > 0.0 {
                                     fade = Some(VolumeFade {
                                         started: Some(Instant::now()),
@@ -732,6 +761,10 @@ fn playback_worker(
                                 }
                             }
                             PlaybackCommand::SetPaused(paused) => {
+                                // A pause never replaces a waiting seek, nor
+                                // a seek a waiting pause: the waiting command
+                                // runs first (review 2.1).
+                                flush_pending_fade(&mut active, &mut fade, target_volume);
                                 if let Some(old) = outgoing.as_mut() {
                                     let _ = old.engine.execute(command.clone());
                                     let now = Instant::now();
@@ -1458,6 +1491,64 @@ mod tests {
             .expect("play");
         std::thread::sleep(Duration::from_millis(600));
         assert_eq!(dropped.load(Ordering::SeqCst), 1, "then the crossfade ends");
+    }
+
+    /// Review 2.1: a seek that ends a crossfade gives the new item its
+    /// volume back, and pause and seek during fades both happen.
+    #[test]
+    fn a_seek_during_a_crossfade_restores_the_volume() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let launches = Launches::default();
+        let engines = EngineCommands::default();
+        let runtime = crossfading_runtime(&dropped, &launches, &engines);
+        start_crossfade(&runtime, 10.0);
+        runtime
+            .execute(
+                2,
+                PlaybackCommand::SeekRelative {
+                    seconds: 5.0,
+                    exact: false,
+                },
+            )
+            .expect("seek");
+        std::thread::sleep(Duration::from_millis(80));
+        let incoming = engines.lock().unwrap()[1].lock().unwrap().clone();
+        let last_volume = incoming.iter().rev().find_map(|command| match command {
+            PlaybackCommand::SetVolume(volume) => Some(*volume),
+            _ => None,
+        });
+        assert_eq!(last_volume, Some(100.0), "{incoming:?}");
+    }
+
+    #[test]
+    fn a_pause_and_a_seek_during_fades_both_happen() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let launches = Launches::default();
+        let engines = EngineCommands::default();
+        let runtime = crossfading_runtime(&dropped, &launches, &engines);
+        let mut options = MpvLaunchOptions::new("mpv");
+        options.transitions.pause_fade_seconds = 2.0;
+        options.transitions.seek_fade_seconds = 2.0;
+        runtime.start(1, options, item("one")).expect("start");
+        std::thread::sleep(Duration::from_millis(50));
+        runtime
+            .execute(1, PlaybackCommand::SetPaused(true))
+            .expect("pause");
+        runtime
+            .execute(
+                1,
+                PlaybackCommand::SeekRelative {
+                    seconds: 5.0,
+                    exact: false,
+                },
+            )
+            .expect("seek");
+        std::thread::sleep(Duration::from_millis(80));
+        let commands = engines.lock().unwrap()[0].lock().unwrap().clone();
+        assert!(
+            commands.contains(&PlaybackCommand::SetPaused(true)),
+            "the pause is not lost: {commands:?}"
+        );
     }
 
     #[test]

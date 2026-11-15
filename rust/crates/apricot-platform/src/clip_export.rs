@@ -207,16 +207,15 @@ pub fn build_clip_export_arguments(
     ];
     match request.mode {
         ClipExportMode::Audio => {
+            // The source range is limited on the input side, so tempo and
+            // silence filters work on exactly the marked part.
             add_input(
                 &mut arguments,
                 request.start_seconds,
+                Some(duration),
                 selected_audio,
                 &request.headers,
             );
-            arguments.extend([
-                OsString::from("-t"),
-                OsString::from(format!("{duration:.3}")),
-            ]);
             if let Some(filter) = request
                 .audio_filter
                 .as_deref()
@@ -233,6 +232,7 @@ pub fn build_clip_export_arguments(
             add_input(
                 &mut arguments,
                 request.start_seconds,
+                None,
                 request.primary_input.trim(),
                 &request.headers,
             );
@@ -240,6 +240,7 @@ pub fn build_clip_export_arguments(
                 add_input(
                     &mut arguments,
                     request.start_seconds,
+                    None,
                     audio,
                     &request.headers,
                 );
@@ -267,11 +268,23 @@ pub fn build_clip_export_arguments(
     Ok(arguments)
 }
 
-fn add_input(arguments: &mut Vec<OsString>, start_seconds: f64, input: &str, headers: &str) {
+fn add_input(
+    arguments: &mut Vec<OsString>,
+    start_seconds: f64,
+    source_duration: Option<f64>,
+    input: &str,
+    headers: &str,
+) {
     arguments.extend([
         OsString::from("-ss"),
         OsString::from(format!("{start_seconds:.3}")),
     ]);
+    if let Some(duration) = source_duration {
+        arguments.extend([
+            OsString::from("-t"),
+            OsString::from(format!("{duration:.3}")),
+        ]);
+    }
     if !headers.is_empty() && (input.starts_with("http://") || input.starts_with("https://")) {
         arguments.extend([OsString::from("-headers"), OsString::from(headers)]);
     }
@@ -387,6 +400,21 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair == ["-map", "1:a:0?"]));
         assert_eq!(args.iter().filter(|value| *value == "-ss").count(), 2);
         assert!(args.windows(2).any(|pair| pair == ["-t", "7.500"]));
+    }
+
+    #[test]
+    fn audio_export_limits_the_source_before_time_changing_filters() {
+        let mut request = request(ClipExportMode::Audio);
+        request.start_seconds = 5.0;
+        request.end_seconds = 15.0;
+        request.audio_filter = Some("atempo=2".to_owned());
+        let args = arguments(&request);
+        let position = |value: &str| args.iter().position(|item| item == value).expect(value);
+        assert!(position("-ss") < position("-i"));
+        assert!(position("-t") < position("-i"));
+        assert!(position("-i") < position("-af"));
+        assert_eq!(args[position("-t") + 1], "10.000");
+        assert_eq!(args.iter().filter(|value| *value == "-t").count(), 1);
     }
 
     #[test]

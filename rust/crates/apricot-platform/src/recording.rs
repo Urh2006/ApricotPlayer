@@ -407,6 +407,10 @@ fn record(
     let mut queues = Vec::new();
     let mut successful = Vec::new();
     for source in &settings.sources {
+        // Stop while sources open: no further source is opened (review 2.1).
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
         let source = source.clone();
         let queue = Arc::new(CaptureQueue::new());
         let capture_queue = Arc::clone(&queue);
@@ -431,7 +435,18 @@ fn record(
                 });
             }
         });
-        match ready.recv_timeout(Duration::from_secs(30)) {
+        // Up to 30 seconds for permission or the device, but Stop ends the
+        // wait at once.
+        let waited = Instant::now();
+        let answer = loop {
+            match ready.recv_timeout(Duration::from_millis(100)) {
+                Err(mpsc::RecvTimeoutError::Timeout)
+                    if !stop.load(Ordering::Acquire)
+                        && waited.elapsed() < Duration::from_secs(30) => {}
+                other => break other,
+            }
+        };
+        match answer {
             Ok(Ok(())) => {
                 queues.push((queue, source_gain));
                 successful.push(name);
@@ -454,6 +469,12 @@ fn record(
         let _ = encoder.wait();
         let _ = std::fs::remove_file(&temporary);
         return Err(RecordingError::NoneOpened);
+    }
+    // All sources begin together: what a first source captured while a
+    // later one was still opening is dropped, so voices and music line up
+    // (review 2.1).
+    for (queue, _) in &queues {
+        queue.mix(&mut [], 1.0, true);
     }
     let _ = send.send(RecordingEvent::Started {
         output: output.to_owned(),

@@ -1930,7 +1930,7 @@ impl SettingsWindow {
     /// window and runs in the main window; the Action Finder opens over it.
     /// The setting of the control with the focus; a text field's editor
     /// stands for its field.
-    fn focused_setting(&self, window: &NSWindow) -> Option<apricot_core::SettingId> {
+    fn focused_binding(&self, window: &NSWindow) -> Option<SettingsBinding> {
         let responder = window.firstResponder()?;
         let editor_field = responder
             .downcast_ref::<objc2_app_kit::NSTextView>()
@@ -1947,7 +1947,7 @@ impl SettingsWindow {
                 std::ptr::eq(view, focused)
                     || editor_field.is_some_and(|field| std::ptr::eq(view, field))
             })
-            .and_then(|bound| bound.binding.setting())
+            .map(|bound| bound.binding.clone())
     }
 
     fn handle_shortcut(&self, event: &NSEvent) -> bool {
@@ -1972,12 +1972,13 @@ impl SettingsWindow {
         if event.keyCode() == F1_KEY_CODE
             && !(modifiers.command || modifiers.option || modifiers.control || modifiers.shift)
         {
-            let Some(setting) = self.focused_setting(&window) else {
+            let Some(binding) = self.focused_binding(&window) else {
                 return false;
             };
-            if let Some(help) = self.with_shell(|shell, _| {
-                apricot_app::settings_model::setting_help(&shell.catalog(), setting)
-            }) {
+            if let Some(help) = self
+                .with_shell(|shell, _| shell.settings_help(&binding))
+                .flatten()
+            {
                 self.announce(&help, true);
             }
             return true;

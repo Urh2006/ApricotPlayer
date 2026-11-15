@@ -870,8 +870,18 @@ impl MainWindowController {
         if !start_hidden {
             self.with_shell(|shell, ui| shell.schedule_saved_audio_device_check(ui));
         }
-        // Windows `process_pending_activations` after the window is shown.
-        self.with_shell(|shell, ui| shell.process_activations(ui));
+        self.after_show(start_hidden);
+    }
+
+    /// Windows `process_pending_activations` after the window is shown, then
+    /// what happened to a recording at the last quit, if anything.
+    fn after_show(&self, start_hidden: bool) {
+        self.with_shell(|shell, ui| {
+            shell.process_activations(ui);
+            if !start_hidden {
+                shell.announce_recording_notice(ui);
+            }
+        });
     }
 
     fn install_layout_observer(&self) {

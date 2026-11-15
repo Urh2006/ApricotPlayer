@@ -1339,6 +1339,8 @@ pub fn dispatch_playback_feature(
             } else if let Some(seconds) =
                 apricot_app::playback_features::bookmark_slot(app.settings(), &media, number)
             {
+                // Inside A–B repeat the jump stays within it (review 2.1).
+                let seconds = app.playback_features().ranges.constrain(seconds);
                 commands.push(PlaybackCommand::SeekAbsolute {
                     seconds,
                     exact: true,
@@ -1399,11 +1401,16 @@ pub fn dispatch_playback_feature(
             // Edited times apply to the chosen excerpt; unchanged fields keep it.
             let mut range = ranges[index];
             let shown = ranges[selected];
-            let start = parse_time(text(&values, "start"));
-            let end = parse_time(text(&values, "end"));
-            if let (Some(start), Some(end)) = (start, end)
-                && ((start - shown.start).abs() > 0.000_5 || (end - shown.end).abs() > 0.000_5)
-            {
+            let (Some(start), Some(end)) = (
+                parse_time(text(&values, "start")),
+                parse_time(text(&values, "end")),
+            ) else {
+                // A mistyped time never lets the action run on the old
+                // excerpt (review 2.1).
+                ui.announce(catalog.text("excerpt_invalid_times"));
+                return Some(commands);
+            };
+            if (start - shown.start).abs() > 0.000_5 || (end - shown.end).abs() > 0.000_5 {
                 if let Ok(edited) = MarkedRange::new(start, end) {
                     range = edited;
                     app.playback_features_mut().ranges.ranges[index] = edited;

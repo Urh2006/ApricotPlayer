@@ -2174,6 +2174,11 @@ impl Application {
         let Some(item) = self.state.player.current_item().cloned() else {
             return;
         };
+        // An address with a login never goes into the resume file, which is
+        // plain JSON (review 2.1).
+        if item.has_private_address() {
+            return;
+        }
         let frame = self.open_player_return_frame();
         let (return_screen, mut return_data) = self.last_session_return_context(&frame, &item);
         for (key, value) in frame.parameters {
@@ -2184,6 +2189,7 @@ impl Application {
                 .player_sequence
                 .items()
                 .iter()
+                .filter(|entry| !entry.has_private_address())
                 .take(200)
                 .cloned()
                 .collect()
@@ -2370,6 +2376,9 @@ impl Application {
 
     /// Python `session_equalizer_enabled`/`session_equalizer_gains`.
     pub fn set_player_equalizer(&mut self, equalizer: Option<EqualizerSession>) {
+        if equalizer.is_none() {
+            self.state.playback_features.equalizer_session_preset = None;
+        }
         self.state.player.set_equalizer(equalizer);
     }
 
@@ -2424,10 +2433,23 @@ impl Application {
     /// The profile whose advanced settings shape the player equalizer: the
     /// one shown in an open equalizer dialog, else the effective profile.
     pub fn equalizer_graph_preset(&self) -> String {
+        let session = self
+            .state
+            .player
+            .audio()
+            .is_some_and(|audio| audio.equalizer.is_some())
+            .then(|| {
+                self.state
+                    .playback_features
+                    .equalizer_session_preset
+                    .clone()
+            })
+            .flatten();
         self.state
             .playback_features
             .equalizer_preview_preset
             .clone()
+            .or(session)
             .unwrap_or_else(|| {
                 self.equalizer_settings()
                     .effective_preset(&self.equalizer_device_key())
@@ -3656,6 +3678,55 @@ mod tests {
             .expect("custom gains");
         assert!(
             (app.equalizer_settings().gains_for_preset("custom2")["31"] - 7.5).abs() < f64::EPSILON
+        );
+    }
+
+    /// Review 2.1: the profile confirmed in F4 keeps shaping the player's
+    /// equalizer after the dialog closed.
+    #[test]
+    fn the_confirmed_f4_profile_keeps_its_advanced_shape() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.start_player_item(media_item("song"));
+        let global = app.equalizer_graph_preset();
+        app.set_player_equalizer(Some(crate::EqualizerSession {
+            enabled: true,
+            gains: crate::equalizer::factory_gains("rock"),
+        }));
+        app.playback_features_mut().equalizer_session_preset = Some("custom_2".to_owned());
+        assert_eq!(app.equalizer_graph_preset(), "custom_2");
+        app.set_player_equalizer(None);
+        assert_eq!(app.equalizer_graph_preset(), global);
+    }
+
+    /// Review 2.1: a CUE track counts its own time: elapsed, length and the
+    /// span that percentages, Home and End use.
+    #[test]
+    fn a_cue_track_has_its_own_time() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        let mut track = media_item("track2");
+        track
+            .metadata
+            .insert("apricot_segment_start".to_owned(), serde_json::json!(180.0));
+        track
+            .metadata
+            .insert("apricot_segment_end".to_owned(), serde_json::json!(300.0));
+        let generation = app.start_player_item(track);
+        assert!(app.apply_playback_event(
+            generation,
+            apricot_playback::PlaybackEvent::Position {
+                elapsed: 200.0,
+                duration: Some(600.0),
+            },
+        ));
+        assert_eq!(
+            crate::playback_features::chapter_span(&app),
+            Some((180.0, 300.0))
+        );
+        assert_eq!(
+            crate::playback_features::displayed_times(&app),
+            (20.0, Some(120.0))
         );
     }
 

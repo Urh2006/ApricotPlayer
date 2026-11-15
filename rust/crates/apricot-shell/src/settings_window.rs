@@ -95,6 +95,46 @@ impl SettingsBinding {
     }
 }
 
+impl Shell {
+    /// What F1 says about a settings control: the plain setting's help, or
+    /// the help of a Recording or Spotify field. Other controls have none.
+    #[must_use]
+    pub fn settings_help(&self, binding: &SettingsBinding) -> Option<String> {
+        if let Some(setting) = binding.setting() {
+            return Some(apricot_app::settings_model::setting_help(
+                &self.catalog(),
+                setting,
+            ));
+        }
+        let key = match binding {
+            SettingsBinding::RecordingField(field) => match field.as_str() {
+                "format" | "rate" | "channels" | "bitrate" | "folder" | "remember" | "feedback" => {
+                    format!("setting_help_recording_{field}")
+                }
+                _ => return None,
+            },
+            SettingsBinding::SpotifyChoice(SpotifyField::Quality) => {
+                "setting_help_spotify_quality".to_owned()
+            }
+            SettingsBinding::SpotifyChoice(SpotifyField::Autoplay) => {
+                "setting_help_spotify_autoplay".to_owned()
+            }
+            SettingsBinding::SpotifyChoice(SpotifyField::LibraryOrder) => {
+                "setting_help_spotify_library_order".to_owned()
+            }
+            SettingsBinding::SpotifyNormalisation => {
+                "setting_help_spotify_normalisation".to_owned()
+            }
+            SettingsBinding::SpotifyListeningHistory => {
+                "setting_help_spotify_listening_history".to_owned()
+            }
+            SettingsBinding::SpotifyKeyCache => "setting_help_spotify_key_cache".to_owned(),
+            _ => return None,
+        };
+        Some(self.text(&key))
+    }
+}
+
 /// The value a control shows (Windows `window_text`, `CB_GETCURSEL`,
 /// `BM_GETCHECK` and `TBM_GETPOS`).
 #[derive(Clone, Debug, PartialEq)]
@@ -1160,6 +1200,36 @@ mod tests {
             &model.controls[0],
             SettingsControl::FieldChoice { selected: 2, .. }
         ));
+    }
+
+    #[test]
+    fn f1_explains_recording_and_spotify_controls() {
+        let shell = crate::tests::keyboard::shell();
+        for field in [
+            "format", "rate", "channels", "bitrate", "folder", "remember", "feedback",
+        ] {
+            let help = shell
+                .settings_help(&SettingsBinding::RecordingField(field.to_owned()))
+                .unwrap();
+            assert!(!help.starts_with("setting_help"), "{field}: {help}");
+        }
+        for binding in [
+            SettingsBinding::SpotifyChoice(SpotifyField::Quality),
+            SettingsBinding::SpotifyChoice(SpotifyField::Autoplay),
+            SettingsBinding::SpotifyChoice(SpotifyField::LibraryOrder),
+            SettingsBinding::SpotifyNormalisation,
+            SettingsBinding::SpotifyListeningHistory,
+            SettingsBinding::SpotifyKeyCache,
+        ] {
+            let help = shell.settings_help(&binding).unwrap();
+            assert!(!help.starts_with("setting_help"), "{binding:?}: {help}");
+        }
+        assert!(
+            shell
+                .settings_help(&SettingsBinding::Checkbox(SettingId::VolumeBoostByDefault))
+                .is_some()
+        );
+        assert_eq!(shell.settings_help(&SettingsBinding::ShortcutSearch), None);
     }
 
     #[test]

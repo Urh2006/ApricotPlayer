@@ -296,6 +296,32 @@ fn youtube_video_id_from_url(url: &Url) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// A web address that carries a login or a token: a user name or password,
+/// a query (`?token=`, `?username=`), or the Xtream form
+/// `/live/USER/PASS/123.ts`. Such addresses never go into saved history.
+#[must_use]
+pub fn url_carries_login(address: &str) -> bool {
+    let Ok(url) = Url::parse(address.trim()) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return true;
+    }
+    if url.query().is_some_and(|query| !query.is_empty()) {
+        return true;
+    }
+    let segments: Vec<_> = url
+        .path_segments()
+        .map(Iterator::collect)
+        .unwrap_or_default();
+    segments.iter().enumerate().any(|(index, segment)| {
+        matches!(*segment, "live" | "movie" | "series" | "timeshift") && segments.len() >= index + 4
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MediaId, MediaItem, MediaKind, MediaSource};

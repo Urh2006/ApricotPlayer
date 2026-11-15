@@ -260,8 +260,8 @@ fn copy_beside(source: &Path, target: &Path) -> Result<PathBuf, String> {
 /// Copies or moves `source` into `directory`. `collision` decides what
 /// happens when the name is taken; with `None` a taken name is skipped.
 /// A failure never leaves the destination with less than it had: an
-/// existing file is only replaced by a complete copy, and a move removes
-/// the original before it replaces anything.
+/// existing file is only replaced by a complete copy, and a move across
+/// drives removes the original only after its copy has the name.
 ///
 /// # Errors
 ///
@@ -310,16 +310,16 @@ pub fn transfer(
         }
         TransferMode::Move => match fs::rename(source, &target) {
             Ok(()) => {}
-            // Another drive: a complete copy, then the original goes, and
-            // only then the copy takes the name.
+            // Another drive: a complete copy takes the name first, and only
+            // then the original goes. Any failure leaves the original or a
+            // whole copy under the real name, never only a hidden file.
             Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
                 let partial = copy_beside(source, &target)?;
-                if let Err(error) = fs::remove_file(source) {
+                if let Err(error) = fs::rename(&partial, &target) {
                     let _ = fs::remove_file(&partial);
                     return Err(error.to_string());
                 }
-                fs::rename(&partial, &target)
-                    .map_err(|error| format!("{error}: {}", partial.display()))?;
+                fs::remove_file(source).map_err(|error| error.to_string())?;
             }
             Err(error) => return Err(error.to_string()),
         },

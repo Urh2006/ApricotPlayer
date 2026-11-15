@@ -323,9 +323,28 @@ fn parse_xml(text: &str, base: &Url, kind: &str) -> Result<Vec<MediaItem>, Strin
             .and_then(|n| n.text())
             .and_then(|n| n.parse::<f64>().ok())
             .map(|v| v / 1000.0);
-        items.push(location(source, name, duration, base)?);
+        // XSPF and ASX locations are URI references ("My%20Song.flac"),
+        // unlike the literal file names of M3U (review 2.1).
+        let source = xml_reference(source, base);
+        items.push(location(&source, name, duration, base)?);
     }
     Ok(items)
+}
+
+/// A relative URI of an XML playlist beside a local playlist, as the file
+/// path it names; anything else as it is.
+fn xml_reference(source: &str, base: &Url) -> String {
+    let trimmed = source.trim();
+    if base.scheme() != "file" || Url::parse(trimmed).is_ok() || Path::new(trimmed).is_absolute() {
+        return trimmed.to_owned();
+    }
+    base.join(trimmed)
+        .ok()
+        .and_then(|url| url.to_file_path().ok())
+        .map_or_else(
+            || trimmed.to_owned(),
+            |path| path.to_string_lossy().into_owned(),
+        )
 }
 fn cue_time(value: &str) -> Option<f64> {
     let p = value
@@ -499,6 +518,18 @@ pub fn resolve_folders(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 2.1: an XSPF location is a URI; M3U names stay literal.
+    #[test]
+    fn xspf_locations_are_decoded_and_m3u_names_are_not() {
+        let base = Url::parse("file:///review/list.xspf").unwrap();
+        let text = r"<playlist><trackList><track><location>My%20Song.flac</location></track></trackList></playlist>";
+        let items = parse_xml(text, &base, "xspf").unwrap();
+        assert_eq!(items[0].local_path.as_deref(), Some("/review/My Song.flac"));
+        let m3u = Url::parse("file:///review/list.m3u8").unwrap();
+        let item = location("100%20.mp3", "", None, &m3u).unwrap();
+        assert_eq!(item.local_path.as_deref(), Some("/review/100%20.mp3"));
+    }
     #[test]
     fn lists_preserve_duplicates_relative_paths_and_titles() {
         let base = Url::parse("https://example.org/music/list.m3u").unwrap();
