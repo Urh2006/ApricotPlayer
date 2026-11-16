@@ -1185,12 +1185,13 @@ impl PlaybackEngine for LibMpvEngine {
         }
         // A sound change while paused empties the audio buffers at once,
         // while still paused: emptying them on Play came too late, because
-        // mpv resumes the device before it runs the seek, so the old volume
-        // was heard for a moment (beta 7, again after RC review).
-        let flush_now = self.requested_paused
-            && changes_sound(&command)
-            && self.pcm.is_none()
-            && self.duration.is_some_and(|duration| duration > 0.0);
+        // mpv resumes the device before it runs the seek.
+        let flush_now = self.requested_paused && changes_sound(&command);
+        // A file can seek, which also empties the filters (speed, pitch); a
+        // live stream or a Spotify song cannot, so only the sound device is
+        // started again, which drops the sound it already holds. Measured:
+        // without either, about 30 ms at the old setting followed Play.
+        let seekable = self.pcm.is_none() && self.duration.is_some_and(|duration| duration > 0.0);
         if unsafe { self.execute_pcm(&command)? } {
             if matches!(&command, PlaybackCommand::Load { .. }) {
                 self.media_info = PlaybackMediaInfo::default();
@@ -1236,7 +1237,9 @@ impl PlaybackEngine for LibMpvEngine {
                     ],
                 )?;
             }
-            if flush_now {
+            if flush_now && !seekable {
+                let _ = self.api.run_command(self.handle(), &["ao-reload".to_owned()]);
+            } else if flush_now {
                 // A seek to where playback stands drops what the device and
                 // mpv hold, so Play starts with the new settings.
                 let _ = self.api.run_command(
