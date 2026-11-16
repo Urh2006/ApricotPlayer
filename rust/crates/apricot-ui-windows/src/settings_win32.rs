@@ -271,6 +271,9 @@ pub unsafe fn show(
         if handle_shortcut_message(window, &message) {
             continue;
         }
+        if crate::accessibility_win32::tab_into_list(window, &message) {
+            continue;
+        }
         if !IsDialogMessageW(window, &raw const message).as_bool() {
             let _ = TranslateMessage(&raw const message);
             DispatchMessageW(&raw const message);
@@ -352,6 +355,7 @@ unsafe fn create_base_controls(
         false,
     )?;
     let section_name = wide(&model.section_list_name);
+    let section_list_name = model.section_list_name.clone();
     let section_list = create_control(
         parent,
         instance,
@@ -366,6 +370,8 @@ unsafe fn create_base_controls(
         WS_EX_CLIENTEDGE,
         ID_SECTION_LIST,
     )?;
+    // The list's own text is not its name for a screen reader.
+    crate::accessibility_win32::set_control_name(section_list, &section_list_name);
     for section in &model.sections {
         add_list_string(section_list, &section.label);
     }
@@ -455,6 +461,15 @@ unsafe fn defer_global_action(window: HWND, action_id: &'static str) {
         return;
     };
     state.deferred_action = Some(action_id);
+    close_settings_window(window);
+}
+
+/// Closes Settings with the main window enabled first, so Windows hands the
+/// activation back to the main window, not to another program (beta 8).
+unsafe fn close_settings_window(window: HWND) {
+    if let Some(state) = state(window) {
+        let _ = EnableWindow(state.owner, true);
+    }
     let _ = DestroyWindow(window);
 }
 
@@ -2403,6 +2418,7 @@ unsafe fn rebuild_screen(window: HWND) {
     set_window_text(state.reset_all, catalog.text("restore_defaults"));
     let section_name = wide(&model.section_list_name);
     let _ = SetWindowTextW(state.section_list, PCWSTR(section_name.as_ptr()));
+    crate::accessibility_win32::set_control_name(state.section_list, &model.section_list_name);
     SendMessageW(state.section_list, LB_RESETCONTENT, None, None);
     for section in &model.sections {
         add_list_string(state.section_list, &section.label);
@@ -2432,7 +2448,7 @@ unsafe fn rebuild_screen(window: HWND) {
 /// in-memory settings when the selection moved, and they stay applied until
 /// the next save or restart, as in Python.
 unsafe fn close_without_saving(window: HWND) {
-    let _ = DestroyWindow(window);
+    close_settings_window(window);
 }
 
 /// Python's `restore_default_settings`: no confirmation, save at once, speak

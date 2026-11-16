@@ -993,8 +993,23 @@ unsafe fn handle_view_tab_message(window: HWND, message: &MSG) -> bool {
     } else {
         (current + 1) % controls.len()
     };
-    let _ = SetFocus(Some(controls[next]));
+    focus_tab_target(window, controls[next]);
     true
+}
+
+/// Moves the focus for Tab. A list gets it by way of the window, as when a
+/// screen opens: straight from a button NVDA read the selected item twice,
+/// once with the list and once on its own (beta 8).
+unsafe fn focus_tab_target(window: HWND, target: HWND) {
+    let mut class = [0_u16; 16];
+    let length = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(target, &mut class);
+    let is_list = usize::try_from(length).is_ok_and(|length| {
+        String::from_utf16_lossy(&class[..length]).eq_ignore_ascii_case("ListBox")
+    });
+    if is_list {
+        let _ = SetFocus(Some(window));
+    }
+    let _ = SetFocus(Some(target));
 }
 
 /// Python `background_player_previous_target`: the screen's list, or its

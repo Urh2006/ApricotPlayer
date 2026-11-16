@@ -161,6 +161,9 @@ pub unsafe fn show(
             PostQuitMessage(0);
             break;
         }
+        if crate::accessibility_win32::tab_into_list(window, &message) {
+            continue;
+        }
         if !IsDialogMessageW(window, &raw const message).as_bool() {
             let _ = TranslateMessage(&raw const message);
             DispatchMessageW(&raw const message);

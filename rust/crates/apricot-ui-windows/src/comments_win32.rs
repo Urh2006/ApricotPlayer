@@ -217,6 +217,9 @@ unsafe fn show_inner(owner: HWND, options: CommentsDialogOptions) -> Result<()> 
             let _ = DestroyWindow(window);
             continue;
         }
+        if crate::accessibility_win32::tab_into_list(window, &message) {
+            continue;
+        }
         if !IsDialogMessageW(window, &raw const message).as_bool() {
             let _ = TranslateMessage(&raw const message);
             DispatchMessageW(&raw const message);
@@ -763,6 +766,9 @@ unsafe fn show_details(owner: HWND, title: &str, back: &str, text: &str) -> Resu
                 let _ = SetFocus(Some(back_button));
                 continue;
             }
+        }
+        if crate::accessibility_win32::tab_into_list(window, &message) {
+            continue;
         }
         if !IsDialogMessageW(window, &raw const message).as_bool() {
             let _ = TranslateMessage(&raw const message);

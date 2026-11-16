@@ -217,6 +217,7 @@ pub fn show(owner: HWND, host: Box<dyn EqualizerDialogHost>) -> Result<()> {
     unsafe { show_win32(owner, host) }
 }
 
+#[allow(clippy::too_many_lines)] // Creates the dialog and runs its loop.
 unsafe fn show_win32(owner: HWND, host: Box<dyn EqualizerDialogHost>) -> Result<()> {
     let module = GetModuleHandleW(None)?;
     let instance = HINSTANCE(module.0);
@@ -300,6 +301,9 @@ unsafe fn show_win32(owner: HWND, host: Box<dyn EqualizerDialogHost>) -> Result<
             let _ = DestroyWindow(window);
             PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             break;
+        }
+        if crate::accessibility_win32::tab_into_list(window, &message) {
+            continue;
         }
         if !IsDialogMessageW(window, &raw const message).as_bool() {
             let _ = TranslateMessage(&raw const message);

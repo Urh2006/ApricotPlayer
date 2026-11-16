@@ -180,6 +180,46 @@ impl Drop for ComApartment {
     }
 }
 
+/// Tab or Shift+Tab onto a list box in a dialog: the focus goes by way of
+/// the dialog, as when a window opens, because straight from a button NVDA
+/// read the selected item twice (beta 8). `true` when the key was handled.
+pub fn tab_into_list(dialog: HWND, message: &windows::Win32::UI::WindowsAndMessaging::MSG) -> bool {
+    use windows::Win32::UI::{
+        Input::KeyboardAndMouse::{
+            GetFocus, GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT, VK_TAB,
+        },
+        WindowsAndMessaging::{GetClassNameW, GetNextDlgTabItem, IsChild, WM_KEYDOWN},
+    };
+    if message.message != WM_KEYDOWN || message.wParam.0 != usize::from(VK_TAB.0) {
+        return false;
+    }
+    // SAFETY: Called on the dialog's UI thread with its live handles.
+    unsafe {
+        if GetKeyState(i32::from(VK_CONTROL.0)) < 0 || GetKeyState(i32::from(VK_MENU.0)) < 0 {
+            return false;
+        }
+        let focus = GetFocus();
+        if !IsChild(dialog, focus).as_bool() {
+            return false;
+        }
+        let backward = GetKeyState(i32::from(VK_SHIFT.0)) < 0;
+        let Ok(next) = GetNextDlgTabItem(dialog, Some(focus), backward) else {
+            return false;
+        };
+        let mut class = [0_u16; 16];
+        let length = GetClassNameW(next, &mut class);
+        let is_list = usize::try_from(length).is_ok_and(|length| {
+            String::from_utf16_lossy(&class[..length]).eq_ignore_ascii_case("ListBox")
+        });
+        if !is_list || next == focus {
+            return false;
+        }
+        let _ = SetFocus(Some(dialog));
+        let _ = SetFocus(Some(next));
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
