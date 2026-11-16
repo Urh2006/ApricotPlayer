@@ -59,6 +59,26 @@ impl SourcesUi for Ui {
         if std::mem::take(&mut self.showed_list) {
             unsafe { super::sources_panel::close(self.window) };
         }
+        // A kept IPTV channel starts with the options it was asked to play
+        // with (review 4, A1).
+        let start = unsafe { state_mut(self.window) }.and_then(|state| {
+            state
+                .pending_saved_iptv
+                .take_if(|start| start.id == item.id.0)
+        });
+        if let Some(start) = start {
+            unsafe {
+                super::start_media_item_with_options(
+                    self.window,
+                    item,
+                    start.queue_mode,
+                    start.session_shuffle,
+                    start.preserve_sequence,
+                    start.start_position_seconds,
+                );
+            }
+            return;
+        }
         unsafe { start_media_item(self.window, item, None) }
     }
     fn choose_file(&mut self, title: &str) -> Option<PathBuf> {
@@ -123,6 +143,7 @@ fn lend(state: &mut super::WindowState) -> apricot_shell::sources::SourcesContro
 
 /// Puts the controller back; the outermost call ends the lending.
 fn give_back(
+    window: HWND,
     state: &mut super::WindowState,
     controller: apricot_shell::sources::SourcesController,
 ) {
@@ -131,6 +152,17 @@ fn give_back(
     if state.source_tools_out == 0 {
         state.source_tools = controller;
         state.lent_recording = None;
+        // Exit waited for the lists to close (review 4, A7).
+        if std::mem::take(&mut state.exit_after_sources) {
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                    Some(window),
+                    windows::Win32::UI::WindowsAndMessaging::WM_CLOSE,
+                    windows::Win32::Foundation::WPARAM(0),
+                    windows::Win32::Foundation::LPARAM(0),
+                );
+            }
+        }
     }
 }
 
@@ -195,18 +227,38 @@ pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
     let handled = controller.action(&mut ui, &environment, id);
     let busy = controller.is_busy();
     // While the next list loads, the shown list stays, so the focus does not
-    // go back to the screen below and come again (beta 7).
-    if busy {
+    // go back to the screen below and come again (beta 7). A running
+    // recording is not loading: Back closes the list (review 4, B3).
+    if controller.is_loading() {
         ui.showed_list = false;
     }
     drop(ui);
     if let Some(state) = state_mut(window) {
-        give_back(state, controller);
+        give_back(window, state, controller);
     }
     if busy {
         SetTimer(Some(window), TIMER, 50, None);
     }
     handled
+}
+/// Opens a kept private IPTV channel from its source; the pending start in
+/// the window state says how it then plays (review 4, A1).
+pub(super) unsafe fn play_saved_iptv(window: HWND, item: &apricot_core::MediaItem) {
+    let Some(environment) = environment(window) else {
+        return;
+    };
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let mut controller = lend(state);
+    controller.play_saved_iptv(&mut Ui::new(window), &environment, item);
+    let busy = controller.is_busy();
+    if let Some(state) = state_mut(window) {
+        give_back(window, state, controller);
+    }
+    if busy {
+        SetTimer(Some(window), TIMER, 50, None);
+    }
 }
 /// The station or channel of the player, before it closes.
 pub(super) unsafe fn player_source_ids(window: HWND) -> (Option<String>, Option<String>) {
@@ -244,7 +296,7 @@ pub(super) unsafe fn resume_after_player(
     );
     let busy = controller.is_busy();
     if let Some(state) = state_mut(window) {
-        give_back(state, controller);
+        give_back(window, state, controller);
     }
     if busy {
         SetTimer(Some(window), TIMER, 50, None);
@@ -263,7 +315,7 @@ pub(super) unsafe fn ensure_loaded(window: HWND) {
     let mut controller = lend(state);
     controller.ensure_loaded(&mut Ui::new(window), &environment);
     if let Some(state) = state_mut(window) {
-        give_back(state, controller);
+        give_back(window, state, controller);
     }
 }
 /// The player went to the main menu: nothing to go back to.
@@ -287,14 +339,14 @@ pub(super) unsafe fn poll(window: HWND) {
     let busy = controller.poll(&mut ui, &environment);
     // A list kept open while work loaded closes when the work ended without
     // showing another one, for example with an error.
-    if busy {
+    if controller.is_loading() {
         ui.showed_list = false;
     } else if outermost {
         ui.showed_list = true;
     }
     drop(ui);
     if let Some(state) = state_mut(window) {
-        give_back(state, controller);
+        give_back(window, state, controller);
     }
     // A list shown while polling runs its own message loop, where this
     // timer polls the empty stand-in controller and stops; work the list
@@ -334,7 +386,7 @@ pub(super) unsafe fn metadata(window: HWND) {
         iptv.as_deref(),
     );
     if let Some(state) = state_mut(window) {
-        give_back(state, controller);
+        give_back(window, state, controller);
     }
 }
 pub(super) unsafe fn playback_started(window: HWND) {
@@ -344,6 +396,6 @@ pub(super) unsafe fn playback_started(window: HWND) {
     let mut controller = lend(state);
     controller.playback_started(&mut Ui::new(window));
     if let Some(state) = state_mut(window) {
-        give_back(state, controller);
+        give_back(window, state, controller);
     }
 }

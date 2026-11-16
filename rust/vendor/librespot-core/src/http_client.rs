@@ -185,6 +185,10 @@ impl HttpClient {
         // As correct as that may be technically, we now need all this boilerplate to clone it
         // ourselves, as any `Request` is moved in the loop.
         let (parts, body_as_bytes) = req.into_parts();
+        // ApricotPlayer patch: a caller such as the Spirc actor waits for
+        // this request, so rate limiting is waited out only briefly
+        // (review 4, B1).
+        let mut rate_limit_waits = 0;
 
         loop {
             let mut req = Request::builder()
@@ -200,8 +204,11 @@ impl HttpClient {
             if let Ok(response) = &response {
                 let code = response.status();
 
-                if code == StatusCode::TOO_MANY_REQUESTS {
-                    if let Some(duration) = Self::get_retry_after(response.headers()) {
+                if code == StatusCode::TOO_MANY_REQUESTS && rate_limit_waits < 2 {
+                    if let Some(duration) = Self::get_retry_after(response.headers())
+                        .filter(|duration| duration.as_secs() <= 5)
+                    {
+                        rate_limit_waits += 1;
                         warn!(
                             "Rate limited by service, retrying in {} seconds...",
                             duration.as_secs()

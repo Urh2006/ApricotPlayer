@@ -43,15 +43,24 @@ impl PlaybackQueueFile {
     /// entry cannot be converted into a playable media item.
     pub fn load(&self) -> Result<Vec<MediaItem>, PlaybackQueueFileError> {
         match read_json::<Value>(&self.path) {
-            Ok(Value::Array(values)) => values
-                .iter()
-                .enumerate()
-                .map(|(index, value)| {
-                    media_item_from_python_value(value)
-                        .filter(MediaItem::is_playable)
-                        .ok_or(PlaybackQueueFileError::InvalidItem { index })
-                })
-                .collect(),
+            Ok(Value::Array(values)) => {
+                let items = values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        media_item_from_python_value(value)
+                            .filter(MediaItem::is_playable)
+                            .ok_or(PlaybackQueueFileError::InvalidItem { index })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if values
+                    .iter()
+                    .any(crate::legacy_media::holds_private_address)
+                {
+                    self.save(&items)?;
+                }
+                Ok(items)
+            }
             Ok(_) => Err(PlaybackQueueFileError::InvalidItem { index: 0 }),
             Err(JsonFileError::Read { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
                 Ok(Vec::new())

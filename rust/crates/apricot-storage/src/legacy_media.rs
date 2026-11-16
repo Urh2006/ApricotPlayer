@@ -40,7 +40,7 @@ pub fn media_item_from_python_value(value: &Value) -> Option<MediaItem> {
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    Some(MediaItem {
+    let item = MediaItem {
         id: MediaId(id),
         source,
         kind,
@@ -52,10 +52,17 @@ pub fn media_item_from_python_value(value: &Value) -> Option<MediaItem> {
         channel: text(object, "channel"),
         duration_seconds,
         metadata,
-    })
+    };
+    // A private IPTV channel saved before review 4 loses its login here,
+    // and the next save writes the file without it (A1).
+    Some(item.without_private_address().unwrap_or(item))
 }
 
 pub fn media_item_to_python_value(item: &MediaItem) -> Value {
+    // A private IPTV channel is written as a reference to its source and
+    // channel, without address, login or portal session (review 4, A1).
+    let kept = item.without_private_address();
+    let item = kept.as_ref().unwrap_or(item);
     let mut object: Map<String, Value> = item
         .metadata
         .iter()
@@ -77,6 +84,34 @@ pub fn media_item_to_python_value(item: &MediaItem) -> Value {
         object.insert("duration_seconds".to_owned(), Value::from(duration));
     }
     Value::Object(object)
+}
+
+/// A saved entry of a private IPTV channel that still holds its address,
+/// login or portal session; the file is written again without them
+/// (review 4, A1).
+pub(crate) fn holds_private_address(value: &Value) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    if object
+        .get("apricot_private_address")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return false;
+    }
+    let reference =
+        text(object, "url").starts_with(&format!("{}:", apricot_core::SAVED_IPTV_SCHEME));
+    !reference
+        || [
+            "stalker_token",
+            "stalker_cookie",
+            "stalker_command",
+            "stalker_endpoint",
+            "http_headers",
+        ]
+        .iter()
+        .any(|key| object.contains_key(*key))
 }
 
 fn text(object: &Map<String, Value>, key: &str) -> String {
@@ -210,6 +245,42 @@ mod tests {
 
     use super::{media_item_from_python_value, media_item_to_python_value};
     use apricot_core::{MediaKind, MediaSource};
+
+    /// Review 4, A1: a private IPTV channel kept in favorites, a playlist
+    /// or the queue is written without its address, login or portal
+    /// session, and an entry saved before is cleaned when it is read.
+    #[test]
+    fn private_iptv_channels_are_saved_as_a_reference() {
+        let saved = json!({
+            "id": "http://portal.example.test/live/USER/FAKE_SECRET/77.ts",
+            "title": "News",
+            "kind": "live_stream",
+            "url": "http://portal.example.test/live/USER/FAKE_SECRET/77.ts",
+            "apricot_private_address": true,
+            "iptv_source_id": "src one",
+            "iptv_channel_id": "77",
+            "stalker_token": "FAKE_TOKEN",
+            "stalker_cookie": "mac=FAKE_MAC",
+            "stalker_command": "ffmpeg http://localhost/ch/77",
+            "http_headers": {"Cookie": "mac=FAKE_MAC"}
+        });
+        assert!(super::holds_private_address(&saved));
+        let item = media_item_from_python_value(&saved).expect("item");
+        assert!(item.is_saved_iptv_reference());
+        assert_eq!(item.id.0, "iptv:src one/77");
+        assert_eq!(item.title, "News");
+        let written = media_item_to_python_value(&item);
+        let text = written.to_string();
+        for secret in ["FAKE_SECRET", "FAKE_TOKEN", "FAKE_MAC", "USER", "localhost"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        assert_eq!(written["url"], json!("apricot-iptv://saved/src%20one/77"));
+        assert_eq!(written["iptv_stream_extension"], json!("ts"));
+        assert!(!super::holds_private_address(&written));
+        let again = media_item_from_python_value(&written).expect("again");
+        assert_eq!((&again.id, &again.url), (&item.id, &item.url));
+        assert_eq!(again.iptv_ids(), Some(("src one".into(), "77".into())));
+    }
 
     #[test]
     fn youtube_dictionary_round_trips_unknown_metadata() {

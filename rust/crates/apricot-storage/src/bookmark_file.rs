@@ -100,6 +100,13 @@ impl BookmarkFile {
                 if value.get("end_position").is_some() && bookmark.end_position().is_none() {
                     return Err(BookmarkFileError::InvalidEntry(index + 1));
                 }
+                // A damaged position would be read as the start; an import
+                // refuses it instead (review 4, A8).
+                if value.get("position").is_some_and(|position| {
+                    !position.is_null() && flexible_number(Some(position)).is_none()
+                }) {
+                    return Err(BookmarkFileError::InvalidEntry(index + 1));
+                }
                 Ok(bookmark)
             })
             .collect()
@@ -306,6 +313,31 @@ mod tests {
 
     use serde_json::{Value, json};
     use tempfile::tempdir;
+
+    /// Review 4, A8: an import with a damaged position is refused with the
+    /// number of the entry; a position written as text still imports.
+    #[test]
+    fn import_refuses_a_damaged_position() {
+        let folder = tempdir().expect("folder");
+        let path = folder.path().join("import.json");
+        let entry = |position: Value| json!({"name": "Start", "position": position, "media": {"title": "Song", "kind": "local_file", "url": "C:/Music/song.mp3"}});
+        for damaged in [json!("damaged"), json!({"seconds": 4})] {
+            fs::write(
+                &path,
+                json!([entry(json!(1.5)), entry(damaged)]).to_string(),
+            )
+            .expect("write");
+            assert!(matches!(
+                super::BookmarkFile::new(&path).load_import(),
+                Err(super::BookmarkFileError::InvalidEntry(2))
+            ));
+        }
+        fs::write(&path, json!([entry(json!("12.5"))]).to_string()).expect("write");
+        let imported = super::BookmarkFile::new(&path)
+            .load_import()
+            .expect("import");
+        assert!((imported[0].position - 12.5).abs() < f64::EPSILON);
+    }
 
     use super::BookmarkFile;
 

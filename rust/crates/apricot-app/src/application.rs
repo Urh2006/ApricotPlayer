@@ -61,6 +61,13 @@ pub struct LastSessionResume {
     pub return_data: Map<String, Value>,
 }
 
+/// The player's equalizer before Settings opened (review 4, B6).
+#[derive(Clone, Debug, Default)]
+pub struct PlayerEqualizerSnapshot {
+    equalizer: Option<EqualizerSession>,
+    preset: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct Application {
     settings: SettingsController,
@@ -3111,6 +3118,30 @@ impl Application {
     /// change of the Settings window.
     pub fn forget_spotify_settings_draft(&mut self) {
         self.spotify_settings_draft = None;
+    }
+
+    /// Unsaved changes of the Settings window, Spotify ones included
+    /// (review 4, B4).
+    pub fn settings_window_changed(&self) -> bool {
+        self.settings.is_dirty() || self.spotify_settings_draft.is_some()
+    }
+
+    /// The player's own equalizer and its preset, kept while Settings is
+    /// open, because its sliders are heard at once (review 4, B6).
+    pub fn player_equalizer_snapshot(&self) -> PlayerEqualizerSnapshot {
+        PlayerEqualizerSnapshot {
+            equalizer: self
+                .player_session()
+                .audio()
+                .and_then(|audio| audio.equalizer.clone()),
+            preset: self.playback_features().equalizer_session_preset.clone(),
+        }
+    }
+
+    /// Puts back what [`Self::player_equalizer_snapshot`] kept.
+    pub fn restore_player_equalizer(&mut self, snapshot: PlayerEqualizerSnapshot) {
+        self.set_player_equalizer(snapshot.equalizer);
+        self.playback_features_mut().equalizer_session_preset = snapshot.preset;
     }
 
     /// Drops every unsaved change of the Settings window, Spotify ones

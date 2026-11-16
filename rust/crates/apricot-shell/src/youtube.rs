@@ -906,6 +906,17 @@ impl Shell {
         if self.audiovault_intercept_start(ui, &item) {
             return;
         }
+        if item.is_saved_iptv_reference() {
+            let start = crate::player::SavedIptvStart {
+                id: item.id.0.clone(),
+                queue_mode,
+                session_shuffle,
+                preserve_sequence,
+                start_position_seconds,
+            };
+            self.play_saved_iptv(ui, &item, start);
+            return;
+        }
         self.cancel_youtube_work();
         // A CUE track starts at its own start time; the file's resume
         // position belongs to the whole file (review 2.1).

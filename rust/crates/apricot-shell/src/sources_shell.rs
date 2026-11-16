@@ -25,6 +25,23 @@ impl SourcesUi for Ui<'_> {
         self.ui.show_error(message);
     }
     fn play(&mut self, item: MediaItem) {
+        // A kept IPTV channel starts with the options it was asked to play
+        // with (review 4, A1).
+        if let Some(start) = self
+            .shell
+            .pending_saved_iptv
+            .take_if(|start| start.id == item.id.0)
+        {
+            self.shell.start_media_item_with_options(
+                self.ui,
+                item,
+                start.queue_mode,
+                start.session_shuffle,
+                start.preserve_sequence,
+                start.start_position_seconds,
+            );
+            return;
+        }
         self.shell.start_media_item(self.ui, item, None);
     }
     fn choose_file(&mut self, title: &str) -> Option<std::path::PathBuf> {
@@ -133,6 +150,24 @@ impl Shell {
         let mut controller = std::mem::take(&mut self.sources);
         controller.ensure_loaded(&mut Ui { shell: self, ui }, &environment);
         self.sources = controller;
+    }
+    /// Opens a kept private IPTV channel from its source, then starts it
+    /// with these options (review 4, A1).
+    pub(crate) fn play_saved_iptv(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        item: &MediaItem,
+        start: crate::player::SavedIptvStart,
+    ) {
+        self.pending_saved_iptv = Some(start);
+        let environment = self.sources_environment();
+        let mut controller = std::mem::take(&mut self.sources);
+        controller.play_saved_iptv(&mut Ui { shell: self, ui }, &environment, item);
+        let busy = controller.is_busy();
+        self.sources = controller;
+        if busy {
+            ui.set_background_polling(true);
+        }
     }
     pub(crate) fn forget_sources_player_return(&mut self) {
         self.sources.forget_player_return();

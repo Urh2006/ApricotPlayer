@@ -345,6 +345,8 @@ pub(crate) struct SettingsState {
     /// drops what it changed, as Python only applies the controls on Save
     /// (beta 8).
     clean_at_open: bool,
+    /// The player's equalizer when the window opened (review 4, B6).
+    equalizer_before: apricot_app::PlayerEqualizerSnapshot,
 }
 
 impl Shell {
@@ -357,7 +359,8 @@ impl Shell {
         }
         self.settings_window.open = true;
         self.settings_window.spotify_before = Some(self.application.saved_spotify_settings());
-        self.settings_window.clean_at_open = !self.application.settings_are_dirty();
+        self.settings_window.clean_at_open = !self.application.settings_window_changed();
+        self.settings_window.equalizer_before = self.application.player_equalizer_snapshot();
         self.load_sources_quietly(ui);
         ui.open_settings();
     }
@@ -960,8 +963,15 @@ impl Shell {
 
     pub fn settings_closed(&mut self, ui: &mut dyn ShellUi, deferred_action: Option<&'static str>) {
         self.settings_window.open = false;
-        if self.settings_window.clean_at_open {
+        // Recording choices not saved are dropped with the window
+        // (review 4, B5).
+        self.settings_window.recording_draft = crate::FormValues::default();
+        let equalizer_before = std::mem::take(&mut self.settings_window.equalizer_before);
+        if self.settings_window.clean_at_open && self.application.settings_window_changed() {
             self.application.cancel_settings();
+            self.application.restore_player_equalizer(equalizer_before);
+            self.apply_player_equalizer(ui);
+            self.apply_audio_processing_to_player(ui);
         }
         if let Some(before) = self.settings_window.spotify_before.take() {
             self.spotify_settings_window_closed(before);

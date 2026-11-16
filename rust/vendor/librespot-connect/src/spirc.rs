@@ -2330,9 +2330,16 @@ impl SpircTask {
         if context_uri.is_empty() {
             return Ok(());
         }
-        // Bounded: each pass resolves one queued page or recommendation.
+        // Bounded: each pass resolves one queued page or recommendation, and
+        // all of them together get a time limit, because commands wait for
+        // this actor meanwhile (review 4, B1).
         let mut passes = 0;
-        while last && self.context_resolver.has_next() && passes < 64 {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        while last
+            && self.context_resolver.has_next()
+            && passes < 64
+            && tokio::time::Instant::now() < deadline
+        {
             passes += 1;
             let context = self
                 .context_resolver

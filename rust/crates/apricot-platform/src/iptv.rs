@@ -41,6 +41,8 @@ pub enum IptvError {
     PortalRefused,
     NoPlaybackLink,
     NeedHttpAddress,
+    /// A saved channel is no longer offered by its source.
+    ChannelGone,
 }
 
 fn too_large(length: usize) -> bool {
@@ -244,6 +246,10 @@ impl IptvChannel {
             .insert("iptv_source_id".into(), source.id.clone().into());
         item.metadata
             .insert("iptv_channel_id".into(), self.id.clone().into());
+        if !self.epg_id.is_empty() {
+            item.metadata
+                .insert("iptv_epg_id".into(), self.epg_id.clone().into());
+        }
         // Provider addresses carry the login, so they stay out of history
         // and resume positions; so do playlist entries with a login or a
         // token in the address, and every entry of a protected playlist.
@@ -253,6 +259,12 @@ impl IptvChannel {
         {
             item.metadata
                 .insert("apricot_private_address".into(), true.into());
+            // The same id as the saved reference, so a channel kept in a
+            // list is found again when it plays (review 4, A1).
+            item.id = apricot_core::MediaId(apricot_core::iptv_reference_id(&source.id, &self.id));
+            if item.title.contains("://") {
+                item.title.clone_from(&item.id.0);
+            }
         }
         Some(item)
     }
@@ -768,6 +780,57 @@ impl IptvClient {
         Ok(channels)
     }
 
+    /// A private channel kept in favorites, a playlist or the queue, opened
+    /// again from its source: an Xtream address is built from the saved
+    /// login, a playlist or portal is read again for a fresh address and
+    /// session (review 4, A1).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source cannot be read or no longer has the
+    /// channel.
+    pub fn reopen(&self, source: &IptvSource, item: &MediaItem) -> Result<IptvChannel, IptvError> {
+        let (_, channel_id) = item.iptv_ids().ok_or(IptvError::ChannelGone)?;
+        let text = |key: &str| {
+            item.metadata
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        if source.kind == SourceKind::Xtream {
+            let kind = match item.kind {
+                MediaKind::Movie => ChannelKind::Movie,
+                MediaKind::TvEpisode => ChannelKind::Episode,
+                _ => ChannelKind::Live,
+            };
+            let saved = text("iptv_stream_extension");
+            let extension = match (saved.as_str(), kind) {
+                ("", ChannelKind::Live) if source.prefer_hls => "m3u8",
+                ("", ChannelKind::Live) => "ts",
+                ("", _) => "mp4",
+                (extension, _) => extension,
+            };
+            return Ok(IptvChannel {
+                url: provider_stream(source, kind, &channel_id, extension)?,
+                id: channel_id,
+                name: item.title.clone(),
+                group: item.channel.clone(),
+                number: String::new(),
+                epg_id: text("iptv_epg_id"),
+                logo: String::new(),
+                kind,
+                metadata: BTreeMap::new(),
+            });
+        }
+        let channel = self
+            .load(source)?
+            .into_iter()
+            .find(|channel| channel.id == channel_id)
+            .ok_or(IptvError::ChannelGone)?;
+        self.resolve_channel(&channel)
+    }
+
     /// A portal channel's playback link, asked for just before it plays.
     ///
     /// # Errors
@@ -961,6 +1024,49 @@ mod tests {
             .expect("plain");
         assert!(source.protected_epg.is_empty());
         assert_eq!(source.epg_url(), "https://example.invalid/guide.xml");
+    }
+
+    /// Review 4, A1: an Xtream channel kept as a reference is opened again
+    /// from the protected login, with its saved kind and extension.
+    #[test]
+    fn a_kept_xtream_channel_is_opened_from_its_source() {
+        let mut source = IptvSource {
+            id: "one".into(),
+            name: "Home".into(),
+            kind: SourceKind::Xtream,
+            address: "https://tv.example.test/player_api.php".into(),
+            protected_credentials: String::new(),
+            epg_address: String::new(),
+            protected_epg: String::new(),
+            prefer_hls: false,
+        };
+        source
+            .set_credentials("USER", "FAKE_SECRET", "")
+            .expect("protect");
+        let channel = IptvChannel {
+            id: "42".into(),
+            name: "Film".into(),
+            group: "Films".into(),
+            number: String::new(),
+            epg_id: String::new(),
+            logo: String::new(),
+            url: provider_stream(&source, ChannelKind::Movie, "42", "mkv").expect("url"),
+            kind: ChannelKind::Movie,
+            metadata: BTreeMap::new(),
+        };
+        let item = channel.media(&source).expect("item");
+        let kept = item.without_private_address().expect("kept");
+        assert!(
+            !serde_json::to_string(&kept)
+                .unwrap()
+                .contains("FAKE_SECRET")
+        );
+        let client = IptvClient::new(None).expect("client");
+        let opened = client.reopen(&source, &kept).expect("reopen");
+        assert_eq!(opened.url, channel.url);
+        assert_eq!(opened.kind, ChannelKind::Movie);
+        let again = opened.media(&source).expect("item");
+        assert_eq!(again.id, kept.id);
     }
 
     #[test]

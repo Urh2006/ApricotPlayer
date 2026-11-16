@@ -210,6 +210,20 @@ impl ContextResolver {
         &self,
         recent_track_uri: impl Fn() -> Vec<String>,
     ) -> Result<Context, Error> {
+        // ApricotPlayer patch: the Spirc actor waits for this, so Pause,
+        // Next and Seek wait too; a slow or rate-limited answer ends here
+        // (review 4, B1).
+        const LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
+        match tokio::time::timeout(LIMIT, self.resolve_next_context(recent_track_uri)).await {
+            Ok(result) => result,
+            Err(_) => Err(Error::deadline_exceeded("context resolving took too long")),
+        }
+    }
+
+    async fn resolve_next_context(
+        &self,
+        recent_track_uri: impl Fn() -> Vec<String>,
+    ) -> Result<Context, Error> {
         let (next, resolve_uri, _) = self.find_next().ok_or(ContextResolverError::NoNext)?;
 
         match next.update {

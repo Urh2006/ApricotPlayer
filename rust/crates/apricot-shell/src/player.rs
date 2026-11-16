@@ -17,6 +17,17 @@ use apricot_playback::{
 
 use crate::{PlayerFocus, Shell, ShellUi, View};
 
+/// How a kept private IPTV channel starts once its source opened it again
+/// (review 4, A1).
+#[derive(Clone, Debug)]
+pub(crate) struct SavedIptvStart {
+    pub(crate) id: String,
+    pub(crate) queue_mode: Option<QueueStartMode>,
+    pub(crate) session_shuffle: Option<bool>,
+    pub(crate) preserve_sequence: bool,
+    pub(crate) start_position_seconds: Option<f64>,
+}
+
 /// Windows `QueueStartMode`: how a started queue item leaves the queue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QueueStartMode {

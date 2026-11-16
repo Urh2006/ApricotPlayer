@@ -70,11 +70,25 @@ impl UserPlaylistFile {
     /// Returns an error when the JSON shape or a nested media item is invalid.
     pub fn load(&self) -> Result<Vec<UserPlaylist>, UserPlaylistFileError> {
         match read_json::<Value>(&self.path) {
-            Ok(Value::Array(values)) => values
-                .iter()
-                .enumerate()
-                .map(|(index, value)| playlist_from_python_value(value, index))
-                .collect(),
+            Ok(Value::Array(values)) => {
+                let playlists = values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| playlist_from_python_value(value, index))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let private = values.iter().any(|playlist| {
+                    playlist
+                        .get("items")
+                        .and_then(Value::as_array)
+                        .is_some_and(|items| {
+                            items.iter().any(crate::legacy_media::holds_private_address)
+                        })
+                });
+                if private {
+                    self.save(&playlists)?;
+                }
+                Ok(playlists)
+            }
             Ok(_) => Err(UserPlaylistFileError::InvalidPlaylist { index: 0 }),
             Err(JsonFileError::Read { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
                 Ok(Vec::new())

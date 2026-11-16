@@ -431,10 +431,6 @@ pub struct LibMpvEngine {
     render: Option<crate::render::RenderAttachment>,
     /// Latest requested state, independent of delayed PCM pause acknowledgements.
     requested_paused: bool,
-    /// The sound was changed while paused: the audio already prepared with
-    /// the old volume, speed or pitch is dropped before playback goes on
-    /// (beta 7).
-    flush_on_resume: bool,
 }
 
 /// A PCM item: mpv positions are relative to the loaded generation.
@@ -584,7 +580,6 @@ impl LibMpvEngine {
             pcm: None,
             render,
             requested_paused: options.initial_playback_state == InitialPlaybackState::Paused,
-            flush_on_resume: false,
         })
     }
 
@@ -1188,28 +1183,14 @@ impl PlaybackEngine for LibMpvEngine {
         if let PlaybackCommand::SetPaused(paused) = &command {
             self.requested_paused = *paused;
         }
-        if self.requested_paused && changes_sound(&command) {
-            self.flush_on_resume = true;
-        }
-        if matches!(&command, PlaybackCommand::SetPaused(false))
-            && std::mem::take(&mut self.flush_on_resume)
+        // A sound change while paused empties the audio buffers at once,
+        // while still paused: emptying them on Play came too late, because
+        // mpv resumes the device before it runs the seek, so the old volume
+        // was heard for a moment (beta 7, again after RC review).
+        let flush_now = self.requested_paused
+            && changes_sound(&command)
             && self.pcm.is_none()
-            && self.duration.is_some_and(|duration| duration > 0.0)
-        {
-            // A seek to where playback stands empties the audio buffers, so
-            // the first sound after Play already has the new settings.
-            let position = self.elapsed.max(0.0);
-            unsafe {
-                let _ = self.api.run_command(
-                    self.handle(),
-                    &[
-                        "seek".to_owned(),
-                        position.to_string(),
-                        "absolute+exact".to_owned(),
-                    ],
-                );
-            }
-        }
+            && self.duration.is_some_and(|duration| duration > 0.0);
         if unsafe { self.execute_pcm(&command)? } {
             if matches!(&command, PlaybackCommand::Load { .. }) {
                 self.media_info = PlaybackMediaInfo::default();
@@ -1254,6 +1235,18 @@ impl PlaybackEngine for LibMpvEngine {
                         yes_no(self.requested_paused).to_owned(),
                     ],
                 )?;
+            }
+            if flush_now {
+                // A seek to where playback stands drops what the device and
+                // mpv hold, so Play starts with the new settings.
+                let _ = self.api.run_command(
+                    self.handle(),
+                    &[
+                        "seek".to_owned(),
+                        self.elapsed.max(0.0).to_string(),
+                        "absolute+exact".to_owned(),
+                    ],
+                );
             }
         }
         Ok(())

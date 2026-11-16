@@ -10,6 +10,29 @@ use url::Url;
 #[serde(transparent)]
 pub struct MediaId(pub String);
 
+/// The address scheme of a private IPTV channel kept on disk.
+pub const SAVED_IPTV_SCHEME: &str = "apricot-iptv";
+
+/// Item fields that carry an IPTV address, login or portal session.
+const PRIVATE_ADDRESS_KEYS: [&str; 10] = [
+    "url",
+    "id",
+    "webpage_url",
+    "original_url",
+    "stream_url",
+    "http_headers",
+    "stalker_token",
+    "stalker_cookie",
+    "stalker_command",
+    "stalker_endpoint",
+];
+
+/// The id of a private IPTV channel, without its address.
+#[must_use]
+pub fn iptv_reference_id(source: &str, channel: &str) -> String {
+    format!("iptv:{source}/{channel}")
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaSource {
@@ -121,6 +144,78 @@ impl MediaItem {
         }
         self.local_path = Some(new.to_owned());
         true
+    }
+
+    /// A private IPTV channel kept in favorites, a playlist or the queue:
+    /// only its source and channel, opened again from the source when it
+    /// plays (review 4, A1).
+    #[must_use]
+    pub fn is_saved_iptv_reference(&self) -> bool {
+        self.url
+            .as_ref()
+            .is_some_and(|url| url.scheme() == SAVED_IPTV_SCHEME)
+    }
+
+    /// The IPTV source and channel of a catalog item.
+    #[must_use]
+    pub fn iptv_ids(&self) -> Option<(String, String)> {
+        let text = |key: &str| {
+            self.metadata
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        Some((text("iptv_source_id")?, text("iptv_channel_id")?))
+    }
+
+    /// The item as it may be written to disk: a private IPTV channel loses
+    /// its address, login and portal session and keeps only a reference to
+    /// its source and channel (review 4, A1). `None` when nothing changes.
+    #[must_use]
+    pub fn without_private_address(&self) -> Option<Self> {
+        if !self.has_private_address() {
+            return None;
+        }
+        let mut item = self.clone();
+        if let Some(extension) = self
+            .url
+            .as_ref()
+            .filter(|url| url.scheme() != SAVED_IPTV_SCHEME)
+            .and_then(Url::path_segments)
+            .and_then(|mut segments| segments.next_back())
+            .and_then(|segment| segment.rsplit_once('.'))
+            .map(|(_, extension)| extension)
+            .filter(|extension| {
+                !extension.is_empty() && extension.chars().all(|c| c.is_ascii_alphanumeric())
+            })
+        {
+            item.metadata
+                .insert("iptv_stream_extension".into(), extension.into());
+        }
+        for key in PRIVATE_ADDRESS_KEYS {
+            item.metadata.remove(key);
+        }
+        item.stream_url = None;
+        item.external_audio_url = None;
+        if let Some((source, channel)) = self.iptv_ids() {
+            item.id = MediaId(iptv_reference_id(&source, &channel));
+            item.url = Url::parse(&format!("{SAVED_IPTV_SCHEME}://saved"))
+                .ok()
+                .map(|mut url| {
+                    if let Ok(mut segments) = url.path_segments_mut() {
+                        segments.push(&source).push(&channel);
+                    }
+                    url
+                });
+        } else {
+            item.id = MediaId(item.title.clone());
+            item.url = None;
+        }
+        if item.title.contains("://") {
+            item.title.clone_from(&item.id.0);
+        }
+        (item != *self).then_some(item)
     }
 
     #[must_use]

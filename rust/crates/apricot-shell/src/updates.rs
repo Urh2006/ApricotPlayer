@@ -557,6 +557,13 @@ impl Shell {
             );
             return;
         }
+        // The installer ends ApricotPlayer after a few seconds, sooner than
+        // a recording may need to be saved: it waits for Stop (review 4, A6).
+        if self.recording_is_active() {
+            self.close_update_progress(ui);
+            ui.show_error(catalog.text("update_after_recording"));
+            return;
+        }
         let log_path = match launch_install(downloaded, version) {
             Ok(log_path) => log_path,
             Err(error) => {

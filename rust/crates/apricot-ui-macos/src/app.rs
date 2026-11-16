@@ -16,6 +16,9 @@ use objc2_foundation::{NSArray, NSNotification, NSObject, NSObjectProtocol, NSSt
 
 use crate::window::MainWindowController;
 
+/// How often Quit waited for a modal window to close (review 4, A2).
+static TERMINATE_RETRIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 pub struct DelegateIvars {
     application: RefCell<Option<Application>>,
     title: String,
@@ -121,10 +124,24 @@ define_class!(
         }
 
         #[unsafe(method(applicationShouldTerminate:))]
-        fn should_terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
+        fn should_terminate(&self, app: &NSApplication) -> NSApplicationTerminateReply {
             if let Some(controller) = self.ivars().controller.borrow().as_ref() {
                 controller.mark_exiting();
-                let _ = controller.shutdown();
+                // A modal window (Radio, IPTV, a form) holds the shell, so
+                // the recording and the position cannot be saved yet: the
+                // window closes first and Quit is asked again (review 4, A2).
+                // A few tries at most, so Quit never gets stuck.
+                if !controller.shutdown()
+                    && TERMINATE_RETRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10
+                {
+                    app.stopModal();
+                    dispatch2::DispatchQueue::main().exec_async(|| {
+                        if let Some(mtm) = MainThreadMarker::new() {
+                            NSApplication::sharedApplication(mtm).terminate(None);
+                        }
+                    });
+                    return NSApplicationTerminateReply::TerminateCancel;
+                }
             }
             NSApplicationTerminateReply::TerminateNow
         }

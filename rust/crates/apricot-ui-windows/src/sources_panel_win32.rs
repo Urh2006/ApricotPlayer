@@ -16,13 +16,12 @@ use windows::{
                 VK_SPACE, VK_TAB,
             },
             WindowsAndMessaging::{
-                AppendMenuW, CreatePopupMenu, DestroyMenu, DispatchMessageW, GW_CHILD, GW_HWNDNEXT,
-                GetMessageW, GetWindow, IsChild, IsWindow, IsWindowVisible, LB_ADDSTRING,
-                LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY, MF_STRING,
-                MSG, MoveWindow, PostQuitMessage, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow,
-                TPM_LEFTALIGN, TPM_RETURNCMD, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_STYLE, WM_KEYDOWN, WM_KEYUP, WM_SETFONT, WS_CHILD, WS_EX_CLIENTEDGE,
-                WS_TABSTOP, WS_VSCROLL,
+                AppendMenuW, CreatePopupMenu, DestroyMenu, GW_CHILD, GW_HWNDNEXT, GetMessageW,
+                GetWindow, IsChild, IsWindow, IsWindowVisible, LB_ADDSTRING, LB_GETCURSEL,
+                LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY, MF_STRING, MSG, MoveWindow,
+                PostQuitMessage, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, TPM_LEFTALIGN,
+                TPM_RETURNCMD, TrackPopupMenu, WINDOW_EX_STYLE, WINDOW_STYLE, WM_KEYDOWN, WM_KEYUP,
+                WM_SETFONT, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VSCROLL,
             },
         },
     },
@@ -435,9 +434,27 @@ unsafe fn key(window: HWND, message: &MSG) -> bool {
 }
 
 /// The wait for a choice, with the main window's other controls working.
+/// Exit was asked: the open list answers Back, and every list opened
+/// after it too, until the controller is back (review 4, A7).
+pub(super) unsafe fn abandon(window: HWND) {
+    if let Some(panel) = state_mut(window).and_then(|state| state.sources_panel.as_mut())
+        && panel.active
+    {
+        panel.result = None;
+        panel.done = true;
+    }
+}
+
 unsafe fn wait(window: HWND) -> Option<SourceSelection> {
     let mut message = MSG::default();
     loop {
+        if state(window).is_some_and(|state| state.exit_after_sources) {
+            if let Some(panel) = state_mut(window).and_then(|state| state.sources_panel.as_mut()) {
+                panel.done = false;
+                panel.result = None;
+            }
+            return None;
+        }
         if let Some(panel) = state_mut(window)
             .and_then(|state| state.sources_panel.as_mut())
             .filter(|panel| panel.done)
@@ -465,7 +482,8 @@ unsafe fn wait(window: HWND) -> Option<SourceSelection> {
         {
             continue;
         }
-        let _ = TranslateMessage(&raw const message);
-        DispatchMessageW(&raw const message);
+        // Everything else goes the main window's way: shortcuts, the
+        // background player's keys, Enter on buttons (review 4, B2).
+        super::route_main_message(window, &message);
     }
 }

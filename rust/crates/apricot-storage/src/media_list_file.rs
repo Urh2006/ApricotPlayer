@@ -45,14 +45,23 @@ impl MediaListFile {
     /// represented as a playable media item.
     pub fn load(&self) -> Result<Vec<MediaItem>, MediaListFileError> {
         match read_json::<Value>(&self.path) {
-            Ok(Value::Array(values)) => values
-                .iter()
-                .enumerate()
-                .map(|(index, value)| {
-                    media_item_from_python_value(value)
-                        .ok_or(MediaListFileError::InvalidItem { index })
-                })
-                .collect(),
+            Ok(Value::Array(values)) => {
+                let items = values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        media_item_from_python_value(value)
+                            .ok_or(MediaListFileError::InvalidItem { index })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if values
+                    .iter()
+                    .any(crate::legacy_media::holds_private_address)
+                {
+                    self.save(&items)?;
+                }
+                Ok(items)
+            }
             Ok(_) => Err(MediaListFileError::InvalidItem { index: 0 }),
             Err(JsonFileError::Read { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
                 Ok(Vec::new())
@@ -70,6 +79,32 @@ impl MediaListFile {
         let values: Vec<_> = items.iter().map(media_item_to_python_value).collect();
         write_json_atomic(&self.path, &values)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::MediaListFile;
+
+    /// Review 4, A1: a favorites file written before keeps no IPTV login
+    /// once it has been read.
+    #[test]
+    fn reading_a_list_removes_saved_iptv_logins() {
+        let folder = tempfile::tempdir().expect("folder");
+        let path = folder.path().join("favorites.json");
+        std::fs::write(
+            &path,
+            r#"[{"title":"News","kind":"live_stream","url":"http://tv.example.test/live/USER/FAKE_SECRET/7.ts","apricot_private_address":true,"iptv_source_id":"s","iptv_channel_id":"7","stalker_token":"FAKE_TOKEN"}]"#,
+        )
+        .expect("write");
+        let items = MediaListFile::new(&path).load().expect("load");
+        assert_eq!(items.len(), 1);
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            !text.contains("FAKE_SECRET") && !text.contains("FAKE_TOKEN"),
+            "{text}"
+        );
+        assert!(text.contains("apricot-iptv://saved/s/7"), "{text}");
     }
 }
 

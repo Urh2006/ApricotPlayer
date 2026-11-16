@@ -59,8 +59,8 @@ pub use action_finder::{
 };
 pub use activation::ActivationRequest;
 pub use application::{
-    Application, LastSessionResume, PlayerNavigationOrigin, PlayerNavigationOutcome,
-    player_start_speed,
+    Application, LastSessionResume, PlayerEqualizerSnapshot, PlayerNavigationOrigin,
+    PlayerNavigationOutcome, player_start_speed,
 };
 pub use bookmark_controller::{BookmarkController, BookmarkControllerError};
 pub use context_menu::{ContextCommand, ContextMenuContext, ContextMenuEntry};

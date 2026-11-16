@@ -390,11 +390,21 @@ pub fn export(
         .unwrap_or("")
         .to_ascii_lowercase();
     let bytes = if extension == "json" {
+        // A private IPTV channel goes out only as its source and channel
+        // reference (review 4, A1).
+        let items: Vec<_> = playlist
+            .items
+            .iter()
+            .map(|item| {
+                item.without_private_address()
+                    .unwrap_or_else(|| item.clone())
+            })
+            .collect();
         serde_json::to_vec_pretty(&serde_json::json!({
             "version": 1,
             "title": playlist.title,
             "description": playlist.metadata.get("description"),
-            "items": playlist.items,
+            "items": items,
         }))
         .map_err(|error| error.to_string())?
     } else {
@@ -407,6 +417,11 @@ pub fn export(
             &std::sync::atomic::AtomicBool::new(false),
         )?;
         for item in items {
+            // A private IPTV address carries the login; M3U has no place
+            // for a reference, so the entry is left out (review 4, A1).
+            if item.has_private_address() || item.is_saved_iptv_reference() {
+                continue;
+            }
             let Some(location) = item.copy_location() else {
                 continue;
             };

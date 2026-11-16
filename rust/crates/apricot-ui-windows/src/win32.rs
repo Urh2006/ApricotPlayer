@@ -362,6 +362,17 @@ enum MainView {
     Player,
 }
 
+/// How a kept private IPTV channel starts once its source opened it again
+/// (review 4, A1).
+#[derive(Clone, Debug)]
+struct SavedIptvStart {
+    id: String,
+    queue_mode: Option<QueueStartMode>,
+    session_shuffle: Option<bool>,
+    preserve_sequence: bool,
+    start_position_seconds: Option<f64>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QueueStartMode {
     Front,
@@ -561,6 +572,9 @@ struct WindowState {
     /// window, with the running recording's Stop and Pause, so the global
     /// recording keys still reach it (review 2.1).
     source_tools_out: u32,
+    /// Exit was asked while a Radio, IPTV or Recording list held the
+    /// controller: the lists close first (review 4, A7).
+    exit_after_sources: bool,
     lent_recording: Option<apricot_platform::recording::RecordingControls>,
     list: HWND,
     open: HWND,
@@ -696,6 +710,8 @@ struct WindowState {
     /// label until the focus is on the next screen, so NVDA does not read
     /// the new label (beta 8).
     defer_open_label: std::cell::Cell<bool>,
+    /// A kept private IPTV channel being opened from its source.
+    pending_saved_iptv: Option<SavedIptvStart>,
     /// The label kept back meanwhile.
     deferred_open_label: std::cell::RefCell<Option<String>>,
     last_shown_view: MainView,
@@ -861,25 +877,27 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
         if result.0 == 0 {
             break;
         }
-        handle_controlled_repeat_release(window, &message);
-        if handles_progress_dialog_message(window, &message) {
-            continue;
-        }
-        if handle_view_tab_message(window, &message) {
-            continue;
-        }
-        if handle_text_entry_enter(window, &message) {
-            continue;
-        }
-        if handle_shortcut_message(window, &message) {
-            continue;
-        }
-        if !IsDialogMessageW(window, &raw const message).as_bool() {
-            let _ = TranslateMessage(&raw const message);
-            DispatchMessageW(&raw const message);
-        }
+        route_main_message(window, &message);
     }
     Ok(())
+}
+
+/// One message of the main window's loop: held keys, progress windows,
+/// Tab, Enter in text fields, shortcuts, then dialog keys. The Radio, IPTV
+/// and Recording list's own loop uses it too (review 4, B2).
+pub(super) unsafe fn route_main_message(window: HWND, message: &MSG) {
+    handle_controlled_repeat_release(window, message);
+    if handles_progress_dialog_message(window, message)
+        || handle_view_tab_message(window, message)
+        || handle_text_entry_enter(window, message)
+        || handle_shortcut_message(window, message)
+    {
+        return;
+    }
+    if !IsDialogMessageW(window, &raw const *message).as_bool() {
+        let _ = TranslateMessage(&raw const *message);
+        DispatchMessageW(&raw const *message);
+    }
 }
 
 /// Keyboard messages for the modeless download and conversion progress windows.
@@ -1229,7 +1247,7 @@ unsafe extern "system" fn window_proc(
             }) {
                 hide_to_tray(window, true);
             } else {
-                let _ = DestroyWindow(window);
+                exit_window(window);
             }
             LRESULT(0)
         }
@@ -1471,6 +1489,22 @@ unsafe extern "system" fn window_proc(
         }
         _ => DefWindowProcW(window, message, wparam, lparam),
     }
+}
+
+/// Ends `ApricotPlayer`. While a Radio, IPTV or Recording list holds the
+/// controller with the running recording, the lists close first and the
+/// exit follows, so the recording is finished and its result kept
+/// (review 4, A7).
+unsafe fn exit_window(window: HWND) {
+    if let Some(state) = state_mut(window)
+        && state.source_tools_out > 0
+    {
+        state.lifecycle = WindowLifecycle::Exiting;
+        state.exit_after_sources = true;
+        sources_panel::abandon(window);
+        return;
+    }
+    let _ = DestroyWindow(window);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -2256,6 +2290,7 @@ unsafe fn create_controls(
         settings_open: false,
         source_tools: apricot_shell::sources::SourcesController::default(),
         source_tools_out: 0,
+        exit_after_sources: false,
         lent_recording: None,
         modal_open: false,
         tray_icon_added: false,
@@ -2313,6 +2348,7 @@ unsafe fn create_controls(
         podcast_search_view: None,
         view_changes: 0,
         defer_open_label: std::cell::Cell::new(false),
+        pending_saved_iptv: None,
         deferred_open_label: std::cell::RefCell::new(None),
         last_shown_view: MainView::MainMenu,
         deferred_playback: std::collections::VecDeque::new(),
@@ -3897,7 +3933,7 @@ unsafe fn handle_tray_command(window: HWND, command: usize) {
             if let Some(state) = state_mut(window) {
                 state.lifecycle = WindowLifecycle::Exiting;
             }
-            let _ = DestroyWindow(window);
+            exit_window(window);
         }
         _ => {}
     }
@@ -3995,7 +4031,7 @@ unsafe fn activate_main_menu_item(window: HWND) {
         return;
     }
     if item_id == "exit" {
-        let _ = DestroyWindow(window);
+        exit_window(window);
         return;
     }
     if item_id == "settings" {
@@ -4535,6 +4571,19 @@ unsafe fn start_media_item_with_options(
     // Python plays AudioVault movies from their resolved stream and TV show
     // episodes from the playback cache.
     if audiovault::intercept_start(window, &item) {
+        return;
+    }
+    if item.is_saved_iptv_reference() {
+        if let Some(state) = state_mut(window) {
+            state.pending_saved_iptv = Some(SavedIptvStart {
+                id: item.id.0.clone(),
+                queue_mode,
+                session_shuffle,
+                preserve_sequence,
+                start_position_seconds,
+            });
+        }
+        sources_ui::play_saved_iptv(window, &item);
         return;
     }
     let Some(state) = state_mut(window) else {
@@ -17779,6 +17828,19 @@ unsafe fn finish_app_update_install(
         show_message_box(window, &text, MB_ICONINFORMATION);
         return;
     }
+    // The installer ends ApricotPlayer after a few seconds, sooner than a
+    // recording may need to be saved: it waits for Stop (review 4, A6).
+    if state(window)
+        .is_some_and(|state| state.source_tools.is_recording() || state.lent_recording.is_some())
+    {
+        close_update_progress(window);
+        show_message_box(
+            window,
+            catalog.text("update_after_recording"),
+            MB_ICONINFORMATION,
+        );
+        return;
+    }
     let launched = (|| -> std::result::Result<PathBuf, String> {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let folder = executable
@@ -19963,6 +20025,7 @@ unsafe fn announce_unavailable_feature(window: HWND, feature: &str) {
     set_status(state, &message, true);
 }
 
+#[allow(clippy::too_many_lines)] // One flow from opening to closing.
 unsafe fn open_settings(window: HWND) {
     remember_menu_item(window, "settings");
     stop_controlled_repeat(window);
@@ -19971,6 +20034,7 @@ unsafe fn open_settings(window: HWND) {
     let sources_environment = sources_ui::environment(window);
     let spotify_before;
     let clean_at_open;
+    let equalizer_before;
     let settings_result = {
         let Some(state) = state_mut(window) else {
             return;
@@ -19979,7 +20043,8 @@ unsafe fn open_settings(window: HWND) {
             return;
         }
         spotify_before = state.application.saved_spotify_settings();
-        clean_at_open = !state.application.settings_are_dirty();
+        clean_at_open = !state.application.settings_window_changed();
+        equalizer_before = state.application.player_equalizer_snapshot();
         state.settings_open = true;
         state.modal_open = true;
         crate::settings_win32::show(
@@ -19994,12 +20059,17 @@ unsafe fn open_settings(window: HWND) {
     };
     // Closing without Save drops what the window changed: Python applies
     // the controls only on Save (beta 8).
-    if clean_at_open && state.application.settings_are_dirty() {
+    if clean_at_open && state.application.settings_window_changed() {
         state.application.cancel_settings();
         // A running player heard the equalizer and processing changes at
-        // once; it goes back to the saved ones too.
-        for message in [WM_APPLY_GLOBAL_EQUALIZER, WM_APPLY_AUDIO_PROCESSING] {
-            let _ = PostMessageW(Some(window), message, WPARAM(0), LPARAM(0));
+        // once; it goes back to what it had, its own equalizer included
+        // (review 4, B6).
+        state.application.restore_player_equalizer(equalizer_before);
+        for (message, force) in [
+            (WM_APPLY_GLOBAL_EQUALIZER, 1),
+            (WM_APPLY_AUDIO_PROCESSING, 0),
+        ] {
+            let _ = PostMessageW(Some(window), message, WPARAM(force), LPARAM(0));
         }
     }
     state.settings_open = false;

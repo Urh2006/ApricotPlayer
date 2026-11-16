@@ -288,6 +288,16 @@ impl crate::Shell {
         if !self.application.player_session().is_open() {
             return;
         }
+        self.apply_audio_processing_to_player(ui);
+        self.application.set_player_equalizer(None);
+        self.apply_player_equalizer(ui);
+    }
+
+    /// The saved processing and transitions for a running player.
+    pub(crate) fn apply_audio_processing_to_player(&mut self, ui: &mut dyn crate::ShellUi) {
+        if !self.application.player_session().is_open() {
+            return;
+        }
         let transitions = crate::playback_features::running_transition_options(&self.application);
         let _ = self.execute_player_command(
             ui,
@@ -304,8 +314,6 @@ impl crate::Shell {
                 apricot_playback::PlaybackCommand::AddAudioFilter(filter),
             );
         }
-        self.application.set_player_equalizer(None);
-        self.apply_player_equalizer(ui);
     }
 
     /// The settings and bookmark import and export actions.

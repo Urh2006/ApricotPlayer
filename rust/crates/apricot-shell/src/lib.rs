@@ -145,6 +145,8 @@ pub enum View {
 pub struct Shell {
     pub application: Application,
     sources: sources::SourcesController,
+    /// A kept private IPTV channel being opened from its source.
+    pending_saved_iptv: Option<player::SavedIptvStart>,
     view: View,
     model: MainMenuModel,
     /// Windows `last_activated_menu_item`: the main menu returns to it.
@@ -190,6 +192,7 @@ impl Shell {
         Self {
             application,
             sources: sources::SourcesController::default(),
+            pending_saved_iptv: None,
             view: View::MainMenu,
             model,
             last_activated_menu_item: None,

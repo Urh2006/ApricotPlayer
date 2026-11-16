@@ -118,6 +118,9 @@ enum Work {
     PlayIptv {
         source: IptvSource,
         channel: IptvChannel,
+        /// A channel kept in favorites, a playlist or the queue, not
+        /// chosen in the IPTV lists (review 4, A1).
+        saved: bool,
     },
     Sources(Vec<CaptureSource>),
     Message(String),
@@ -409,6 +412,53 @@ impl SourcesController {
         ui.status(&self.loading, true);
     }
 
+    /// A private IPTV channel kept in favorites, a playlist or the queue
+    /// plays: its source opens it again, because only a reference to it is
+    /// kept on disk (review 4, A1). The host starts the opened channel with
+    /// the options it was asked to play with.
+    pub fn play_saved_iptv(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        item: &MediaItem,
+    ) {
+        self.load(ui, environment);
+        let catalog = environment.catalog();
+        let source = item.iptv_ids().and_then(|(source_id, _)| {
+            self.iptv_sources
+                .iter()
+                .find(|source| source.id == source_id)
+                .cloned()
+        });
+        let Some(source) = source else {
+            ui.error(catalog.text("iptv_error_source_gone"));
+            return;
+        };
+        catalog
+            .text("iptv_opening_channel")
+            .clone_into(&mut self.loading);
+        let item = item.clone();
+        let proxy = environment.proxy.clone();
+        self.spawn(ui, move || {
+            let client =
+                IptvClient::new(Some(&proxy)).map_err(|error| iptv_error(&catalog, error))?;
+            Ok(Work::PlayIptv {
+                channel: client
+                    .reopen(&source, &item)
+                    .map_err(|error| iptv_error(&catalog, error))?,
+                source,
+                saved: true,
+            })
+        });
+    }
+
+    /// A list or a channel is being loaded; a running recording alone is
+    /// not loading (review 4, B3).
+    #[must_use]
+    pub fn is_loading(&self) -> bool {
+        self.pending.is_some()
+    }
+
     #[must_use]
     pub fn is_busy(&self) -> bool {
         self.pending.is_some()
@@ -597,12 +647,18 @@ impl SourcesController {
                 self.episodes = channels;
                 self.iptv_navigate(ui, environment, IptvScreen::Episodes);
             }
-            Ok(Work::PlayIptv { source, channel }) => {
+            Ok(Work::PlayIptv {
+                source,
+                channel,
+                saved,
+            }) => {
                 let catalog = environment.catalog();
                 if let Some(item) = channel.media(&source) {
                     ui.play(item);
-                    self.player_return =
-                        Some((SourceReturn::Iptv(self.opening_from), channel.id.clone()));
+                    // A kept channel goes back to the list it was kept in,
+                    // not to the IPTV lists.
+                    self.player_return = (!saved)
+                        .then(|| (SourceReturn::Iptv(self.opening_from), channel.id.clone()));
                     self.playing_iptv = Some(channel.id.clone());
                     self.playing_iptv_context = Some((channel.clone(), self.guide.clone()));
                     // The player names the channel when it starts; the
@@ -1934,6 +1990,7 @@ impl SourcesController {
                         .resolve_channel(&channel)
                         .map_err(|error| iptv_error(&catalog, error))?,
                     source,
+                    saved: false,
                 })
             }
         });
@@ -2607,6 +2664,7 @@ fn iptv_error(catalog: &TranslationCatalog, error: IptvError) -> String {
         IptvError::PortalRefused => "iptv_error_portal",
         IptvError::NoPlaybackLink => "iptv_error_no_link",
         IptvError::NeedHttpAddress => "iptv_error_address",
+        IptvError::ChannelGone => "iptv_error_channel_gone",
     };
     catalog.text(key).to_owned()
 }

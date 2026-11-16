@@ -513,7 +513,9 @@ fn record(
     if queues.is_empty() {
         stop.store(true, Ordering::Release);
         drop(input);
-        let _ = encoder.wait();
+        // An encoder that does not end after its input closed never holds
+        // Stop or quitting (review 4, A5).
+        let _ = end_encoder(&mut encoder, Duration::from_secs(15));
         let _ = std::fs::remove_file(&temporary);
         return Err(RecordingError::NoneOpened);
     }
@@ -540,12 +542,19 @@ fn record(
         }
         true
     });
-    let mut stalled_since: Option<Instant> = None;
+    // Blocks the encoder has not taken yet wait here instead of being
+    // dropped, up to ten seconds of sound; a short stall loses nothing, a
+    // longer one ends the recording as incomplete (review 4, A3).
+    let mut waiting: std::collections::VecDeque<Vec<u8>> = std::collections::VecDeque::new();
+    let waiting_limit = (10_000 / 20) as usize;
     let mut deadline = Instant::now();
     let interval = Duration::from_millis(20);
     let mut was_paused = false;
     let mut write_error = false;
     let mut sources_lost = false;
+    // One source of several that stopped (an unplugged microphone) makes
+    // the recording incomplete too, while the others go on (review 4, A4).
+    let mut source_failed = false;
     while !stop.load(Ordering::Acquire) {
         let is_paused = paused.load(Ordering::Acquire);
         if was_paused != is_paused {
@@ -561,20 +570,11 @@ fn record(
                 .into_iter()
                 .flat_map(|sample| sample.clamp(-1.0, 1.0).to_le_bytes())
                 .collect();
-            match blocks.try_send(bytes) {
-                Ok(()) => stalled_since = None,
-                Err(mpsc::TrySendError::Full(_)) => {
-                    let since = *stalled_since.get_or_insert_with(Instant::now);
-                    if since.elapsed() > Duration::from_secs(10) {
-                        write_error = true;
-                        break;
-                    }
-                }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
-                    write_error = true;
-                    break;
-                }
-            }
+            waiting.push_back(bytes);
+        }
+        if !hand_over(&blocks, &mut waiting) || waiting.len() > waiting_limit {
+            write_error = true;
+            break;
         }
         deadline += interval;
         if let Some(wait) = deadline.checked_duration_since(Instant::now()) {
@@ -584,12 +584,32 @@ fn record(
         }
         // Every source stopped (a device was unplugged): what came before
         // is kept as an incomplete recording, not told as a normal one.
+        // A source that ends before Stop was asked for failed; after Stop
+        // they all end on purpose.
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        if capture_workers.iter().any(JoinHandle::is_finished) {
+            source_failed = true;
+        }
         if capture_workers.iter().all(JoinHandle::is_finished) {
             sources_lost = true;
             break;
         }
     }
     stop.store(true, Ordering::Release);
+    // What still waits goes to the encoder before its input closes, for a
+    // few seconds at most.
+    let flushing_ends = Instant::now() + Duration::from_secs(5);
+    while !write_error && !waiting.is_empty() {
+        if !hand_over(&blocks, &mut waiting) || Instant::now() > flushing_ends {
+            write_error = true;
+            break;
+        }
+        if !waiting.is_empty() {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
     drop(blocks);
     for worker in capture_workers {
         let _ = worker.join();
@@ -605,20 +625,12 @@ fn record(
     if !writer.join().unwrap_or(false) {
         write_error = true;
     }
-    let end = Instant::now() + Duration::from_secs(15);
-    let status = loop {
-        match encoder.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < end => thread::sleep(Duration::from_millis(25)),
-            _ => {
-                let _ = encoder.kill();
-                let _ = encoder.wait();
-                break None;
-            }
-        }
-    };
+    let status = end_encoder(&mut encoder, Duration::from_secs(15));
     let errors = errors.join().unwrap_or_default();
-    let completed = !write_error && !sources_lost && status.is_some_and(|status| status.success());
+    let completed = !write_error
+        && !sources_lost
+        && !source_failed
+        && status.is_some_and(|status| status.success());
     let recorded = std::fs::metadata(&temporary).is_ok_and(|metadata| metadata.len() > 0);
     if !completed {
         if !recorded {
@@ -638,6 +650,44 @@ fn record(
     let saved = crate::file_operations::available_path(output);
     std::fs::rename(&temporary, &saved).map_err(|_| RecordingError::SaveFailed(temporary))?;
     Ok(saved)
+}
+
+/// Gives the encoder's writer the waiting blocks in order, as many as it
+/// takes now. `false` when the writer is gone.
+fn hand_over(
+    blocks: &mpsc::SyncSender<Vec<u8>>,
+    waiting: &mut std::collections::VecDeque<Vec<u8>>,
+) -> bool {
+    while let Some(bytes) = waiting.pop_front() {
+        match blocks.try_send(bytes) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(bytes)) => {
+                waiting.push_front(bytes);
+                return true;
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => return false,
+        }
+    }
+    true
+}
+
+/// Waits for the encoder to end, at most `limit`, then ends it.
+fn end_encoder(
+    encoder: &mut std::process::Child,
+    limit: Duration,
+) -> Option<std::process::ExitStatus> {
+    let end = Instant::now() + limit;
+    loop {
+        match encoder.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if Instant::now() < end => thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = encoder.kill();
+                let _ = encoder.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// "Recording 2026-11-15.flac" becomes "Recording 2026-11-15 (incomplete).flac".
@@ -704,6 +754,41 @@ pub fn encoder_arguments(settings: &RecordingSettings, output: &Path) -> Vec<Str
 
 #[cfg(test)]
 mod tests {
+    /// Review 4, A3: blocks the encoder cannot take yet wait in order
+    /// instead of being dropped.
+    #[test]
+    fn blocks_wait_while_the_encoder_is_busy() {
+        let (send, receive) = std::sync::mpsc::sync_channel::<Vec<u8>>(1);
+        let mut waiting: std::collections::VecDeque<Vec<u8>> =
+            [vec![1], vec![2], vec![3]].into_iter().collect();
+        assert!(super::hand_over(&send, &mut waiting));
+        assert_eq!(waiting.len(), 2);
+        assert_eq!(receive.recv().unwrap(), vec![1]);
+        assert!(super::hand_over(&send, &mut waiting));
+        assert_eq!(receive.recv().unwrap(), vec![2]);
+        assert!(super::hand_over(&send, &mut waiting));
+        assert_eq!(receive.recv().unwrap(), vec![3]);
+        assert!(waiting.is_empty());
+        drop(receive);
+        waiting.push_back(vec![4]);
+        assert!(!super::hand_over(&send, &mut waiting));
+    }
+
+    /// Review 4, A5: an encoder that does not end is ended after the limit.
+    #[cfg(windows)]
+    #[test]
+    fn an_encoder_that_does_not_end_is_ended() {
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn");
+        let started = std::time::Instant::now();
+        let status = super::end_encoder(&mut child, std::time::Duration::from_millis(300));
+        assert!(status.is_none());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
     /// Review 2.1: a worker that sends Finished and ends between two polls
     /// is still told, and the session stays active until it is.
     #[test]
