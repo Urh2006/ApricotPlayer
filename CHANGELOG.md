@@ -1,3 +1,21 @@
+# v2.1.0-beta.8 - Screen reader focus, dialogs and translations
+
+**2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This beta fixes what was found while testing beta 7 with a screen reader. Everything from the earlier 2.1 betas is still included.
+
+## Fixed
+
+- Pressing Tab onto a list, in the main window or in a dialog, no longer makes the screen reader read the selected item twice.
+- Going back to the main menu, or opening a screen with a button, no longer reads the button's new label first and the selected item twice. For example, Escape from History used to say "Open" before the main menu.
+- Closing a dialog with Escape, for example Bookmarks or Settings, no longer sends you to another program. The focus stays in ApricotPlayer.
+- Many translated texts had broken letters, for example "SploĹˇno" instead of "Splošno". They are now shown and read correctly in every language.
+- Settings changed and then left with Back or Escape are no longer applied. Before, a new language was used even without Save. A running player also goes back to the saved equalizer and sound settings.
+- After saving Settings with a new language, the screen reader reads the section list once, without the Save button.
+- The Bookmarks list, the Action finder list, the main menu and the Settings sections now have names for the screen reader.
+- After closing Bookmarks, the main menu is on Bookmarks.
+- While the next Radio or IPTV list loads, the current list stays on the screen, so the focus no longer jumps to the screen below and back.
+
+The Mac version requires an Apple silicon Mac running macOS 27 or later. After copying ApricotPlayer to Applications, you may need to approve its first launch in System Settings, Privacy & Security, using Open Anyway. Download only the official release files.
+
 # v2.1.0-beta.7 - Spotify resume at start and sound changes while paused
 
 **2.1 is one of the biggest updates ApricotPlayer has had, and its betas are highly experimental.** If you rely on ApricotPlayer every day, stay on 2.0.3 until 2.1 is released as a stable version. This beta fixes what was found while testing beta 6. Everything from the earlier 2.1 betas is still included.
