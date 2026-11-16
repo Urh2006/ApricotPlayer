@@ -56,6 +56,20 @@ impl SourcesUi for Ui<'_> {
     fn cue(&mut self, started: bool) {
         apricot_platform::recording_cue::play(started);
     }
+    /// The screen and the playing item: a late Radio or IPTV answer does
+    /// not open over another screen or replace newer playback (review 4,
+    /// B14).
+    fn navigation_mark(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::mem::discriminant(&self.shell.view).hash(&mut hasher);
+        self.shell
+            .application
+            .player_session()
+            .generation()
+            .hash(&mut hasher);
+        hasher.finish()
+    }
     fn ask_yes_no(&mut self, message: &str) -> bool {
         let catalog = self.shell.catalog();
         self.ui
@@ -210,6 +224,12 @@ impl Shell {
             iptv.as_deref(),
         );
         self.sources = controller;
+    }
+    /// Stop and Pause of the running recording, for a window that runs
+    /// while this shell is busy with a dialog (review 4, B17).
+    #[must_use]
+    pub fn recording_controls(&self) -> Option<apricot_platform::recording::RecordingControls> {
+        self.sources.recording_controls()
     }
     #[must_use]
     pub fn recording_is_active(&self) -> bool {

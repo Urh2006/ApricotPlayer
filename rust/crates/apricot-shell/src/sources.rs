@@ -1274,12 +1274,16 @@ impl SourcesController {
     fn radio_filters(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) -> bool {
         let catalog = environment.catalog();
         let key = format!("{:?}", self.request.category);
-        let local = self
+        let local_only = self
             .radio
             .local_filters
             .get(&key)
             .cloned()
             .unwrap_or_default();
+        // The form shows what filters this list: its own values, and the
+        // filters for all lists where it has none, so a filter saved for
+        // all lists can be seen and removed again (review 4, B15).
+        let local = shown_filters(&local_only, &self.radio.global_filters);
         let form = FeatureForm::localized(
             &catalog,
             catalog.text("radio_filters"),
@@ -1355,15 +1359,16 @@ impl SourcesController {
         // changed go to the chosen scope, so saving for all lists keeps the
         // filters already set there (review 2.1).
         let global = choice(&values, "scope") == 1;
-        let filters = changed_filters(
-            &local,
-            &typed,
-            if global {
-                self.radio.global_filters.clone()
-            } else {
-                local.clone()
-            },
-        );
+        let filters = if global {
+            global_filters_from_form(
+                &local_only,
+                &local,
+                &typed,
+                self.radio.global_filters.clone(),
+            )
+        } else {
+            changed_filters(&local, &typed, local_only.clone())
+        };
         if filters.maximum_bitrate > 0 && filters.maximum_bitrate < filters.minimum_bitrate {
             ui.error(catalog.text("radio_filter_bitrate_order"));
             return false;
@@ -2692,10 +2697,34 @@ fn source_label(catalog: &TranslationCatalog, source: &CaptureSource) -> String 
     catalog.text(key).replace("{name}", name)
 }
 
-/// `target` with the fields of `typed` that differ from what the form
-/// showed (`shown`).
 #[cfg(test)]
 mod filter_tests {
+    /// Review 4, B15: a filter saved for all lists shows in the form and
+    /// can be removed again with All lists.
+    #[test]
+    fn filters_for_all_lists_show_and_can_be_cleared() {
+        let global = super::RadioFilters {
+            country: "SI".into(),
+            ..super::RadioFilters::default()
+        };
+        let local = super::RadioFilters::default();
+        let shown = super::shown_filters(&local, &global);
+        assert_eq!(shown.country, "SI");
+        let mut typed = shown.clone();
+        typed.country.clear();
+        let saved = super::global_filters_from_form(&local, &shown, &typed, global.clone());
+        assert!(saved.country.is_empty());
+        // This list's own value stays its own; the global one is kept.
+        let local = super::RadioFilters {
+            country: "DE".into(),
+            ..super::RadioFilters::default()
+        };
+        let shown = super::shown_filters(&local, &global);
+        assert_eq!(shown.country, "DE");
+        let saved = super::global_filters_from_form(&local, &shown, &shown.clone(), global);
+        assert_eq!(saved.country, "SI");
+    }
+
     /// Review 2.1: saving one changed field for all lists keeps the others.
     #[test]
     fn only_changed_filter_fields_reach_the_scope() {
@@ -2712,6 +2741,65 @@ mod filter_tests {
     }
 }
 
+/// This list's own filters, with the filters for all lists in the fields
+/// it leaves empty.
+fn shown_filters(local: &RadioFilters, global: &RadioFilters) -> RadioFilters {
+    let empty = RadioFilters::default();
+    let mut shown = local.clone();
+    macro_rules! fill {
+        ($($field:ident),*) => {
+            $(if local.$field == empty.$field {
+                shown.$field.clone_from(&global.$field);
+            })*
+        };
+    }
+    fill!(
+        country,
+        region,
+        language,
+        tags,
+        codec,
+        minimum_bitrate,
+        maximum_bitrate,
+        only_working,
+        https_only
+    );
+    shown
+}
+
+/// The filters for all lists after the form: a field this list leaves to
+/// them takes what was typed, also when it was cleared; a field of this
+/// list's own changes them only when it was changed.
+fn global_filters_from_form(
+    local: &RadioFilters,
+    shown: &RadioFilters,
+    typed: &RadioFilters,
+    mut global: RadioFilters,
+) -> RadioFilters {
+    let empty = RadioFilters::default();
+    macro_rules! take {
+        ($($field:ident),*) => {
+            $(if local.$field == empty.$field || typed.$field != shown.$field {
+                global.$field.clone_from(&typed.$field);
+            })*
+        };
+    }
+    take!(
+        country,
+        region,
+        language,
+        tags,
+        codec,
+        minimum_bitrate,
+        maximum_bitrate,
+        only_working,
+        https_only
+    );
+    global
+}
+
+/// `target` with the fields of `typed` that differ from what the form
+/// showed (`shown`).
 fn changed_filters(
     shown: &RadioFilters,
     typed: &RadioFilters,

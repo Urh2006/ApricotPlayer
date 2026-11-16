@@ -54,6 +54,9 @@ impl Shell {
             }
             _ => {}
         }
+        if self.spotify_defer_until_connected(ui, &resume.item, resume.sequence_active) {
+            return;
+        }
         if resume.sequence_active {
             self.start_sequence_media_item(ui, resume.item, None);
         } else {

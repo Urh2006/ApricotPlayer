@@ -769,11 +769,14 @@ impl Shell {
                 let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(false));
             }
             PlayAction::RestartFromStart => {
-                // Python `restart_current_playback`.
+                // Python `restart_current_playback`; a CUE track starts
+                // again at its own start (review 4, B11).
+                let start = apricot_app::playback_features::segment_target(&self.application, 0.0)
+                    .unwrap_or(0.0);
                 if self.execute_player_command(
                     ui,
                     PlaybackCommand::SeekAbsolute {
-                        seconds: 0.0,
+                        seconds: start,
                         exact: true,
                     },
                 ) && self.execute_player_command(ui, PlaybackCommand::SetPaused(false))

@@ -901,6 +901,7 @@ impl Shell {
         preserve_sequence: bool,
         start_position_seconds: Option<f64>,
     ) {
+        self.spotify_forget_pending_resume();
         // Python plays AudioVault movies from their resolved stream and TV
         // show episodes from the playback cache.
         if self.audiovault_intercept_start(ui, &item) {

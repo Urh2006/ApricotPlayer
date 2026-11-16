@@ -427,6 +427,7 @@ unsafe fn play_selected(window: HWND) {
     };
     let played = state(window).is_some_and(|state| state.actions.playback.play_queue_entry(&uid));
     if played {
+        apricot_shell::playback_features::note_manual_track_change();
         // The player announces the new track once it plays.
         let _ = crate::accessibility_win32::destroy_modal(window);
     } else {

@@ -124,6 +124,11 @@ pub(crate) struct SpotifyState {
     connect: Option<SpotifyStamp>,
     /// A link waiting for the connection of the active account.
     pending_play: Option<String>,
+    /// Resume last session with a Spotify item, waiting for the connection
+    /// made at start, and whether it continues its list (review 4, B9).
+    pending_resume: Option<(apricot_core::MediaItem, bool)>,
+    /// A connection was asked and its answer has not come yet.
+    connecting: bool,
     /// The link whose metadata is being read; only the latest one plays.
     resolve: Option<SpotifyStamp>,
     polling: bool,
@@ -442,6 +447,7 @@ impl Shell {
         self.spotify.next_account();
         let stamp = self.spotify.epochs.begin();
         self.spotify.connect = Some(stamp);
+        self.spotify.connecting = true;
         ui.set_status(&self.text("spotify_connecting"), false);
         service.connect(stamp, key);
         self.spotify_refresh_accounts(ui, Some(key), false);
@@ -689,6 +695,8 @@ impl Shell {
                     return;
                 }
                 let requested = self.spotify.connect.take() == Some(stamp);
+                self.spotify.connecting = false;
+                let resume = self.spotify.pending_resume.take();
                 let text = match &result {
                     Ok(account) => named(&texts, "spotify_connected", &account.display_name),
                     Err(error) => error_text(&texts, error),
@@ -704,6 +712,13 @@ impl Shell {
                 }
                 if let (Ok(_), Some(uri)) = (&result, pending) {
                     self.spotify_resolve(ui, &uri);
+                }
+                if let (Ok(_), Some((item, sequence))) = (&result, resume) {
+                    if sequence {
+                        self.start_sequence_media_item(ui, item, None);
+                    } else {
+                        self.start_media_item(ui, item, None);
+                    }
                 }
             }
             SpotifyEvent::Disconnected { session_id } => {
@@ -1067,7 +1082,49 @@ impl Shell {
         self.spotify.next_account();
         let stamp = self.spotify.epochs.begin();
         self.spotify.connect = None;
+        self.spotify.connecting = true;
         service.connect(stamp, &key);
+    }
+
+    /// Resume last session right after start: a Spotify item waits for the
+    /// connection that starting began, instead of failing with "not
+    /// connected" (Windows beta 7, review 4 B9). `true` when it waits.
+    pub(crate) fn spotify_defer_until_connected(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        item: &apricot_core::MediaItem,
+        sequence: bool,
+    ) -> bool {
+        if item.source != apricot_core::MediaSource::Spotify {
+            return false;
+        }
+        let Some(service) = self.spotify_service() else {
+            return false;
+        };
+        if service.connected_account().is_some() {
+            return false;
+        }
+        let accounts = self.spotify_accounts();
+        let Some(key) = apricot_app::spotify::active_account(&accounts).map(|a| a.key.clone())
+        else {
+            return false;
+        };
+        if !self.spotify.connecting {
+            self.spotify.next_account();
+            let stamp = self.spotify.epochs.begin();
+            self.spotify.connect = None;
+            self.spotify.connecting = true;
+            service.connect(stamp, &key);
+        }
+        self.spotify.pending_resume = Some((item.clone(), sequence));
+        ui.set_status(&self.text("spotify_connecting"), true);
+        ui.set_background_polling(true);
+        true
+    }
+
+    /// Anything started now replaces a resume that waits for Spotify.
+    pub(crate) fn spotify_forget_pending_resume(&mut self) {
+        self.spotify.pending_resume = None;
     }
 
     /// A `spotify:` URI or an `open.spotify.com` link from Direct link;
@@ -1123,6 +1180,7 @@ impl Shell {
             self.spotify.pending_play = Some(uri);
             let stamp = self.spotify.epochs.begin();
             self.spotify.connect = None;
+            self.spotify.connecting = true;
             ui.set_status(&self.text("spotify_connecting"), false);
             service.connect(stamp, &key);
             ui.set_background_polling(true);

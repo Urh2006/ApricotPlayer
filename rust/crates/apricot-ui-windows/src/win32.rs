@@ -518,6 +518,9 @@ struct PendingEditSave {
 /// `folder_conversion_worker`.
 enum ConversionMessage {
     Folder(apricot_app::converter::FolderConversionEvent),
+    /// A folder conversion began, with the Cancel flag of that conversion,
+    /// not of whichever started last (review 4, B13).
+    FolderStarted(usize, std::sync::Arc<std::sync::atomic::AtomicBool>),
     /// The result and the Cancel flag of a single file conversion.
     FileFinished(
         std::result::Result<PathBuf, String>,
@@ -10952,8 +10955,21 @@ unsafe fn poll_playback_while_modal(window: HWND) {
         let Ok(Some(update)) = runtime.poll_update() else {
             break;
         };
+        // A position goes in at once unless a waiting event changes what
+        // plays first; stream details, pause state or device lists do not,
+        // so they no longer freeze the time (review 4, B7).
+        let in_order = state.deferred_playback.iter().all(|waiting| {
+            waiting.generation == update.generation
+                && matches!(
+                    waiting.event,
+                    PlaybackEvent::Paused(_)
+                        | PlaybackEvent::MediaInfo(_)
+                        | PlaybackEvent::AudioDevices(_)
+                        | PlaybackEvent::Position { .. }
+                )
+        });
         match update.event {
-            PlaybackEvent::Position { elapsed, .. } if state.deferred_playback.is_empty() => {
+            PlaybackEvent::Position { elapsed, .. } if in_order => {
                 if state
                     .application
                     .apply_playback_event(update.generation, update.event.clone())
@@ -15883,11 +15899,14 @@ unsafe fn toggle_player_pause(window: HWND) {
             let _ = execute_player_command(window, PlaybackCommand::SetPaused(false));
         }
         PlayAction::RestartFromStart => {
-            // Python `restart_current_playback`.
+            // Python `restart_current_playback`; a CUE track starts again
+            // at its own start (review 4, B11).
+            let start = apricot_app::playback_features::segment_target(&state.application, 0.0)
+                .unwrap_or(0.0);
             if execute_player_command(
                 window,
                 PlaybackCommand::SeekAbsolute {
-                    seconds: 0.0,
+                    seconds: start,
                     exact: true,
                 },
             ) && execute_player_command(window, PlaybackCommand::SetPaused(false))
@@ -17033,6 +17052,7 @@ unsafe fn show_converter(window: HWND, folder_mode: bool) {
 }
 
 /// Python `start_file_conversion` and `start_folder_conversion`.
+#[allow(clippy::too_many_lines)] // One start for a file and a folder.
 unsafe fn start_conversion(window: HWND, start: crate::converter_win32::ConverterStart) {
     use crate::converter_win32::ConverterStart;
     use apricot_app::converter::{
@@ -17113,7 +17133,16 @@ unsafe fn start_conversion(window: HWND, start: crate::converter_win32::Converte
                         )
                     },
                     &mut |event| {
-                        let _ = events.send(ConversionMessage::Folder(event));
+                        let message = match event {
+                            apricot_app::converter::FolderConversionEvent::Started { total } => {
+                                ConversionMessage::FolderStarted(
+                                    total,
+                                    std::sync::Arc::clone(&cancel),
+                                )
+                            }
+                            event => ConversionMessage::Folder(event),
+                        };
+                        let _ = events.send(message);
                     },
                 );
                 let _ = sender.send(ConversionMessage::FolderFinished(result));
@@ -17142,7 +17171,11 @@ unsafe fn poll_conversions(window: HWND) {
             loop {
                 match receiver.try_recv() {
                     Ok(message) => {
-                        let finished = !matches!(message, ConversionMessage::Folder(_));
+                        let finished = matches!(
+                            message,
+                            ConversionMessage::FileFinished(..)
+                                | ConversionMessage::FolderFinished(_)
+                        );
                         messages.push(message);
                         if finished {
                             break false;
@@ -17174,14 +17207,13 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
     };
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     match message {
-        ConversionMessage::Folder(FolderConversionEvent::Started { total }) => {
+        ConversionMessage::Folder(FolderConversionEvent::Started { .. }) => {}
+        ConversionMessage::FolderStarted(total, flag) => {
             close_conversion_progress(state);
-            let cancel = state.conversion_cancels.last().map(|flag| {
-                crate::converter_win32::ProgressCancel {
-                    flag: std::sync::Arc::clone(flag),
-                    label: catalog.text("cancel").to_owned(),
-                    stopping: catalog.text("conversion_stopping").to_owned(),
-                }
+            let cancel = Some(crate::converter_win32::ProgressCancel {
+                flag,
+                label: catalog.text("cancel").to_owned(),
+                stopping: catalog.text("conversion_stopping").to_owned(),
             });
             state.conversion_progress_window = match cancel {
                 Some(cancel) => {

@@ -145,6 +145,9 @@ struct Frame {
     title: String,
     items: Vec<CatalogItem>,
     next_offset: Option<u64>,
+    /// How many rows the list has, by its first page; a change shows a
+    /// change also past the loaded rows (review 4, B16).
+    total: Option<u64>,
     selected: usize,
     /// The request this frame waits for.
     loading: Option<SpotifyStamp>,
@@ -462,6 +465,7 @@ impl Shell {
             title: self.text("result_list"),
             items: Vec::new(),
             next_offset: None,
+            total: None,
             selected: 0,
             loading: None,
             loaded: true,
@@ -566,6 +570,7 @@ impl Shell {
             title,
             items: Vec::new(),
             next_offset: None,
+            total: None,
             selected: 0,
             loading: None,
             loaded: false,
@@ -966,6 +971,9 @@ impl Shell {
                     } else {
                         self.spotify.browse.personalised_contexts.remove(uri);
                     }
+                }
+                if frame.items.is_empty() {
+                    frame.total = collection.page.total;
                 }
                 frame.items.extend(collection.page.items);
                 frame.next_offset = collection.page.next_offset;
@@ -1500,9 +1508,13 @@ impl Shell {
             } else {
                 frame.items.len() == page.len()
             };
-        if unchanged {
+        // Edit rights can change while the rows stay (review 4, B16).
+        frame.can_edit = collection.can_edit_items;
+        frame.can_rename = collection.can_edit_metadata;
+        if unchanged && collection.page.total == frame.total {
             return true;
         }
+        frame.total = collection.page.total;
         let selected_uid = selected
             .filter(|_| is_top)
             .and_then(|at| frame.items.get(at))
@@ -3099,6 +3111,7 @@ impl Shell {
             title: title.to_owned(),
             items,
             next_offset: None,
+            total: None,
             selected: 0,
             loading: None,
             loaded: true,

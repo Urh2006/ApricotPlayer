@@ -55,6 +55,9 @@ pub struct ControllerIvars {
     global_shortcuts: RefCell<Option<RegisteredShortcuts>>,
     layout_observer: Cell<bool>,
     pending_global_pause: Cell<bool>,
+    /// The running recording's Stop and Pause, for global shortcuts while
+    /// a dialog holds the shell (review 4, B17).
+    recording_controls: RefCell<Option<apricot_platform::recording::RecordingControls>>,
     #[cfg(debug_assertions)]
     audit_mode: Cell<bool>,
     #[cfg(debug_assertions)]
@@ -210,6 +213,17 @@ define_class!(
                 .and_then(|(_, registered)| registered.get(index).map(|(action, _)| *action));
             let Some(action) = action else { return };
             if NSApplication::sharedApplication(self.mtm()).modalWindow().is_some() {
+                // Stop and Pause still reach a running recording (review 4,
+                // B17); Start never begins a second one.
+                if let Some(controls) = self.ivars().recording_controls.borrow().as_ref() {
+                    match action {
+                        "recording_stop" => controls.stop(),
+                        "recording_pause" => {
+                            let _ = controls.toggle_pause();
+                        }
+                        _ => {}
+                    }
+                }
                 return;
             }
             self.with_shell(|shell, ui| {
@@ -483,6 +497,7 @@ impl MainWindowController {
             global_shortcuts: RefCell::new(None),
             layout_observer: Cell::new(false),
             pending_global_pause: Cell::new(false),
+            recording_controls: RefCell::new(None),
             #[cfg(debug_assertions)]
             audit_mode: Cell::new(false),
             #[cfg(debug_assertions)]
@@ -757,6 +772,7 @@ impl MainWindowController {
         if self.ivars().pending_global_pause.replace(false) {
             shell.activate_player_control(&mut ui, "background_play_pause");
         }
+        *self.ivars().recording_controls.borrow_mut() = shell.recording_controls();
         self.sync_background_player(shell);
         self.sync_global_hotkey(shell);
         self.sync_global_shortcuts(shell, &mut ui);

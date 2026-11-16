@@ -1339,8 +1339,11 @@ pub fn dispatch_playback_feature(
             } else if let Some(seconds) =
                 apricot_app::playback_features::bookmark_slot(app.settings(), &media, number)
             {
-                // Inside A–B repeat the jump stays within it (review 2.1).
+                // Inside A–B repeat the jump stays within it (review 2.1),
+                // and inside the CUE track being heard (review 4, B11).
                 let seconds = app.playback_features().ranges.constrain(seconds);
+                let seconds =
+                    apricot_app::playback_features::segment_target(app, seconds).unwrap_or(seconds);
                 commands.push(PlaybackCommand::SeekAbsolute {
                     seconds,
                     exact: true,
@@ -1879,14 +1882,35 @@ pub fn timer_description(app: &Application) -> String {
     )
 }
 
-/// A Spotify track that went on by itself, not by Next or Previous within
-/// the last seconds, ends like a file: a sleep timer set to the end of the
-/// track stops there (review 2.1).
+/// A Spotify song chosen by the user (Play in the Spotify queue), not by
+/// Next or Previous, for [`spotify_track_end`] (review 4, B12).
+static MANUAL_TRACK_CHANGE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+/// The user chose the next Spotify song; the change that follows is not
+/// the natural end of the song (review 4, B12).
+pub fn note_manual_track_change() {
+    if let Ok(mut change) = MANUAL_TRACK_CHANGE.lock() {
+        *change = Some(Instant::now());
+    }
+}
+
+/// A Spotify track that went on by itself, not by Next, Previous or a song
+/// chosen in the queue, ends like a file: a sleep timer set to the end of
+/// the track stops there (review 2.1). The choice counts for the next song
+/// change, up to a slow answer of Spotify (review 4, B12).
 pub fn spotify_track_end(
     app: &mut Application,
     manual_change: Option<Instant>,
 ) -> Option<Vec<PlaybackCommand>> {
-    if manual_change.is_some_and(|at| at.elapsed().as_secs_f64() < 5.0) {
+    let chosen = MANUAL_TRACK_CHANGE
+        .lock()
+        .ok()
+        .and_then(|mut change| change.take());
+    if manual_change
+        .into_iter()
+        .chain(chosen)
+        .any(|at| at.elapsed().as_secs_f64() < 15.0)
+    {
         return None;
     }
     natural_playback_end(app, false)
@@ -1925,9 +1949,19 @@ pub fn tick_playback_features(
     let generation = session.generation();
     let position = session.position_seconds();
     let duration = session.duration_seconds();
+    // A CUE track is its own item for marks and A-B: the next track of the
+    // same album file starts without them (review 4, B10).
     let key = session
         .current_item()
-        .and_then(apricot_core::MediaItem::copy_location)
+        .and_then(|item| {
+            let location = item.copy_location()?;
+            Some(
+                match crate::player::segment_time(item, "apricot_segment_start") {
+                    Some(start) => format!("{location}#{start}"),
+                    None => location,
+                },
+            )
+        })
         .unwrap_or_default();
     let m4b = session
         .current_item()
