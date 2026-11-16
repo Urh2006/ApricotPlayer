@@ -448,7 +448,7 @@ pub(super) unsafe fn abandon(window: HWND) {
 unsafe fn wait(window: HWND) -> Option<SourceSelection> {
     let mut message = MSG::default();
     loop {
-        if state(window).is_some_and(|state| state.exit_after_sources) {
+        if state(window).is_some_and(|state| state.exit_after_sources || state.leave_sources) {
             if let Some(panel) = state_mut(window).and_then(|state| state.sources_panel.as_mut()) {
                 panel.done = false;
                 panel.result = None;
@@ -483,7 +483,14 @@ unsafe fn wait(window: HWND) -> Option<SourceSelection> {
             continue;
         }
         // Everything else goes the main window's way: shortcuts, the
-        // background player's keys, Enter on buttons (review 4, B2).
+        // background player's keys, Enter on buttons (review 4, B2). A
+        // shortcut that opened another screen closes the lists.
+        let screen = state(window).map(|state| state.view_changes);
         super::route_main_message(window, &message);
+        if let Some(state) = state_mut(window)
+            && Some(state.view_changes) != screen
+        {
+            state.leave_sources = true;
+        }
     }
 }

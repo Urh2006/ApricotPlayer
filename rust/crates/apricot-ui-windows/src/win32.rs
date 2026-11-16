@@ -578,6 +578,9 @@ struct WindowState {
     /// Exit was asked while a Radio, IPTV or Recording list held the
     /// controller: the lists close first (review 4, A7).
     exit_after_sources: bool,
+    /// A shortcut went to another screen while a Radio, IPTV or Recording
+    /// list was open: the lists close and that screen stays (review 4, B2).
+    leave_sources: bool,
     lent_recording: Option<apricot_platform::recording::RecordingControls>,
     list: HWND,
     open: HWND,
@@ -2294,6 +2297,7 @@ unsafe fn create_controls(
         source_tools: apricot_shell::sources::SourcesController::default(),
         source_tools_out: 0,
         exit_after_sources: false,
+        leave_sources: false,
         lent_recording: None,
         modal_open: false,
         tray_icon_added: false,

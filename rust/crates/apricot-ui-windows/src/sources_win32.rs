@@ -152,6 +152,7 @@ fn give_back(
     if state.source_tools_out == 0 {
         state.source_tools = controller;
         state.lent_recording = None;
+        state.leave_sources = false;
         // Exit waited for the lists to close (review 4, A7).
         if std::mem::take(&mut state.exit_after_sources) {
             unsafe {
