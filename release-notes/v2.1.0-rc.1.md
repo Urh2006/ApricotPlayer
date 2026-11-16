@@ -6,6 +6,7 @@ This is the first release candidate of ApricotPlayer 2.1. It fixes what a fourth
 
 - An IPTV channel with a login, saved in favorites, a playlist or the playback queue, no longer keeps its address, login or portal session in your files. Only a reference to its IPTV source and channel is kept, and the channel is opened again from the source when it plays. Entries saved before are cleaned the first time they are read. A playlist exported as M3U leaves such channels out.
 - An update is not installed while a recording is running. ApricotPlayer asks you to stop the recording first.
+- With short announcements (Ctrl+Alt+Shift+V), volume boost and bass boost now say only On or Off.
 
 ## Fixed
 
