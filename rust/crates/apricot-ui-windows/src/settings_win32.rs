@@ -2404,6 +2404,9 @@ unsafe fn save_and_register_startup(window: HWND, state: &mut SettingsWindowStat
 /// defaults: every text is rebuilt and focus returns to the section list.
 unsafe fn rebuild_screen(window: HWND) {
     let _ = KillTimer(Some(window), SECTION_RENDER_TIMER_ID);
+    // The window holds the focus while the list is filled again, so NVDA
+    // reads the selected section once (beta 8).
+    let _ = SetFocus(Some(window));
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -2413,9 +2416,6 @@ unsafe fn rebuild_screen(window: HWND) {
     let catalog = apricot_app::embedded_catalog(&application.settings().language);
     let model = application.settings_model(state.selected_section);
     set_window_text(window, &model.title);
-    set_window_text(state.back, catalog.text("back"));
-    set_window_text(state.save, catalog.text("save"));
-    set_window_text(state.reset_all, catalog.text("restore_defaults"));
     let section_name = wide(&model.section_list_name);
     let _ = SetWindowTextW(state.section_list, PCWSTR(section_name.as_ptr()));
     crate::accessibility_win32::set_control_name(state.section_list, &model.section_list_name);
@@ -2437,16 +2437,25 @@ unsafe fn rebuild_screen(window: HWND) {
         .displayed_language
         .clone_from(&application.settings().language);
     let section_list = state.section_list;
+    let buttons = [
+        (state.back, catalog.text("back").to_owned()),
+        (state.save, catalog.text("save").to_owned()),
+        (state.reset_all, catalog.text("restore_defaults").to_owned()),
+    ];
     if let Err(error) = render_controls(window) {
         show_error(window, &error.to_string());
     }
-    let _ = SetFocus(Some(section_list));
+    crate::accessibility_win32::focus_list(section_list);
+    // Renamed after the focus left them, so NVDA does not read the focused
+    // Save in the new language (beta 8).
+    for (button, label) in buttons {
+        set_window_text(button, &label);
+    }
 }
 
-/// Python's `back_from_settings`: leave without saving and without applying
-/// the visible section. Sections the user already left were applied to the
-/// in-memory settings when the selection moved, and they stay applied until
-/// the next save or restart, as in Python.
+/// Python's `back_from_settings`: leave without saving. The main window then
+/// drops every change made since the window opened (beta 8), where Python
+/// kept the sections the user had left until the next save.
 unsafe fn close_without_saving(window: HWND) {
     close_settings_window(window);
 }

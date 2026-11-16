@@ -161,7 +161,36 @@ fn build_embedded_catalog(selected_code: &str) -> TranslationCatalog {
 }
 
 fn parse_embedded_locale(source: &str) -> BTreeMap<String, String> {
-    serde_json::from_str(source).expect("embedded locale must remain valid")
+    let mut locale: BTreeMap<String, String> =
+        serde_json::from_str(source).expect("embedded locale must remain valid");
+    for text in locale.values_mut() {
+        // Some were converted twice.
+        for _ in 0..3 {
+            let Some(repaired) = repair_mojibake(text) else {
+                break;
+            };
+            *text = repaired;
+        }
+    }
+    locale
+}
+
+/// Some texts of the shared locales were saved as UTF-8 read as Windows-1250,
+/// so NVDA read `SploĹˇno` for `Splošno` (beta 8). Such a text turns back
+/// into valid UTF-8 when written in Windows-1250; a correct text with
+/// accented letters does not, because its bytes are not UTF-8.
+fn repair_mojibake(text: &str) -> Option<String> {
+    if text.is_ascii() {
+        return None;
+    }
+    let (bytes, _, unmappable) = encoding_rs::WINDOWS_1250.encode(text);
+    if unmappable {
+        return None;
+    }
+    std::str::from_utf8(&bytes)
+        .ok()
+        .filter(|repaired| *repaired != text)
+        .map(str::to_owned)
 }
 
 /// Texts that only the Rust port needs, keyed by text key and then language
@@ -308,6 +337,48 @@ mod tests {
     use super::{
         MainMenuAvailability, MainMenuModel, MenuVisibility, embedded_catalog, english_catalog,
     };
+
+    #[test]
+    fn texts_saved_with_the_wrong_encoding_are_read_correctly() {
+        assert_eq!(embedded_catalog("sl").text("general_section"), "Splošno");
+        assert_eq!(
+            embedded_catalog("tr").text("download_all_selected"),
+            "Seçilen tüm öğeleri indir"
+        );
+        assert_eq!(embedded_catalog("sr").text("main_menu"), "Главни мени");
+        for correct in ["Slovenščina", "Änderungen", "Čas še ni", "Привет", "Ünlü"] {
+            assert_eq!(super::repair_mojibake(correct), None, "{correct}");
+        }
+        // No shipped text still holds a UTF-8 letter seen through
+        // Windows-1250: a lead byte with its continuation bytes.
+        let byte = |c: char| {
+            let mut buffer = [0_u8; 4];
+            let (bytes, _, unmappable) =
+                encoding_rs::WINDOWS_1250.encode(c.encode_utf8(&mut buffer));
+            (!unmappable && bytes.len() == 1).then(|| bytes[0])
+        };
+        for language in LANGUAGES {
+            let locale = super::parse_embedded_locale(super::locale_source(language.code));
+            let broken: Vec<_> = locale
+                .iter()
+                .filter(|(_, text)| {
+                    let chars: Vec<char> = text.chars().collect();
+                    let continuation = |c: char| matches!(byte(c), Some(0x80..=0xBF));
+                    let two = chars.windows(2).any(|pair| {
+                        matches!(byte(pair[0]), Some(0xC2..=0xDF)) && continuation(pair[1])
+                    });
+                    let three = chars.windows(3).any(|triple| {
+                        matches!(byte(triple[0]), Some(0xE0..=0xEF))
+                            && continuation(triple[1])
+                            && continuation(triple[2])
+                    });
+                    two || three
+                })
+                .map(|(key, text)| format!("{key}: {text}"))
+                .collect();
+            assert!(broken.is_empty(), "{}: {broken:#?}", language.code);
+        }
+    }
 
     #[test]
     fn default_menu_matches_python_availability_and_permanent_items() {

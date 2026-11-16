@@ -19966,6 +19966,7 @@ unsafe fn open_settings(window: HWND) {
     sources_ui::ensure_loaded(window);
     let sources_environment = sources_ui::environment(window);
     let spotify_before;
+    let clean_at_open;
     let settings_result = {
         let Some(state) = state_mut(window) else {
             return;
@@ -19974,6 +19975,7 @@ unsafe fn open_settings(window: HWND) {
             return;
         }
         spotify_before = state.application.saved_spotify_settings();
+        clean_at_open = !state.application.settings_are_dirty();
         state.settings_open = true;
         state.modal_open = true;
         crate::settings_win32::show(
@@ -19986,6 +19988,16 @@ unsafe fn open_settings(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    // Closing without Save drops what the window changed: Python applies
+    // the controls only on Save (beta 8).
+    if clean_at_open && state.application.settings_are_dirty() {
+        state.application.cancel_settings();
+        // A running player heard the equalizer and processing changes at
+        // once; it goes back to the saved ones too.
+        for message in [WM_APPLY_GLOBAL_EQUALIZER, WM_APPLY_AUDIO_PROCESSING] {
+            let _ = PostMessageW(Some(window), message, WPARAM(0), LPARAM(0));
+        }
+    }
     state.settings_open = false;
     state.modal_open = false;
     resume_deferred_window_work(window);

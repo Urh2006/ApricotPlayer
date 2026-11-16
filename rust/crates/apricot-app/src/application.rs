@@ -3113,8 +3113,11 @@ impl Application {
         self.spotify_settings_draft = None;
     }
 
+    /// Drops every unsaved change of the Settings window, Spotify ones
+    /// included.
     pub fn cancel_settings(&mut self) {
         self.settings.cancel();
+        self.spotify_settings_draft = None;
     }
 
     /// Python `wx_main.py` asks for the language only on a first run without

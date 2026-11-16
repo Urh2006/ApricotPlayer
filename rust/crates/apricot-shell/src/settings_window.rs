@@ -341,6 +341,10 @@ pub(crate) struct SettingsState {
     spotify_before: Option<apricot_spotify::settings::SpotifySettings>,
     /// Recording fields changed since the last Save.
     recording_draft: crate::FormValues,
+    /// No unsaved setting when the window opened: closing it without Save
+    /// drops what it changed, as Python only applies the controls on Save
+    /// (beta 8).
+    clean_at_open: bool,
 }
 
 impl Shell {
@@ -353,6 +357,7 @@ impl Shell {
         }
         self.settings_window.open = true;
         self.settings_window.spotify_before = Some(self.application.saved_spotify_settings());
+        self.settings_window.clean_at_open = !self.application.settings_are_dirty();
         self.load_sources_quietly(ui);
         ui.open_settings();
     }
@@ -955,6 +960,9 @@ impl Shell {
 
     pub fn settings_closed(&mut self, ui: &mut dyn ShellUi, deferred_action: Option<&'static str>) {
         self.settings_window.open = false;
+        if self.settings_window.clean_at_open {
+            self.application.cancel_settings();
+        }
         if let Some(before) = self.settings_window.spotify_before.take() {
             self.spotify_settings_window_closed(before);
         }
