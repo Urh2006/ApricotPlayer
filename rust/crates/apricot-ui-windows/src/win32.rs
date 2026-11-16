@@ -4447,6 +4447,10 @@ unsafe fn start_media_item_with_options(
     preserve_sequence: bool,
     start_position_seconds: Option<f64>,
 ) {
+    // Anything started now replaces a resume that waits for Spotify.
+    if let Some(state) = state_mut(window) {
+        spotify::forget_pending_resume(state);
+    }
     // Python plays AudioVault movies from their resolved stream and TV show
     // episodes from the playback cache.
     if audiovault::intercept_start(window, &item) {
@@ -5494,6 +5498,9 @@ unsafe fn resume_last_player_session(window: HWND) {
         state.rss_visible_item_count = state.current_rss_item_index.saturating_add(1);
     }
     let folder = resume.return_screen == "folder";
+    if spotify::defer_until_connected(window, &resume.item, resume.sequence_active) {
+        return;
+    }
     if resume.sequence_active {
         start_sequence_media_item(window, resume.item, None);
     } else {

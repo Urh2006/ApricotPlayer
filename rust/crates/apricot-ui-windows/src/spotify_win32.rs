@@ -71,6 +71,11 @@ pub(super) struct SpotifyState {
     connect: Option<SpotifyStamp>,
     /// A link waiting for the connection of the active account.
     pending_play: Option<String>,
+    /// A resumed Spotify item waiting for the connection made at start,
+    /// and whether it continues its list (beta 7).
+    pending_resume: Option<(apricot_core::MediaItem, bool)>,
+    /// A connection was asked and its answer has not come yet.
+    connecting: bool,
     /// The link whose metadata is being read; only the latest one plays.
     resolve: Option<SpotifyStamp>,
     /// The open queue dialog and the reload it waits for.
@@ -831,6 +836,7 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
                 return;
             }
             let requested = state.spotify.connect.take() == Some(stamp);
+            state.spotify.connecting = false;
             let text = match &result {
                 Ok(account) => named(&texts, "spotify_connected", &account.display_name),
                 Err(error) => error_text(&texts, error),
@@ -844,8 +850,16 @@ unsafe fn handle_event(window: HWND, event: SpotifyEvent) {
             if requested || result.is_err() {
                 announce(window, &text);
             }
+            let resume = state.spotify.pending_resume.take();
             if let (Ok(_), Some(uri)) = (&result, pending) {
                 resolve(window, &uri);
+            }
+            if let (Ok(_), Some((item, sequence))) = (&result, resume) {
+                if sequence {
+                    super::start_sequence_media_item(window, item, None);
+                } else {
+                    super::start_media_item(window, item, None);
+                }
             }
         }
         SpotifyEvent::Disconnected { session_id } => {
@@ -1313,8 +1327,52 @@ pub(super) unsafe fn autoconnect(window: HWND) {
         next_account(state);
         let stamp = state.spotify.epochs.begin();
         state.spotify.connect = None;
+        state.spotify.connecting = true;
         service.connect(stamp, &key);
     }
+}
+
+/// Something else started: a resume that waits for the connection is
+/// dropped.
+pub(super) fn forget_pending_resume(state: &mut WindowState) {
+    state.spotify.pending_resume = None;
+}
+
+/// Resume last session right after start: a Spotify item waits for the
+/// connection that starting began, instead of failing with "not
+/// connected" (beta 7). `true` when it waits.
+pub(super) unsafe fn defer_until_connected(
+    window: HWND,
+    item: &apricot_core::MediaItem,
+    sequence: bool,
+) -> bool {
+    if item.source != apricot_core::MediaSource::Spotify {
+        return false;
+    }
+    let Some(service) = service(window) else {
+        return false;
+    };
+    if service.connected_account().is_some() {
+        return false;
+    }
+    let accounts = accounts(window);
+    let Some(key) = apricot_app::spotify::active_account(&accounts).map(|a| a.key.clone()) else {
+        return false;
+    };
+    let Some(state) = state_mut(window) else {
+        return false;
+    };
+    state.spotify.pending_resume = Some((item.clone(), sequence));
+    if !state.spotify.connecting {
+        next_account(state);
+        let stamp = state.spotify.epochs.begin();
+        state.spotify.connect = None;
+        state.spotify.connecting = true;
+        service.connect(stamp, &key);
+    }
+    let text = catalog(state).text("spotify_connecting").to_owned();
+    set_status(state, &text, true);
+    true
 }
 
 /// A `spotify:` URI or an `open.spotify.com` link from Direct link.
@@ -1370,6 +1428,7 @@ pub(super) unsafe fn play_link(window: HWND, text: &str, action: &str) -> bool {
         state.spotify.pending_play = Some(uri);
         let stamp = state.spotify.epochs.begin();
         state.spotify.connect = None;
+        state.spotify.connecting = true;
         let text = texts.text("spotify_connecting").to_owned();
         set_status(state, &text, false);
         service.connect(stamp, &key);

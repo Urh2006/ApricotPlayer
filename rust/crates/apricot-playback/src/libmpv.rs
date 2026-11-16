@@ -407,6 +407,7 @@ fn c_string(value: &str, label: &str) -> Result<CString, PlaybackError> {
 }
 
 /// One libmpv client instance owned by the playback worker thread.
+#[allow(clippy::struct_excessive_bools)] // Independent player states.
 pub struct LibMpvEngine {
     api: MpvApi,
     handle: usize,
@@ -430,6 +431,10 @@ pub struct LibMpvEngine {
     render: Option<crate::render::RenderAttachment>,
     /// Latest requested state, independent of delayed PCM pause acknowledgements.
     requested_paused: bool,
+    /// The sound was changed while paused: the audio already prepared with
+    /// the old volume, speed or pitch is dropped before playback goes on
+    /// (beta 7).
+    flush_on_resume: bool,
 }
 
 /// A PCM item: mpv positions are relative to the loaded generation.
@@ -579,6 +584,7 @@ impl LibMpvEngine {
             pcm: None,
             render,
             requested_paused: options.initial_playback_state == InitialPlaybackState::Paused,
+            flush_on_resume: false,
         })
     }
 
@@ -1182,6 +1188,28 @@ impl PlaybackEngine for LibMpvEngine {
         if let PlaybackCommand::SetPaused(paused) = &command {
             self.requested_paused = *paused;
         }
+        if self.requested_paused && changes_sound(&command) {
+            self.flush_on_resume = true;
+        }
+        if matches!(&command, PlaybackCommand::SetPaused(false))
+            && std::mem::take(&mut self.flush_on_resume)
+            && self.pcm.is_none()
+            && self.duration.is_some_and(|duration| duration > 0.0)
+        {
+            // A seek to where playback stands empties the audio buffers, so
+            // the first sound after Play already has the new settings.
+            let position = self.elapsed.max(0.0);
+            unsafe {
+                let _ = self.api.run_command(
+                    self.handle(),
+                    &[
+                        "seek".to_owned(),
+                        position.to_string(),
+                        "absolute+exact".to_owned(),
+                    ],
+                );
+            }
+        }
         if unsafe { self.execute_pcm(&command)? } {
             if matches!(&command, PlaybackCommand::Load { .. }) {
                 self.media_info = PlaybackMediaInfo::default();
@@ -1481,6 +1509,26 @@ unsafe fn property_u32(data: *mut c_void) -> Option<u32> {
     u32::try_from(*data.cast::<i64>())
         .ok()
         .filter(|value| *value > 0)
+}
+
+/// A command that changes what is heard, so audio prepared before it is
+/// out of date.
+const fn changes_sound(command: &PlaybackCommand) -> bool {
+    matches!(
+        command,
+        PlaybackCommand::SetVolume(_)
+            | PlaybackCommand::SetVolumeMax(_)
+            | PlaybackCommand::SetSpeed(_)
+            | PlaybackCommand::SetPitch(_)
+            | PlaybackCommand::SetAudioPitchCorrection(_)
+            | PlaybackCommand::SetAudioFilter(_)
+            | PlaybackCommand::AddAudioFilter(_)
+            | PlaybackCommand::RemoveAudioFilter(_)
+            | PlaybackCommand::AudioFilterCommand { .. }
+            | PlaybackCommand::SetEqualizerFilter(_)
+            | PlaybackCommand::SetPitchFilter(_)
+            | PlaybackCommand::SetReplayGain(_)
+    )
 }
 
 fn yes_no(value: bool) -> &'static str {
