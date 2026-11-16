@@ -1025,12 +1025,16 @@ unsafe fn focus_list(list: HWND) {
 }
 
 /// Whether the focus is on a button, whose label a screen change may
-/// rewrite while NVDA still reads it.
-unsafe fn focus_on_button() -> bool {
+/// rewrite while NVDA still reads it, or in a text field or combo box, where
+/// the list filled below it was read once before it got the focus.
+unsafe fn focus_outside_lists() -> bool {
     let mut class = [0_u16; 16];
     let length = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(GetFocus(), &mut class);
     usize::try_from(length).is_ok_and(|length| {
-        String::from_utf16_lossy(&class[..length]).eq_ignore_ascii_case("Button")
+        let class = String::from_utf16_lossy(&class[..length]);
+        ["Button", "Edit", "ComboBox"]
+            .iter()
+            .any(|name| class.eq_ignore_ascii_case(name))
     })
 }
 
@@ -8307,7 +8311,7 @@ struct ParkedFocus {
 /// [`unpark_focus`], so NVDA does not read the new label and then the list
 /// twice (beta 8).
 unsafe fn park_focus(window: HWND, state: &WindowState) -> Option<ParkedFocus> {
-    if !focus_on_button() {
+    if !focus_outside_lists() {
         return None;
     }
     let _ = SetFocus(Some(window));
