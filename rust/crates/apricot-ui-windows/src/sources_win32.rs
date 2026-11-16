@@ -191,8 +191,15 @@ pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
         return true;
     };
     let mut controller = lend(state);
-    let handled = controller.action(&mut Ui::new(window), &environment, id);
+    let mut ui = Ui::new(window);
+    let handled = controller.action(&mut ui, &environment, id);
     let busy = controller.is_busy();
+    // While the next list loads, the shown list stays, so the focus does not
+    // go back to the screen below and come again (beta 7).
+    if busy {
+        ui.showed_list = false;
+    }
+    drop(ui);
     if let Some(state) = state_mut(window) {
         give_back(state, controller);
     }
@@ -272,8 +279,20 @@ pub(super) unsafe fn poll(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    // Only the outermost poll holds the real controller; one inside an open
+    // list polls the stand-in and leaves the list alone.
+    let outermost = state.source_tools_out == 0;
     let mut controller = lend(state);
-    let busy = controller.poll(&mut Ui::new(window), &environment);
+    let mut ui = Ui::new(window);
+    let busy = controller.poll(&mut ui, &environment);
+    // A list kept open while work loaded closes when the work ended without
+    // showing another one, for example with an error.
+    if busy {
+        ui.showed_list = false;
+    } else if outermost {
+        ui.showed_list = true;
+    }
+    drop(ui);
     if let Some(state) = state_mut(window) {
         give_back(state, controller);
     }

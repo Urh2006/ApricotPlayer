@@ -1610,6 +1610,9 @@ unsafe fn create_controls(
         );
     }
     SendMessageW(list, LB_SETCURSEL, Some(WPARAM(0)), None);
+    // The list is named from the start, not only after the menu is shown
+    // again, so the screen reader says "Main menu" the first time too.
+    crate::accessibility_win32::set_control_name(list, &model.accessible_name);
     if !SetWindowSubclass(list, Some(menu_list_proc), 1, 0).as_bool() {
         return Err(windows::core::Error::from_thread());
     }
