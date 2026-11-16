@@ -18,10 +18,10 @@ use windows::{
             },
             Input::KeyboardAndMouse::{EnableWindow, SetFocus, VK_ESCAPE},
             WindowsAndMessaging::{
-                BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-                DispatchMessageW, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GetClientRect,
-                GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW, IsDialogMessageW, IsWindow,
-                KillTimer, LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
+                BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW,
+                ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GetClientRect, GetMessageW,
+                GetWindowLongPtrW, HMENU, IDC_ARROW, IsDialogMessageW, IsWindow, KillTimer,
+                LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
                 SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW,
                 ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE,
                 WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WM_TIMER,
@@ -114,7 +114,7 @@ pub unsafe fn show_async(
     let mut state = match create_controls(window, instance, text_value, labels) {
         Ok(state) => state,
         Err(error) => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             return Err(error);
         }
     };
@@ -125,7 +125,7 @@ pub unsafe fn show_async(
     let state_pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), state_pointer as isize);
     layout(window);
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(initial_focus));
 
@@ -135,16 +135,16 @@ pub unsafe fn show_async(
         let status = GetMessageW(&raw mut message, None, 0, 0);
         if status.0 == -1 {
             loop_error = Some(windows::core::Error::from_thread());
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if status.0 == 0 {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             PostQuitMessage(0);
             break;
         }
         if message.message == WM_KEYDOWN && message.wParam.0 == usize::from(VK_ESCAPE.0) {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             continue;
         }
         if crate::accessibility_win32::tab_into_list(window, &message) {
@@ -188,14 +188,14 @@ unsafe extern "system" fn window_proc(
             match wparam.0 & 0xffff {
                 ID_COPY => copy_details(window),
                 ID_BACK => {
-                    let _ = DestroyWindow(window);
+                    let _ = crate::accessibility_win32::destroy_modal(window);
                 }
                 _ => {}
             }
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -506,7 +506,7 @@ mod tests {
             let mut buffer = vec![0_u16; length + 1];
             let copied = usize::try_from(GetWindowTextW(control, &mut buffer)).unwrap();
             let actual = String::from_utf16_lossy(&buffer[..copied]);
-            let _ = DestroyWindow(control);
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(control);
             assert_eq!(actual.len(), expected.len());
             assert_eq!(actual, expected);
         }
@@ -561,7 +561,7 @@ mod tests {
                     &buffer[..usize::try_from(copied).unwrap()],
                 ));
             }
-            let _ = DestroyWindow(control);
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(control);
             assert_eq!(selected, ["First \u{1f3b5}", "Second \u{17e}"]);
         }
     }

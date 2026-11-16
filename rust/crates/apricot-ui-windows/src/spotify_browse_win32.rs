@@ -1360,7 +1360,7 @@ unsafe fn render(window: HWND, focus: bool) {
     let watch = matches!(frame.source, Source::Playlist(_));
     layout_controls_state(window, state);
     if focus {
-        let _ = SetFocus(Some(state.list));
+        super::focus_list(state.list);
     }
     if watch {
         let _ = SetTimer(Some(window), REFRESH_TIMER_ID, REFRESH_INTERVAL_MS, None);

@@ -19,8 +19,8 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus, VK_ESCAPE, VK_RETURN},
             WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                EN_CHANGE, ES_AUTOHSCROLL, GetClientRect, GetMessageW, GetWindowLongPtrW,
+                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, EN_CHANGE,
+                ES_AUTOHSCROLL, GetClientRect, GetMessageW, GetWindowLongPtrW,
                 GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IsChild, IsDialogMessageW,
                 IsWindow, KillTimer, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL,
                 LBN_DBLCLK, LBS_NOTIFY, LoadCursorW, MSG, MoveWindow, PostQuitMessage,
@@ -149,7 +149,7 @@ unsafe fn show_inner(
     });
     let result = create_controls(window, instance, &mut state);
     if let Err(error) = result {
-        let _ = DestroyWindow(window);
+        let _ = crate::accessibility_win32::destroy_modal(window);
         return Err(error);
     }
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), (&raw mut *state) as isize);
@@ -157,7 +157,7 @@ unsafe fn show_inner(
     refresh(&mut state, Some(loading));
     layout(window, &state);
     let previous = GetFocus();
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(state.controls[0]));
     let _ = SetTimer(Some(window), 1, 50, None);
@@ -171,13 +171,13 @@ unsafe fn show_inner(
             } else {
                 PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             }
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         let ours = message.hwnd == window || IsChild(window, message.hwnd).as_bool();
         if ours && let Some(chord) = crate::shortcut_win32::chord_from_message(&message) {
             if state.options.back == Some(chord) {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
                 continue;
             }
             if state.options.accept == Some(chord)
@@ -189,7 +189,7 @@ unsafe fn show_inner(
         }
         if ours && message.message == WM_KEYDOWN {
             if message.wParam.0 == usize::from(VK_ESCAPE.0) {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
                 continue;
             }
             if message.wParam.0 == usize::from(VK_RETURN.0)
@@ -312,7 +312,7 @@ unsafe fn refresh(state: &mut State<'_>, placeholder: Option<String>) {
 
 unsafe fn command(window: HWND, state: &mut State<'_>, id: usize) {
     if id == BACK {
-        let _ = DestroyWindow(window);
+        let _ = crate::accessibility_win32::destroy_modal(window);
         return;
     }
     let row = SendMessageW(state.controls[1], LB_GETCURSEL, None, None).0;
@@ -455,7 +455,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {

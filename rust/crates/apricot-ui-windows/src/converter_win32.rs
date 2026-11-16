@@ -209,7 +209,7 @@ unsafe fn show_win32(
         result: None,
     });
     if let Err(error) = create_controls(window, instance, &mut state) {
-        let _ = DestroyWindow(window);
+        let _ = crate::accessibility_win32::destroy_modal(window);
         return Err(error);
     }
     // Python: "Create a new file" starts checked.
@@ -217,7 +217,7 @@ unsafe fn show_win32(
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), (&raw mut *state) as isize);
     update_formats(window, &mut state);
     let previous = GetFocus();
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     // wx.Dialog focuses its first control, the path field.
     let _ = SetFocus(Some(state.control(PATH)));
@@ -231,7 +231,7 @@ unsafe fn show_win32(
             } else {
                 PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             }
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         let ours = message.hwnd == window || IsChild(window, message.hwnd).as_bool();
@@ -569,7 +569,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -583,7 +583,7 @@ unsafe extern "system" fn window_proc(
 unsafe fn command(window: HWND, state: &mut DialogState, id: usize, notification: usize) {
     match (id, notification) {
         (IDCANCEL_COMMAND, _) | (BACK, BN_CLICKED) => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
         }
         (IDOK_COMMAND, _) => {
             // Enter presses the focused button; elsewhere wx does nothing.
@@ -744,7 +744,7 @@ unsafe fn convert(window: HWND, state: &mut DialogState) {
         }
     };
     state.result = Some(start);
-    let _ = DestroyWindow(window);
+    let _ = crate::accessibility_win32::destroy_modal(window);
 }
 
 unsafe fn choose_output_file(
@@ -940,7 +940,7 @@ impl ConversionProgressWindow {
         let (message, bar, times) = match created {
             Ok(controls) => controls,
             Err(error) => {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
                 return Err(error);
             }
         };

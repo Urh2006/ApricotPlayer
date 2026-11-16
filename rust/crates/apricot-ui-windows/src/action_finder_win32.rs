@@ -16,16 +16,15 @@ use windows::{
             },
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
-                BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-                DispatchMessageW, EN_CHANGE, GetClientRect, GetMessageW, GetParent,
-                GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW,
-                IDCANCEL, IsDialogMessageW, IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT,
-                LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY, LoadCursorW, MSG, MoveWindow,
-                PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW, SetForegroundWindow,
-                SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
-                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_KEYDOWN,
-                WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE,
-                WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW,
+                EN_CHANGE, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW,
+                GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDCANCEL, IsDialogMessageW,
+                IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK,
+                LBS_NOTIFY, LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
+                SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+                WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
+                WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD,
+                WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -89,7 +88,7 @@ pub unsafe fn show(owner: HWND, model: ActionFinderModel) -> Result<Option<&'sta
     let state = match create_controls(window, instance, model) {
         Ok(state) => state,
         Err(error) => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             return Err(error);
         }
     };
@@ -98,7 +97,7 @@ pub unsafe fn show(owner: HWND, model: ActionFinderModel) -> Result<Option<&'sta
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), state_pointer as isize);
     refresh_results(window);
     layout(window);
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(initial_focus));
 
@@ -108,11 +107,11 @@ pub unsafe fn show(owner: HWND, model: ActionFinderModel) -> Result<Option<&'sta
         let status = GetMessageW(&raw mut message, None, 0, 0);
         if status.0 == -1 {
             loop_error = Some(windows::core::Error::from_thread());
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if status.0 == 0 {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             PostQuitMessage(0);
             break;
         }
@@ -158,12 +157,12 @@ unsafe extern "system" fn window_proc(
             {
                 activate(window);
             } else if command == ID_CANCEL || command == IDCANCEL.0 as usize {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
             }
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -208,6 +207,8 @@ unsafe fn create_controls(
         WS_EX_CLIENTEDGE,
         ID_RESULTS,
     )?;
+    // The window text of a list box is not its name for screen readers.
+    crate::accessibility_win32::set_control_name(results, &model.results_name);
     let open_label = wide(&model.open_label);
     let open = create_control(
         parent,
@@ -292,7 +293,7 @@ unsafe extern "system" fn control_proc(
     {
         let key = wparam.0;
         if key == usize::from(VK_ESCAPE.0) {
-            let _ = DestroyWindow(parent);
+            let _ = crate::accessibility_win32::destroy_modal(parent);
             return LRESULT(0);
         }
         if key == usize::from(VK_RETURN.0) {
@@ -354,7 +355,7 @@ unsafe fn activate(window: HWND) {
         return;
     };
     state.result = Some(state.model.items[*index].action_id);
-    let _ = DestroyWindow(window);
+    let _ = crate::accessibility_win32::destroy_modal(window);
 }
 
 unsafe fn layout(window: HWND) {

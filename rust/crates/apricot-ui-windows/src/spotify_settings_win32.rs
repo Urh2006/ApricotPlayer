@@ -17,10 +17,10 @@ use windows::{
             Input::KeyboardAndMouse::{EnableWindow, SetFocus, VK_ESCAPE},
             WindowsAndMessaging::{
                 BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT,
-                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-                GetMessageW, GetWindowLongPtrW, HMENU, IDC_ARROW, IDYES, IsChild, IsDialogMessageW,
-                IsWindow, LoadCursorW, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNOCANCEL, MSG,
-                MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW,
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
+                GetWindowLongPtrW, HMENU, IDC_ARROW, IDYES, IsChild, IsDialogMessageW, IsWindow,
+                LoadCursorW, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNOCANCEL, MSG, MessageBoxW,
+                MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW,
                 SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
                 WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
                 WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CAPTION, WS_CHILD,
@@ -218,7 +218,7 @@ unsafe fn show_win32(
     let state = match built {
         Ok(state) => state,
         Err(error) => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             return Err(error);
         }
     };
@@ -292,7 +292,7 @@ unsafe fn show_win32(
     let pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), pointer as isize);
     layout(window);
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(initial_focus));
     let mut loop_error = None;
@@ -301,11 +301,11 @@ unsafe fn show_win32(
         let status = GetMessageW(&raw mut message, None, 0, 0);
         if status.0 == -1 {
             loop_error = Some(windows::core::Error::from_thread());
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if status.0 == 0 {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             break;
         }
@@ -318,7 +318,7 @@ unsafe fn show_win32(
             && message.message == WM_KEYDOWN
             && message.wParam.0 == usize::from(VK_ESCAPE.0)
         {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             continue;
         }
         if crate::accessibility_win32::tab_into_list(window, &message) {
@@ -356,12 +356,12 @@ unsafe extern "system" fn window_proc(
             } else if command == ID_HISTORY {
                 confirm_history_control(window);
             } else if command == ID_CANCEL || command == IDCANCEL_COMMAND {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
             }
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -398,7 +398,7 @@ unsafe fn accept(window: HWND) {
             .unwrap_or_default(),
         key_cache: SendMessageW(state.key_cache, BM_GETCHECK, None, None).0 == 1,
     });
-    let _ = DestroyWindow(window);
+    let _ = crate::accessibility_win32::destroy_modal(window);
 }
 
 unsafe fn layout(window: HWND) {
@@ -712,7 +712,7 @@ mod tests {
                 "re-enabling must ask again"
             );
             let _ = KillTimer(None, timer);
-            let _ = DestroyWindow(owner);
+            let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(owner);
         }
     }
 }

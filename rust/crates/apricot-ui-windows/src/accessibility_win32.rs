@@ -180,6 +180,62 @@ impl Drop for ComApartment {
     }
 }
 
+/// Moves the focus onto a list box by way of its window: straight from a
+/// button NVDA read the selected item twice (beta 8).
+///
+/// # Safety
+/// `list` is a live window of the calling UI thread.
+pub unsafe fn focus_list(list: HWND) {
+    use windows::Win32::UI::{
+        Input::KeyboardAndMouse::{GetFocus, SetFocus},
+        WindowsAndMessaging::GetParent,
+    };
+    if GetFocus() != list
+        && let Ok(parent) = GetParent(list)
+    {
+        let _ = SetFocus(Some(parent));
+    }
+    let _ = SetFocus(Some(list));
+}
+
+/// The window a modal dialog disabled, kept on the dialog so closing it
+/// can enable that window first.
+const MODAL_OWNER: windows::core::PCWSTR = windows::core::w!("ApricotModalOwner");
+
+/// Disables `owner` while `dialog` is open, remembering it for
+/// [`destroy_modal`].
+///
+/// # Safety
+/// Both handles are live windows of the calling UI thread.
+pub unsafe fn disable_owner(dialog: HWND, owner: HWND) {
+    use windows::Win32::{Foundation::HANDLE, UI::Input::KeyboardAndMouse::EnableWindow};
+    let _ = windows::Win32::UI::WindowsAndMessaging::SetPropW(
+        dialog,
+        MODAL_OWNER,
+        Some(HANDLE(owner.0)),
+    );
+    let _ = EnableWindow(owner, false);
+}
+
+/// Closes a modal dialog. The window it disabled is enabled before the
+/// dialog goes away, because Windows hands the activation to another
+/// program when the window below is still disabled (beta 8).
+///
+/// # Safety
+/// `window` is a window of the calling UI thread.
+pub unsafe fn destroy_modal(window: HWND) -> windows::core::Result<()> {
+    use windows::Win32::UI::{
+        Input::KeyboardAndMouse::EnableWindow,
+        WindowsAndMessaging::{DestroyWindow, RemovePropW},
+    };
+    if let Ok(owner) = RemovePropW(window, MODAL_OWNER)
+        && !owner.is_invalid()
+    {
+        let _ = EnableWindow(HWND(owner.0), true);
+    }
+    DestroyWindow(window)
+}
+
 /// Tab or Shift+Tab onto a list box in a dialog: the focus goes by way of
 /// the dialog, as when a window opens, because straight from a button NVDA
 /// read the selected item twice (beta 8). `true` when the key was handled.

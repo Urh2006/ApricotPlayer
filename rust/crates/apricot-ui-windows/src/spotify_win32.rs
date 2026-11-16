@@ -241,7 +241,7 @@ pub(super) unsafe fn show_hub(window: HWND) {
         .unwrap_or(0);
     SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
     layout_controls_state(window, state);
-    let _ = SetFocus(Some(state.list));
+    super::focus_list(state.list);
 }
 
 /// `spotify_accounts`; `select` keeps an account selected after a change.
@@ -249,7 +249,7 @@ pub(super) unsafe fn show_accounts(window: HWND, select: Option<&str>) {
     prepare_screen(window, MainView::SpotifyAccounts, Route::SpotifyAccounts);
     refresh_accounts(window, select);
     if let Some(state) = state(window) {
-        let _ = SetFocus(Some(state.list));
+        super::focus_list(state.list);
     }
 }
 

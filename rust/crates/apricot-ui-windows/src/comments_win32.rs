@@ -25,19 +25,19 @@ use windows::{
             WindowsAndMessaging::{
                 AppendMenuW, CB_ADDSTRING, CB_GETCURSEL, CB_GETDROPPEDSTATE, CB_SETCURSEL,
                 CBN_SELCHANGE, CBS_DROPDOWNLIST, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
-                DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, EN_CHANGE,
-                ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GetClientRect,
-                GetCursorPos, GetMessageW, GetNextDlgTabItem, GetWindowLongPtrW,
-                GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IsChild, IsDialogMessageW,
-                IsWindow, KillTimer, LB_ADDSTRING, LB_GETCURSEL, LB_GETITEMRECT, LB_RESETCONTENT,
-                LB_SETCURSEL, LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, MF_GRAYED,
-                MF_SEPARATOR, MF_STRING, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
-                SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, ShowWindow,
-                TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-                WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
-                WM_CONTEXTMENU, WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW,
-                WS_CHILD, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_TABSTOP,
-                WS_VISIBLE, WS_VSCROLL,
+                DefWindowProcW, DestroyMenu, DispatchMessageW, EN_CHANGE, ES_AUTOHSCROLL,
+                ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GetClientRect, GetCursorPos,
+                GetMessageW, GetNextDlgTabItem, GetWindowLongPtrW, GetWindowTextLengthW,
+                GetWindowTextW, HMENU, IDC_ARROW, IsChild, IsDialogMessageW, IsWindow, KillTimer,
+                LB_ADDSTRING, LB_GETCURSEL, LB_GETITEMRECT, LB_RESETCONTENT, LB_SETCURSEL,
+                LBN_DBLCLK, LBN_SELCHANGE, LBS_NOTIFY, LoadCursorW, MF_GRAYED, MF_SEPARATOR,
+                MF_STRING, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW,
+                SetForegroundWindow, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_LEFTALIGN,
+                TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
+                WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD,
+                WS_EX_CLIENTEDGE, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+                WS_VSCROLL,
             },
         },
     },
@@ -161,7 +161,7 @@ unsafe fn show_inner(owner: HWND, options: CommentsDialogOptions) -> Result<()> 
         announcer: WindowsAnnouncer::new(HWND::default()),
     });
     if let Err(error) = create_controls(window, instance, &mut state) {
-        let _ = DestroyWindow(window);
+        let _ = crate::accessibility_win32::destroy_modal(window);
         return Err(error);
     }
     state.announcer = WindowsAnnouncer::new(state.status);
@@ -176,7 +176,7 @@ unsafe fn show_inner(owner: HWND, options: CommentsDialogOptions) -> Result<()> 
     load_more(window, &mut state);
     layout(window, &state);
     let previous = GetFocus();
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     // Python `wx.CallAfter(search_box.SetFocus)`.
     let _ = SetFocus(Some(state.controls[0]));
@@ -190,7 +190,7 @@ unsafe fn show_inner(owner: HWND, options: CommentsDialogOptions) -> Result<()> 
             } else {
                 PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             }
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         let ours = message.hwnd == window || IsChild(window, message.hwnd).as_bool();
@@ -204,7 +204,7 @@ unsafe fn show_inner(owner: HWND, options: CommentsDialogOptions) -> Result<()> 
                 continue;
             }
             if state.options.back == Some(chord) {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
                 continue;
             }
         }
@@ -214,7 +214,7 @@ unsafe fn show_inner(owner: HWND, options: CommentsDialogOptions) -> Result<()> 
             && SendMessageW(state.controls[1], CB_GETDROPPEDSTATE, None, None).0 == 0
         {
             // Python's Back button is `wx.ID_CANCEL`.
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             continue;
         }
         if crate::accessibility_win32::tab_into_list(window, &message) {
@@ -464,7 +464,7 @@ unsafe fn command(window: HWND, state: &mut State, id: usize) {
         }
         MORE => load_more(window, state),
         BACK => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
         }
         _ => {}
     }
@@ -611,7 +611,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -725,7 +725,7 @@ unsafe fn show_details(owner: HWND, title: &str, back: &str, text: &str) -> Resu
     let (text_control, back_button) = match created {
         Ok(controls) => controls,
         Err(error) => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             return Err(error);
         }
     };
@@ -740,7 +740,7 @@ unsafe fn show_details(owner: HWND, title: &str, back: &str, text: &str) -> Resu
     crate::accessibility_win32::annotate_control_name(text_control, title);
     layout_details(window);
     let previous = GetFocus();
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(text_control));
     let mut message = MSG::default();
@@ -753,12 +753,12 @@ unsafe fn show_details(owner: HWND, title: &str, back: &str, text: &str) -> Resu
             } else {
                 PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             }
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if message.message == WM_KEYDOWN {
             if message.wParam.0 == usize::from(VK_ESCAPE.0) {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
                 continue;
             }
             // A multi-line edit keeps Tab; wxWidgets moves on instead.
@@ -791,7 +791,7 @@ unsafe extern "system" fn details_proc(
 ) -> LRESULT {
     match message {
         WM_COMMAND if wparam.0 & 0xffff == DETAILS_BACK => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_SIZE => {
@@ -799,7 +799,7 @@ unsafe extern "system" fn details_proc(
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         _ => DefWindowProcW(window, message, wparam, lparam),

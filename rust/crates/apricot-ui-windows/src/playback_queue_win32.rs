@@ -15,16 +15,16 @@ use windows::{
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
                 AppendMenuW, BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
-                DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, GetClientRect,
-                GetCursorPos, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW,
-                IsDialogMessageW, IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT,
-                LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY, LoadCursorW, MF_STRING, MSG, MoveWindow,
-                PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW, SetForegroundWindow,
-                SetWindowLongPtrW, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-                TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX,
-                WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_KEYDOWN, WM_NCDESTROY,
-                WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
-                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                DefWindowProcW, DestroyMenu, DispatchMessageW, GetClientRect, GetCursorPos,
+                GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW, IsDialogMessageW,
+                IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT, LB_SETCURSEL, LBN_DBLCLK,
+                LBS_NOTIFY, LoadCursorW, MF_STRING, MSG, MoveWindow, PostQuitMessage,
+                RegisterClassW, SW_SHOW, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+                ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE,
+                WM_COMMAND, WM_CONTEXTMENU, WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE,
+                WNDCLASSW, WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+                WS_VSCROLL,
             },
         },
     },
@@ -134,7 +134,7 @@ pub unsafe fn show(
     let state = match create_controls(window, instance, items, labels) {
         Ok(state) => state,
         Err(error) => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             return Err(error);
         }
     };
@@ -143,7 +143,7 @@ pub unsafe fn show(
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), state_pointer as isize);
     refresh_list(window, 0);
     layout(window);
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(initial_focus));
 
@@ -153,11 +153,11 @@ pub unsafe fn show(
         let status = GetMessageW(&raw mut message, None, 0, 0);
         if status.0 == -1 {
             loop_error = Some(windows::core::Error::from_thread());
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if status.0 == 0 {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             PostQuitMessage(0);
             break;
         }
@@ -211,12 +211,12 @@ unsafe extern "system" fn window_proc(
             } else if command == ID_CLEAR {
                 clear_queue(window);
             } else if command == ID_BACK || command == IDCANCEL_COMMAND {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
             }
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_CONTEXTMENU => {
@@ -359,7 +359,7 @@ unsafe extern "system" fn list_proc(
         && let Ok(parent) = GetParent(control)
     {
         if wparam.0 == usize::from(VK_ESCAPE.0) {
-            let _ = DestroyWindow(parent);
+            let _ = crate::accessibility_win32::destroy_modal(parent);
             return LRESULT(0);
         }
         if wparam.0 == usize::from(VK_RETURN.0) {
@@ -387,7 +387,7 @@ unsafe fn play_selected(window: HWND) {
         return;
     };
     state.play = state.items.get(index).cloned();
-    let _ = DestroyWindow(window);
+    let _ = crate::accessibility_win32::destroy_modal(window);
 }
 
 unsafe fn move_selected(window: HWND, delta: i32) {
@@ -426,7 +426,7 @@ unsafe fn remove_selected(window: HWND) {
     });
     // Python `remove_selected` closes the dialog once the queue is empty.
     if state_mut(window).is_some_and(|state| state.items.is_empty()) {
-        let _ = DestroyWindow(window);
+        let _ = crate::accessibility_win32::destroy_modal(window);
     }
 }
 
@@ -443,7 +443,7 @@ unsafe fn clear_queue(window: HWND) {
     refresh_list(window, 0);
     announce(window, |labels| labels.cleared.clone());
     // Python `clear_queue` closes the dialog after clearing.
-    let _ = DestroyWindow(window);
+    let _ = crate::accessibility_win32::destroy_modal(window);
 }
 
 unsafe fn announce(window: HWND, message: impl FnOnce(&PlaybackQueueDialogLabels) -> String) {

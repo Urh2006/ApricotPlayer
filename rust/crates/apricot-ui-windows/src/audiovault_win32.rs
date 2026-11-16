@@ -680,7 +680,7 @@ pub(super) unsafe fn show_menu(window: HWND) {
     }
     SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
     layout_controls_state(window, state);
-    let _ = SetFocus(Some(state.list));
+    super::focus_list(state.list);
 }
 
 /// Python `activate_audiovault_menu_item`.
@@ -766,7 +766,7 @@ unsafe fn show_results_screen(window: HWND, title: &str, view: View) {
     reset_result_list(state, title);
     layout_controls_state(window, state);
     if GetFocus() != state.list {
-        let _ = SetFocus(Some(state.list));
+        super::focus_list(state.list);
     }
 }
 
@@ -885,7 +885,7 @@ unsafe fn show_results(window: HWND, results: Vec<MediaItem>) {
     state.audiovault.results = results;
     set_status(state, &found, false);
     if GetFocus() != state.list {
-        let _ = SetFocus(Some(state.list));
+        super::focus_list(state.list);
     }
 }
 
@@ -1130,7 +1130,7 @@ unsafe fn show_episodes(window: HWND, show: &MediaItem, episodes: Vec<MediaItem>
     state.audiovault.results = episodes;
     set_status(state, &loaded, false);
     if GetFocus() != state.list {
-        let _ = SetFocus(Some(state.list));
+        super::focus_list(state.list);
     }
 }
 

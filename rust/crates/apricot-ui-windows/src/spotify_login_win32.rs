@@ -15,14 +15,14 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus, VK_ESCAPE},
             WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GetClientRect, GetMessageW,
-                GetWindowLongPtrW, HMENU, IDC_ARROW, IsChild, IsDialogMessageW, IsWindow,
-                LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
-                SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE,
-                WM_COMMAND, WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CAPTION,
-                WS_CHILD, WS_EX_CLIENTEDGE, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, ES_AUTOVSCROLL,
+                ES_MULTILINE, ES_READONLY, GetClientRect, GetMessageW, GetWindowLongPtrW, HMENU,
+                IDC_ARROW, IsChild, IsDialogMessageW, IsWindow, LoadCursorW, MSG, MoveWindow,
+                PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW, SetForegroundWindow,
+                SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
+                WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_KEYDOWN,
+                WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CAPTION, WS_CHILD,
+                WS_EX_CLIENTEDGE, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
             },
         },
     },
@@ -194,7 +194,7 @@ unsafe fn show_win32(
     let state = match built {
         Ok(state) => state,
         Err(error) => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             return Err(error);
         }
     };
@@ -220,7 +220,7 @@ unsafe fn show_win32(
     let pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), pointer as isize);
     layout(window);
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(initial_focus));
     on_open(window);
@@ -230,11 +230,11 @@ unsafe fn show_win32(
         let status = GetMessageW(&raw mut message, None, 0, 0);
         if status.0 == -1 {
             loop_error = Some(windows::core::Error::from_thread());
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if status.0 == 0 {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             break;
         }
@@ -279,7 +279,7 @@ pub unsafe fn update(window: HWND, update: LoginUpdate) {
     match update {
         LoginUpdate::Succeeded => {
             state.outcome = LoginOutcome::Succeeded;
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
         }
         LoginUpdate::Waiting => {
             let text = wide(&state.waiting);
@@ -300,7 +300,7 @@ unsafe fn cancel(window: HWND) {
     if let Some(state) = state(window) {
         (state.actions.cancel)();
     }
-    let _ = DestroyWindow(window);
+    let _ = crate::accessibility_win32::destroy_modal(window);
 }
 
 unsafe extern "system" fn window_proc(

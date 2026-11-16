@@ -17,9 +17,9 @@ use windows::{
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
                 AppendMenuW, BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
-                DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, GetClientRect,
-                GetCursorPos, GetMessageW, GetParent, GetWindowLongPtrW, GetWindowRect, HMENU,
-                IDC_ARROW, IsDialogMessageW, IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT,
+                DefWindowProcW, DestroyMenu, DispatchMessageW, GetClientRect, GetCursorPos,
+                GetMessageW, GetParent, GetWindowLongPtrW, GetWindowRect, HMENU, IDC_ARROW,
+                IsDialogMessageW, IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_RESETCONTENT,
                 LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY, LoadCursorW, MF_GRAYED, MF_STRING, MSG,
                 MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW, SendMessageW,
                 SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD,
@@ -172,9 +172,11 @@ unsafe fn show_win32(
         ID_LIST,
     )?;
     if !SetWindowSubclass(list, Some(list_proc), 1, 0).as_bool() {
-        let _ = DestroyWindow(window);
+        let _ = crate::accessibility_win32::destroy_modal(window);
         return Err(windows::core::Error::from_thread());
     }
+    // The window text of a list box is not its name for screen readers.
+    crate::accessibility_win32::set_control_name(list, labels.list_name);
     let add = create_button(window, instance, ID_ADD, labels.add, false)?;
     let play = create_button(window, instance, ID_PLAY, labels.play, true)?;
     let rename = create_button(window, instance, ID_RENAME, labels.rename, false)?;
@@ -200,7 +202,7 @@ unsafe fn show_win32(
     let pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), pointer as isize);
     layout(window);
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(list));
     let mut loop_error = None;
@@ -209,11 +211,11 @@ unsafe fn show_win32(
         let status = GetMessageW(&raw mut message, None, 0, 0);
         if status.0 == -1 {
             loop_error = Some(windows::core::Error::from_thread());
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if status.0 == 0 {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             break;
         }
@@ -252,7 +254,7 @@ unsafe extern "system" fn window_proc(
             let command = wparam.0 & 0xffff;
             let notification = (wparam.0 >> 16) & 0xffff;
             if command == ID_CLOSE || command == IDCANCEL_COMMAND {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
             } else if command == IDOK_COMMAND {
                 // Enter in the list plays the selected bookmark.
                 dispatch_selected(window, ID_PLAY);
@@ -269,7 +271,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -300,7 +302,7 @@ unsafe extern "system" fn list_proc(
             return LRESULT(0);
         }
         if wparam.0 == usize::from(VK_ESCAPE.0) {
-            let _ = DestroyWindow(parent);
+            let _ = crate::accessibility_win32::destroy_modal(parent);
             return LRESULT(0);
         }
         if wparam.0 == usize::from(VK_F10.0)
@@ -414,10 +416,10 @@ unsafe fn dispatch_action(window: HWND, request: BookmarkDialogRequest) {
         } => {
             state.entries = entries;
             refresh_entries(state, selected_id.as_deref());
-            let _ = SetFocus(Some(state.list));
+            crate::accessibility_win32::focus_list(state.list);
         }
         BookmarkDialogResponse::Close => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
         }
     }
 }

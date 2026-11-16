@@ -692,6 +692,12 @@ struct WindowState {
     /// Counts the screens shown, so late source answers stay away from a
     /// screen the user moved to (review 2.1).
     view_changes: u64,
+    /// While going back from a focused button, the Open button keeps its
+    /// label until the focus is on the next screen, so NVDA does not read
+    /// the new label (beta 8).
+    defer_open_label: std::cell::Cell<bool>,
+    /// The label kept back meanwhile.
+    deferred_open_label: std::cell::RefCell<Option<String>>,
     last_shown_view: MainView,
     /// Player events that arrived while a modal window was open, handled
     /// in order once it closes (review 2.1).
@@ -1010,6 +1016,22 @@ unsafe fn focus_tab_target(window: HWND, target: HWND) {
         let _ = SetFocus(Some(window));
     }
     let _ = SetFocus(Some(target));
+}
+
+/// Moves the focus onto a list by way of its window: straight from a button
+/// NVDA read the selected item twice (beta 8).
+unsafe fn focus_list(list: HWND) {
+    crate::accessibility_win32::focus_list(list);
+}
+
+/// Whether the focus is on a button, whose label a screen change may
+/// rewrite while NVDA still reads it.
+unsafe fn focus_on_button() -> bool {
+    let mut class = [0_u16; 16];
+    let length = windows::Win32::UI::WindowsAndMessaging::GetClassNameW(GetFocus(), &mut class);
+    usize::try_from(length).is_ok_and(|length| {
+        String::from_utf16_lossy(&class[..length]).eq_ignore_ascii_case("Button")
+    })
 }
 
 /// Python `background_player_previous_target`: the screen's list, or its
@@ -2286,6 +2308,8 @@ unsafe fn create_controls(
         sources_panel: None,
         podcast_search_view: None,
         view_changes: 0,
+        defer_open_label: std::cell::Cell::new(false),
+        deferred_open_label: std::cell::RefCell::new(None),
         last_shown_view: MainView::MainMenu,
         deferred_playback: std::collections::VecDeque::new(),
         clip_exports: Vec::new(),
@@ -3793,7 +3817,13 @@ unsafe fn restore_from_tray(window: HWND) {
         state.lifecycle = WindowLifecycle::Visible;
     }
     crate::activation_win32::restore_window(window);
-    if let Some(state) = state(window) {
+    // The focus already in the window stays: every screen change passes
+    // here, and moving it to the old list first made NVDA read that list
+    // before the new screen (beta 8).
+    let focus = GetFocus();
+    let inside = focus == window
+        || windows::Win32::UI::WindowsAndMessaging::IsChild(window, focus).as_bool();
+    if !inside && let Some(state) = state(window) {
         let _ = SetFocus(Some(active_primary_control(state)));
     }
 }
@@ -3912,8 +3942,37 @@ unsafe fn activate_selection(window: HWND) {
     }
 }
 
-#[allow(clippy::too_many_lines)] // One dispatch over every main menu entry.
+/// Runs the selected main menu entry.
 unsafe fn activate_main_menu_selection(window: HWND) {
+    let Some((item_id, _)) = selected_main_menu_item(window) else {
+        return;
+    };
+    let screen = matches!(
+        item_id,
+        "search"
+            | "trending"
+            | "direct_link"
+            | "favorites"
+            | "history"
+            | "notification_center"
+            | "subscriptions"
+            | "rss_feeds"
+            | "playlists"
+            | "current_downloads"
+            | "audiovault"
+            | "spotify"
+    );
+    let parked = if screen {
+        state(window).and_then(|state| park_focus(window, state))
+    } else {
+        None
+    };
+    activate_main_menu_item(window);
+    unpark_focus(window, parked);
+}
+
+#[allow(clippy::too_many_lines)] // One dispatch over every main menu entry.
+unsafe fn activate_main_menu_item(window: HWND) {
     let Some((item_id, item_label)) = selected_main_menu_item(window) else {
         return;
     };
@@ -4101,7 +4160,7 @@ unsafe fn show_channel_options(window: HWND, item: apricot_core::MediaItem) {
         Ok(Some(3)) => YoutubeCollectionKind::ChannelPopular,
         Ok(Some(_) | None) => {
             if let Some(state) = state(window) {
-                let _ = SetFocus(Some(state.list));
+                focus_list(state.list);
             }
             return;
         }
@@ -4277,7 +4336,7 @@ unsafe fn play_youtube_playlist(window: HWND, item: &apricot_core::MediaItem, sh
             let message = error.to_string();
             set_status(state, &message, true);
             show_error_message(window, &message);
-            let _ = SetFocus(Some(state.list));
+            focus_list(state.list);
         }
     }
 }
@@ -5352,7 +5411,7 @@ unsafe fn show_main_menu(window: HWND) {
     refresh_main_menu(state, MainMenuSelection::LastActivated);
     set_status(state, &catalog_text(&state.application, "ready"), false);
     layout_controls_state(window, state);
-    let _ = SetFocus(Some(state.list));
+    focus_list(state.list);
 }
 
 unsafe fn show_search(window: HWND) {
@@ -5737,7 +5796,7 @@ unsafe fn refresh_rss_feeds(state: &mut WindowState, focus: bool, preferred_url:
         );
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -5892,7 +5951,7 @@ unsafe fn refresh_rss_items(state: &mut WindowState, focus: bool, announce_statu
         );
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -6545,7 +6604,7 @@ unsafe fn refresh_podcast_directory_results(state: &mut WindowState, focus: bool
         );
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -6644,7 +6703,7 @@ unsafe fn choose_rss_category_filter(window: HWND) {
         }
         Ok(None) => {
             if let Some(state) = state(window) {
-                let _ = SetFocus(Some(state.list));
+                focus_list(state.list);
             }
         }
         Err(error) => show_error_message(window, &format!("Category filter did not open: {error}")),
@@ -6708,7 +6767,7 @@ unsafe fn set_selected_rss_category(window: HWND) {
         }
         Ok(None) => {
             if let Some(state) = state(window) {
-                let _ = SetFocus(Some(state.list));
+                focus_list(state.list);
             }
         }
         Err(error) => show_error_message(window, &format!("Category editor did not open: {error}")),
@@ -6834,7 +6893,7 @@ unsafe fn choose_rss_speed_preset(window: HWND) {
         }
         Ok(None) => {
             if let Some(state) = state(window) {
-                let _ = SetFocus(Some(state.list));
+                focus_list(state.list);
             }
         }
         Err(error) => show_error_message(window, &format!("Speed preset did not open: {error}")),
@@ -7346,7 +7405,7 @@ unsafe fn refresh_podcast_categories(state: &WindowState, focus: bool) {
     SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
     set_status(state, catalog.text("podcast_categories_title"), false);
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -7547,7 +7606,7 @@ unsafe fn choose_subscription_category_filter(window: HWND) {
         }
         Ok(None) => {
             if let Some(state) = state(window) {
-                let _ = SetFocus(Some(state.list));
+                focus_list(state.list);
             }
         }
         Err(error) => show_error_message(window, &format!("Category filter did not open: {error}")),
@@ -7617,7 +7676,7 @@ unsafe fn set_selected_subscription_category(window: HWND) {
         }
         Ok(None) => {
             if let Some(state) = state(window) {
-                let _ = SetFocus(Some(state.list));
+                focus_list(state.list);
             }
         }
         Err(error) => show_error_message(window, &format!("Category editor did not open: {error}")),
@@ -8087,6 +8146,10 @@ unsafe fn navigate_back_impl(window: HWND, keep_playing: bool) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    // The focused button gets the label of the screen below; the window
+    // holds the focus meanwhile, so NVDA does not read the new label and
+    // then the list (beta 8).
+    let parked = park_focus(window, state);
     cancel_youtube_work(window, state);
     cancel_local_folder_scan(window, state);
     let leaving_youtube_collection = state.view == MainView::YoutubeCollection;
@@ -8227,8 +8290,50 @@ unsafe fn navigate_back_impl(window: HWND, keep_playing: bool) {
             state.view = MainView::MainMenu;
             refresh_main_menu(state, MainMenuSelection::LastActivated);
             layout_controls_state(window, state);
-            let _ = SetFocus(Some(state.list));
+            focus_list(state.list);
         }
+    }
+    unpark_focus(window, parked);
+}
+
+/// The focus held by the window while a button opens another screen.
+struct ParkedFocus {
+    list: HWND,
+    open: HWND,
+}
+
+/// A button that opens another screen gets that screen's label; the window
+/// holds the focus meanwhile and the Open button keeps its label until
+/// [`unpark_focus`], so NVDA does not read the new label and then the list
+/// twice (beta 8).
+unsafe fn park_focus(window: HWND, state: &WindowState) -> Option<ParkedFocus> {
+    if !focus_on_button() {
+        return None;
+    }
+    let _ = SetFocus(Some(window));
+    state.defer_open_label.set(true);
+    Some(ParkedFocus {
+        list: state.list,
+        open: state.open,
+    })
+}
+
+/// Ends [`park_focus`]: the screen's list takes the focus when nothing else
+/// did, and the Open button gets its new label.
+unsafe fn unpark_focus(window: HWND, parked: Option<ParkedFocus>) {
+    let Some(parked) = parked else {
+        return;
+    };
+    if GetFocus() == window {
+        focus_list(parked.list);
+    }
+    let label = state(window).and_then(|state| {
+        state.defer_open_label.set(false);
+        state.deferred_open_label.borrow_mut().take()
+    });
+    if let Some(label) = label {
+        let label = wide(&label);
+        let _ = SetWindowTextW(parked.open, PCWSTR(label.as_ptr()));
     }
 }
 
@@ -8525,7 +8630,7 @@ unsafe fn refresh_download_queue(state: &mut WindowState, focus: bool, announce_
         set_status(state, &message, true);
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -11244,7 +11349,7 @@ unsafe fn finish_youtube_playlist_playback(
             &catalog_text(&state.application, "playlist_no_videos"),
             true,
         );
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -12008,7 +12113,7 @@ unsafe fn refresh_results(state: &mut WindowState, focus: bool) {
         set_status(state, &found, false);
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -12031,7 +12136,7 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
         set_status(state, &loading, false);
         if focus {
-            let _ = SetFocus(Some(state.list));
+            focus_list(state.list);
         }
         return;
     }
@@ -12056,7 +12161,7 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
         set_status(state, &found, false);
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -12082,7 +12187,7 @@ unsafe fn refresh_local_folder(state: &mut WindowState, focus: bool, announce_st
         set_status(state, &message, announce_status);
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -12125,7 +12230,7 @@ unsafe fn refresh_media_collection(state: &mut WindowState, focus: bool) {
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -12160,7 +12265,7 @@ unsafe fn refresh_notification_center(
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -12215,7 +12320,7 @@ unsafe fn refresh_subscriptions(state: &mut WindowState, focus: bool, preferred_
         );
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -12334,7 +12439,7 @@ unsafe fn refresh_user_playlists(state: &mut WindowState, focus: bool) {
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(selected)), None);
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -12385,7 +12490,7 @@ unsafe fn refresh_user_playlist_items(state: &mut WindowState, focus: bool, anno
         );
     }
     if focus {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -12452,6 +12557,10 @@ fn local_folder_result_label(
 
 unsafe fn set_open_button_label(state: &WindowState, key: &str) {
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    if state.defer_open_label.get() {
+        *state.deferred_open_label.borrow_mut() = Some(catalog.text(key).to_owned());
+        return;
+    }
     let label = wide(catalog.text(key));
     let _ = SetWindowTextW(state.open, PCWSTR(label.as_ptr()));
 }
@@ -13740,7 +13849,7 @@ unsafe fn exit_fullscreen_to_results(window: HWND) {
         && state.view == MainView::Player
         && state.embedded_results.is_some()
     {
-        let _ = SetFocus(Some(state.list));
+        focus_list(state.list);
     }
 }
 
@@ -14666,6 +14775,14 @@ unsafe fn clear_notifications(window: HWND) {
 unsafe fn show_bookmarks_dialog(window: HWND, current_only: bool, return_on_close: bool) {
     if !current_only {
         remember_menu_item(window, "bookmarks");
+        // Python shows Bookmarks as a screen and goes back to the main menu
+        // on that item; here the main menu below the window moves to it
+        // before the window opens (beta 8).
+        if let Some(state) = state_mut(window)
+            && state.view == MainView::MainMenu
+        {
+            refresh_main_menu(state, MainMenuSelection::LastActivated);
+        }
     }
     let Some((labels, entries, can_add)) = state_mut(window).map(|state| {
         state.modal_open = true;

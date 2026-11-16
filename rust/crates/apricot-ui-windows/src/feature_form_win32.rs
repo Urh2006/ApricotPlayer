@@ -14,8 +14,8 @@ use windows::{
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
                 BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, CBS_DROPDOWNLIST, CW_USEDEFAULT,
-                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, ES_AUTOHSCROLL,
-                ES_PASSWORD, ES_READONLY, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW,
+                CreateWindowExW, DefWindowProcW, DispatchMessageW, ES_AUTOHSCROLL, ES_PASSWORD,
+                ES_READONLY, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW,
                 GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IsDialogMessageW, IsWindow,
                 LoadCursorW, MB_ICONWARNING, MB_OK, MSG, MessageBoxW, MoveWindow, PostQuitMessage,
                 RegisterClassW, SB_VERT, SCROLLINFO, SIF_PAGE, SIF_POS, SIF_RANGE, SW_SHOW,
@@ -124,7 +124,7 @@ unsafe fn show_inner(
     let (fields, submit, cancel) = match controls {
         Ok(controls) => controls,
         Err(error) => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             return Err(error);
         }
     };
@@ -143,7 +143,7 @@ unsafe fn show_inner(
         std::ptr::from_mut(state.as_mut()) as isize,
     );
     let owner_enabled = IsWindowEnabled(owner).as_bool();
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     layout(window, &mut state);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetForegroundWindow(window);
@@ -160,7 +160,7 @@ unsafe fn show_inner(
             if received == 0 {
                 PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             }
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if crate::accessibility_win32::tab_into_list(window, &message) {
@@ -453,18 +453,18 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, w: WPARAM, l: 
     if let Some(state) = ptr.as_mut() {
         match message {
             WM_CLOSE => {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
                 return LRESULT(0);
             }
             WM_COMMAND if w.0 & 0xffff == 2 => {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
                 return LRESULT(0);
             }
             WM_COMMAND if w.0 & 0xffff == 1 => {
                 match state.form.validate(&read_values(state)) {
                     Ok(values) => {
                         state.result = Some(values);
-                        let _ = DestroyWindow(window);
+                        let _ = crate::accessibility_win32::destroy_modal(window);
                     }
                     Err(label) => {
                         let message = wide(&state.form.error_message(&label));

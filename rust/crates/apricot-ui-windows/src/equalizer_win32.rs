@@ -25,12 +25,12 @@ use windows::{
             Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus},
             WindowsAndMessaging::{
                 BS_DEFPUSHBUTTON, CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT, CB_SETCURSEL,
-                CBS_DROPDOWNLIST, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-                DispatchMessageW, ES_AUTOHSCROLL, GetClientRect, GetMessageW, GetParent,
-                GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU,
-                IDC_ARROW, IDYES, IsDialogMessageW, IsWindow, KillTimer, LoadCursorW, MB_ICONERROR,
-                MB_ICONQUESTION, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MSG, MessageBoxW, MoveWindow,
-                PostQuitMessage, RegisterClassW, SM_CYMAXIMIZED, SW_HIDE, SW_SHOW, SendMessageW,
+                CBS_DROPDOWNLIST, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW,
+                ES_AUTOHSCROLL, GetClientRect, GetMessageW, GetParent, GetSystemMetrics,
+                GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IDYES,
+                IsDialogMessageW, IsWindow, KillTimer, LoadCursorW, MB_ICONERROR, MB_ICONQUESTION,
+                MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MSG, MessageBoxW, MoveWindow, PostQuitMessage,
+                RegisterClassW, SM_CYMAXIMIZED, SW_HIDE, SW_SHOW, SendMessageW,
                 SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
                 TranslateMessage, WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE,
                 WM_COMMAND, WM_HSCROLL, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSW,
@@ -276,7 +276,7 @@ unsafe fn show_win32(owner: HWND, host: Box<dyn EqualizerDialogHost>) -> Result<
             accepted: false,
         },
         Err(error) => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             return Err(error);
         }
     };
@@ -285,7 +285,7 @@ unsafe fn show_win32(owner: HWND, host: Box<dyn EqualizerDialogHost>) -> Result<
     let pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), pointer as isize);
     layout(window);
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(initial_focus));
     let mut loop_error = None;
@@ -294,11 +294,11 @@ unsafe fn show_win32(owner: HWND, host: Box<dyn EqualizerDialogHost>) -> Result<
         let status = GetMessageW(&raw mut message, None, 0, 0);
         if status.0 == -1 {
             loop_error = Some(windows::core::Error::from_thread());
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if status.0 == 0 {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             break;
         }
@@ -524,7 +524,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -566,7 +566,7 @@ unsafe fn button_clicked(window: HWND, button: DialogButton) {
         }
         DialogButton::Ok => accept(window),
         DialogButton::Cancel => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
         }
         DialogButton::Reset => reset_preset(window),
         DialogButton::SaveGlobal => save_as_global(window),
@@ -596,7 +596,7 @@ unsafe fn accept(window: HWND) {
     let preset = current_preset(state);
     state.host.set_session_preset(Some(preset));
     state.accepted = true;
-    let _ = DestroyWindow(window);
+    let _ = crate::accessibility_win32::destroy_modal(window);
 }
 
 fn current_preset(state: &DialogState) -> String {
@@ -1528,7 +1528,7 @@ mod tests {
                     preset_before
                 );
             }
-            DestroyWindow(parent).unwrap();
+            windows::Win32::UI::WindowsAndMessaging::DestroyWindow(parent).unwrap();
         }
     }
 

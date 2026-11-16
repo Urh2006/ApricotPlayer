@@ -14,11 +14,11 @@ use windows::{
             Input::KeyboardAndMouse::{EnableWindow, GetFocus, SetFocus, VK_ESCAPE, VK_RETURN},
             Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
             WindowsAndMessaging::{
-                BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-                DispatchMessageW, ES_AUTOHSCROLL, GetClientRect, GetMessageW, GetParent,
-                GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IsChild,
-                IsDialogMessageW, IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, LBN_DBLCLK,
-                LBS_NOTIFY, LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
+                BS_DEFPUSHBUTTON, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW,
+                ES_AUTOHSCROLL, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW,
+                GetWindowTextLengthW, GetWindowTextW, HMENU, IDC_ARROW, IsChild, IsDialogMessageW,
+                IsWindow, LB_ADDSTRING, LB_GETCURSEL, LB_SETCURSEL, LBN_DBLCLK, LBS_NOTIFY,
+                LoadCursorW, MSG, MoveWindow, PostQuitMessage, RegisterClassW, SW_SHOW,
                 SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage,
                 WINDOW_EX_STYLE, WINDOW_LONG_PTR_INDEX, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
                 WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD,
@@ -254,7 +254,7 @@ unsafe fn prompt_name_win32(
         cancel_label,
     )?;
     if !SetWindowSubclass(state.base.value, Some(name_value_proc), 1, 0).as_bool() {
-        let _ = DestroyWindow(window);
+        let _ = crate::accessibility_win32::destroy_modal(window);
         return Err(windows::core::Error::from_thread());
     }
     let initial_value = wide(initial_value);
@@ -320,7 +320,7 @@ unsafe fn choose_win32(
         );
     }
     if !SetWindowSubclass(state.base.value, Some(picker_value_proc), 1, 0).as_bool() {
-        let _ = DestroyWindow(window);
+        let _ = crate::accessibility_win32::destroy_modal(window);
         return Err(windows::core::Error::from_thread());
     }
     run_modal(window, owner, state, |state| state.result)
@@ -406,7 +406,7 @@ unsafe fn run_modal<T, R>(
     let pointer = Box::into_raw(Box::new(state));
     SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), pointer as isize);
     layout(window);
-    let _ = EnableWindow(owner, false);
+    crate::accessibility_win32::disable_owner(window, owner);
     let _ = ShowWindow(window, SW_SHOW);
     let _ = SetFocus(Some(initial_focus));
     let mut loop_error = None;
@@ -415,11 +415,11 @@ unsafe fn run_modal<T, R>(
         let status = GetMessageW(&raw mut message, None, 0, 0);
         if status.0 == -1 {
             loop_error = Some(windows::core::Error::from_thread());
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             break;
         }
         if status.0 == 0 {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             PostQuitMessage(i32::try_from(message.wParam.0).unwrap_or_default());
             break;
         }
@@ -431,7 +431,7 @@ unsafe fn run_modal<T, R>(
             continue;
         }
         if message.message == WM_KEYDOWN && message.wParam.0 == usize::from(VK_ESCAPE.0) {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             continue;
         }
         if crate::accessibility_win32::tab_into_list(window, &message) {
@@ -470,12 +470,12 @@ unsafe extern "system" fn name_window_proc(
             if command == ID_OK || command == IDOK_COMMAND {
                 accept_name(window);
             } else if command == ID_CANCEL || command == IDCANCEL_COMMAND {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
             }
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -507,12 +507,12 @@ unsafe extern "system" fn picker_window_proc(
             {
                 accept_choice(window);
             } else if command == ID_CANCEL || command == IDCANCEL_COMMAND {
-                let _ = DestroyWindow(window);
+                let _ = crate::accessibility_win32::destroy_modal(window);
             }
             LRESULT(0)
         }
         WM_CLOSE => {
-            let _ = DestroyWindow(window);
+            let _ = crate::accessibility_win32::destroy_modal(window);
             LRESULT(0)
         }
         WM_NCDESTROY => {
@@ -539,7 +539,7 @@ unsafe extern "system" fn name_value_proc(
             return LRESULT(0);
         }
         if wparam.0 == usize::from(VK_ESCAPE.0) {
-            let _ = DestroyWindow(parent);
+            let _ = crate::accessibility_win32::destroy_modal(parent);
             return LRESULT(0);
         }
     }
@@ -565,7 +565,7 @@ unsafe extern "system" fn picker_value_proc(
             return LRESULT(0);
         }
         if wparam.0 == usize::from(VK_ESCAPE.0) {
-            let _ = DestroyWindow(parent);
+            let _ = crate::accessibility_win32::destroy_modal(parent);
             return LRESULT(0);
         }
     }
@@ -584,7 +584,7 @@ unsafe fn accept_name(window: HWND) {
     let copied = GetWindowTextW(state.base.value, &mut value);
     let value = String::from_utf16_lossy(&value[..usize::try_from(copied).unwrap_or_default()]);
     state.result = Some(value);
-    let _ = DestroyWindow(window);
+    let _ = crate::accessibility_win32::destroy_modal(window);
 }
 
 unsafe fn accept_choice(window: HWND) {
@@ -596,7 +596,7 @@ unsafe fn accept_choice(window: HWND) {
         return;
     };
     state.result = Some(index);
-    let _ = DestroyWindow(window);
+    let _ = crate::accessibility_win32::destroy_modal(window);
 }
 
 unsafe fn layout(window: HWND) {
