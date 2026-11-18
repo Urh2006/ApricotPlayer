@@ -1,3 +1,14 @@
+# v2.1.0-rc.2 - Sound changes while paused for streams and Spotify, clear Spotify refusal
+
+This is the second release candidate of ApricotPlayer 2.1. Everything from 2.1.0-rc.1 and the 2.1 betas is included.
+
+## Fixed
+
+- Changing the volume, speed or pitch while paused no longer plays a short moment with the old setting when you press Play again, now also for radio, other live streams and Spotify. Release candidate 1 fixed this only for files.
+- When Spotify refuses to play the songs of an account, ApricotPlayer now says so clearly instead of asking you to try the song again. Spotify currently does this for some accounts in every program that plays Spotify the way ApricotPlayer does, and trying again does not help.
+
+The Mac version requires an Apple silicon Mac running macOS 27 or later. After copying ApricotPlayer to Applications, you may need to approve its first launch in System Settings, Privacy & Security, using Open Anyway. Download only the official release files.
+
 # v2.1.0-rc.1 - First release candidate of 2.1
 
 This is the first release candidate of ApricotPlayer 2.1. It fixes what a fourth full review of the 2.1 betas found, most of all around saved data, recordings and Spotify. Everything from the 2.1 betas is included.

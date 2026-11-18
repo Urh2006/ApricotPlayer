@@ -78,6 +78,9 @@ enum LoadFailure {
     Interrupted,
     /// Spotify's audio key limit still refused the key after the whole wait.
     KeyLimited,
+    /// ApricotPlayer patch: Spotify refused the key for good (code 0x0001);
+    /// another try cannot help.
+    KeyRefused,
 }
 
 /// Runs `attempt` until it loads, reports the track unavailable, or was
@@ -94,7 +97,11 @@ where
     for number in 1..=attempts {
         match attempt().await {
             Ok(loaded) => return Ok(loaded),
-            Err(failure @ (LoadFailure::Unavailable | LoadFailure::KeyLimited)) => {
+            Err(
+                failure @ (LoadFailure::Unavailable
+                | LoadFailure::KeyLimited
+                | LoadFailure::KeyRefused),
+            ) => {
                 return Err(failure);
             }
             Err(LoadFailure::Interrupted) if number < attempts => {
@@ -125,7 +132,7 @@ impl LoadFailure {
                 track_id,
                 play_request_id,
             },
-            Self::Interrupted | Self::KeyLimited => PlayerEvent::LoadingFailed {
+            Self::Interrupted | Self::KeyLimited | Self::KeyRefused => PlayerEvent::LoadingFailed {
                 track_id,
                 play_request_id,
             },
@@ -1401,6 +1408,10 @@ impl PlayerTrackLoader {
                     }
                     Ok(false) if AudioKeyError::is_rate_limited(&e) => {
                         Some(self.wait_for_limited_key(track_id, file_id).await?)
+                    }
+                    Ok(false) if AudioKeyError::is_refused(&e) => {
+                        error!("Spotify refused the key of this song: {e}");
+                        return Err(LoadFailure::KeyRefused);
                     }
                     Ok(false) => {
                         error!("Unable to load key: {e}");

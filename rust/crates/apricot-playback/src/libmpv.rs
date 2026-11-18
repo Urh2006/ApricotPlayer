@@ -1238,7 +1238,9 @@ impl PlaybackEngine for LibMpvEngine {
                 )?;
             }
             if flush_now && !seekable {
-                let _ = self.api.run_command(self.handle(), &["ao-reload".to_owned()]);
+                let _ = self
+                    .api
+                    .run_command(self.handle(), &["ao-reload".to_owned()]);
             } else if flush_now {
                 // A seek to where playback stands drops what the device and
                 // mpv hold, so Play starts with the new settings.

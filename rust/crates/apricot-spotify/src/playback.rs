@@ -629,9 +629,14 @@ impl Shared {
     /// The current song's key or download failed even after a retry: the
     /// player says so, and the song stays playable for another try.
     fn report_interrupted(&self) {
-        self.push_event(PcmSourceEvent::Failed(
-            "spotify_playback_interrupted".to_owned(),
-        ));
+        // Spotify refuses the keys of every song for some accounts; trying
+        // again does not help, so the message says so (librespot issue 1649).
+        let key = if librespot_core::audio_key::take_key_refused() {
+            "spotify_key_refused"
+        } else {
+            "spotify_playback_interrupted"
+        };
+        self.push_event(PcmSourceEvent::Failed(key.to_owned()));
         (self.notify)();
     }
 

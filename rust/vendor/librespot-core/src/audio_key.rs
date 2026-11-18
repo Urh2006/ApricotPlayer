@@ -28,6 +28,21 @@ pub trait AudioKeyStore: Send + Sync {
 /// for the whole account; refused requests did not delay the next key.
 pub const AUDIO_KEY_RATE_LIMITED: u16 = 0x0002;
 
+/// ApricotPlayer patch: Spotify's refusal code that comes back for every
+/// song of some accounts; asking again does not help (librespot issue
+/// 1649).
+pub const AUDIO_KEY_REFUSED: u16 = 0x0001;
+
+/// ApricotPlayer patch: a key was refused with [`AUDIO_KEY_REFUSED`] since
+/// the last [`take_key_refused`].
+static KEY_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// ApricotPlayer patch: whether Spotify refused a key with
+/// [`AUDIO_KEY_REFUSED`] since the last call.
+pub fn take_key_refused() -> bool {
+    KEY_REFUSED.swap(false, std::sync::atomic::Ordering::SeqCst)
+}
+
 #[derive(Debug, Error)]
 pub enum AudioKeyError {
     #[error("audio key error {0:#06x}")]
@@ -86,6 +101,14 @@ impl AudioKeyError {
             Some(Self::AesKey(AUDIO_KEY_RATE_LIMITED))
         )
     }
+
+    /// ApricotPlayer patch: Spotify refused the key for good.
+    pub fn is_refused(error: &Error) -> bool {
+        matches!(
+            error.error.downcast_ref::<Self>(),
+            Some(Self::AesKey(AUDIO_KEY_REFUSED))
+        )
+    }
 }
 
 impl AudioKeyManager {
@@ -110,6 +133,9 @@ impl AudioKeyManager {
                     _ => 0,
                 };
                 error!("error audio key {:x} {:x}", code >> 8, code & 0xff);
+                if code == AUDIO_KEY_REFUSED {
+                    KEY_REFUSED.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
                 sender
                     .send(Err(AudioKeyError::AesKey(code).into()))
                     .map_err(|_| AudioKeyError::Channel)?
