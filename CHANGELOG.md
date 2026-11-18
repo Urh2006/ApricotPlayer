@@ -1,3 +1,13 @@
+# v2.1.0-rc.3 - No more pauses when the volume changes during playback
+
+This is the third release candidate of ApricotPlayer 2.1. Everything from 2.1.0-rc.2 and the 2.1 betas is included.
+
+## Fixed
+
+- Changing the volume, speed or pitch while something plays no longer stops the sound for about half a second. This happened in release candidate 2 after a song change, mostly with Spotify, until you paused and played again.
+
+The Mac version requires an Apple silicon Mac running macOS 27 or later. After copying ApricotPlayer to Applications, you may need to approve its first launch in System Settings, Privacy & Security, using Open Anyway. Download only the official release files.
+
 # v2.1.0-rc.2 - Sound changes while paused for streams and Spotify, clear Spotify refusal
 
 This is the second release candidate of ApricotPlayer 2.1. Everything from 2.1.0-rc.1 and the 2.1 betas is included.

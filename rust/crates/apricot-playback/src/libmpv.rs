@@ -1186,7 +1186,12 @@ impl PlaybackEngine for LibMpvEngine {
         // A sound change while paused empties the audio buffers at once,
         // while still paused: emptying them on Play came too late, because
         // mpv resumes the device before it runs the seek.
-        let flush_now = self.requested_paused && changes_sound(&command);
+        // mpv's own pause state decides: after a song change, Spotify and
+        // the end of a song set it without a pause from the user, and a
+        // flush while playing stopped the sound for half a second (RC 2).
+        let flush_now = self.requested_paused
+            && changes_sound(&command)
+            && unsafe { self.api.property_flag(self.handle(), "pause") } == Some(true);
         // A file can seek, which also empties the filters (speed, pitch); a
         // live stream or a Spotify song cannot, so only the sound device is
         // started again, which drops the sound it already holds. Measured:

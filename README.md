@@ -4,7 +4,7 @@ ApricotPlayer is an accessible media player and downloader for Windows and macOS
 
 The current stable release is **2.0.3**, written in Rust with native Windows and Mac interfaces. It brings Spotify and macOS support alongside the familiar ApricotPlayer features. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
 
-Version **2.1.0-rc.2** is available as a pre-release through the Beta update channel. It is the second release candidate of 2.1, which adds a 15-band equalizer with advanced settings, audio processing, crossfade, a sleep timer, A-B repeat and saved excerpts, subtitles read aloud, an audiobook mode, a playlist editor, file management, Radio, IPTV, recording, converter options, YouTube search suggestions, media keys, Spotify playlist subscriptions, a categorized shortcut editor, settings and bookmark backups, seek amounts, percentage jumps, global shortcuts and file tools. Its release notes and the notes of the 2.1 betas describe every new command and its keys.
+Version **2.1.0-rc.3** is available as a pre-release through the Beta update channel. It is the third release candidate of 2.1, which adds a 15-band equalizer with advanced settings, audio processing, crossfade, a sleep timer, A-B repeat and saved excerpts, subtitles read aloud, an audiobook mode, a playlist editor, file management, Radio, IPTV, recording, converter options, YouTube search suggestions, media keys, Spotify playlist subscriptions, a categorized shortcut editor, settings and bookmark backups, seek amounts, percentage jumps, global shortcuts and file tools. Its release notes and the notes of the 2.1 betas describe every new command and its keys.
 
 ## Contents
 
