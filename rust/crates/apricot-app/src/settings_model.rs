@@ -72,6 +72,8 @@ pub enum SettingsCommand {
     ExportBookmarks,
     ImportBookmarks,
     GlobalShortcuts,
+    /// Spotify: the followed artists whose new releases are announced.
+    SpotifyReleases,
 }
 
 impl SettingsCommand {
@@ -1623,6 +1625,10 @@ fn spotify_controls(
             label: catalog.text("spotify_key_cache").to_owned(),
             checked: spotify.key_cache,
         },
+        SettingsControl::Command {
+            command: SettingsCommand::SpotifyReleases,
+            label: catalog.text("spotify_releases_settings").to_owned(),
+        },
     ]
 }
 
@@ -2143,7 +2149,7 @@ mod tests {
             (SettingsSection::Notifications, 5),
             (SettingsSection::Cookies, 13),
             (SettingsSection::Audiovault, 5),
-            (SettingsSection::Spotify, 7),
+            (SettingsSection::Spotify, 8),
             // Recording has no reset button yet.
             (SettingsSection::Recording, 1),
             // Search, categories, filter, list, capture, four commands, reset.

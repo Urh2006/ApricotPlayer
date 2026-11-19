@@ -635,6 +635,11 @@ impl Shell {
         ui: &mut dyn ShellUi,
         change: apricot_spotify::playlist_subscriptions::PlaylistChanges,
     ) {
+        // A new release opens its album (2.1, RC 4).
+        if change.release.is_some() {
+            self.browse_open(ui, Source::Album(change.uri), change.name);
+            return;
+        }
         let items = if change.added.is_empty() {
             change.removed.clone()
         } else {

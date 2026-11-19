@@ -327,7 +327,16 @@ impl Shell {
         let Some(index) = ui.selected_row() else {
             return;
         };
-        if let Some(item) = self.application.prepare_notification_playback(index) {
+        // A Spotify playlist change or new release is a list, not something
+        // to play, so it is opened before the playable check (RC 4).
+        let change_item = self
+            .application
+            .notifications()
+            .get(index)
+            .and_then(|notification| notification.item.clone())
+            .filter(|item| crate::spotify_subscriptions::item_changes(item).is_some());
+        let item = change_item.or_else(|| self.application.prepare_notification_playback(index));
+        if let Some(item) = item {
             if let Some(change) = crate::spotify_subscriptions::item_changes(&item) {
                 let account = item
                     .metadata

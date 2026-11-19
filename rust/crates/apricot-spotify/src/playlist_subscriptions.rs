@@ -52,11 +52,117 @@ pub struct PlaylistChanges {
     pub added: Vec<CatalogItem>,
     pub removed: Vec<CatalogItem>,
     pub reordered: bool,
+    /// A new release of a followed artist instead of a playlist change; its
+    /// `uri` is the album (2.1, RC 4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<ReleaseInfo>,
 }
 impl PlaylistChanges {
     pub fn is_empty(&self) -> bool {
-        self.added.is_empty() && self.removed.is_empty() && !self.reordered
+        self.added.is_empty()
+            && self.removed.is_empty()
+            && !self.reordered
+            && self.release.is_none()
     }
+}
+
+/// What a new release is: its artists, its type and its date.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseInfo {
+    pub artists: Vec<String>,
+    /// Spotify's album type: `ALBUM`, `SINGLE`, `EP` or `COMPILATION`.
+    pub kind: String,
+    /// The release date as Spotify gives it, for example `2026-11-19`.
+    pub date: String,
+}
+
+/// Which followed artists announce their new releases, like playlist
+/// subscriptions announce changes (2.1, RC 4).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtistReleaseOptions {
+    /// Every followed artist announces, also one followed later, except the
+    /// `excluded` ones.
+    pub all: bool,
+    pub included: BTreeSet<String>,
+    pub excluded: BTreeSet<String>,
+    /// The newest change from the settings window that was applied, so an
+    /// older one arriving late never undoes it.
+    pub revision: u64,
+    /// Releases already seen in Spotify's feed, oldest first.
+    pub seen: Vec<String>,
+    /// The feed was read once since releases were turned on; until then
+    /// every release in it is only remembered, not announced.
+    pub seeded: bool,
+    pub last_checked: u64,
+}
+
+impl ArtistReleaseOptions {
+    #[must_use]
+    pub fn is_enabled(&self, artist: &str) -> bool {
+        if self.all {
+            !self.excluded.contains(artist)
+        } else {
+            self.included.contains(artist)
+        }
+    }
+
+    #[must_use]
+    pub fn any_enabled(&self) -> bool {
+        self.all || !self.included.is_empty()
+    }
+
+    /// Turns one artist on or off.
+    pub fn set(&mut self, artist: &str, enabled: bool) {
+        let before = self.any_enabled();
+        // On for all keeps only the exceptions; otherwise only the chosen.
+        let list = if self.all {
+            &mut self.excluded
+        } else {
+            &mut self.included
+        };
+        if enabled == self.all {
+            list.remove(artist);
+        } else {
+            list.insert(artist.to_owned());
+        }
+        self.started(before);
+    }
+
+    /// Turns every followed artist on or off.
+    pub fn set_all(&mut self, enabled: bool) {
+        let before = self.any_enabled();
+        self.all = enabled;
+        self.included.clear();
+        self.excluded.clear();
+        self.started(before);
+    }
+
+    /// Releases turned on again are read once quietly, so the feed's older
+    /// releases are not all announced at once.
+    fn started(&mut self, before: bool) {
+        if !before && self.any_enabled() {
+            self.seeded = false;
+        }
+    }
+
+    #[must_use]
+    pub fn due(&self, now: u64, interval_seconds: u64, force: bool) -> bool {
+        self.any_enabled()
+            && (force
+                || now.saturating_sub(self.last_checked) >= interval_seconds.clamp(60, 604_800))
+    }
+}
+
+/// One release in Spotify's feed of new releases of followed artists.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FeedRelease {
+    pub uri: String,
+    pub name: String,
+    pub kind: String,
+    pub date: String,
+    /// The release's artists: URI and name.
+    pub artists: Vec<(String, String)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -66,6 +172,8 @@ pub struct SubscriptionDocument {
     pub entries: Vec<PlaylistSubscription>,
     pub history: Vec<PlaylistChanges>,
     pub outbox: Vec<PlaylistChanges>,
+    /// New releases of followed artists (2.1, RC 4).
+    pub artists: ArtistReleaseOptions,
 }
 impl Default for SubscriptionDocument {
     fn default() -> Self {
@@ -75,6 +183,7 @@ impl Default for SubscriptionDocument {
             entries: Vec::new(),
             history: Vec::new(),
             outbox: Vec::new(),
+            artists: ArtistReleaseOptions::default(),
         }
     }
 }
@@ -91,6 +200,14 @@ pub enum SubscriptionCommand {
     },
     Interval(u64),
     Acknowledge(Vec<String>),
+    /// The followed artists whose new releases are announced, as the
+    /// settings window shows them; an older revision is ignored.
+    ArtistReleases {
+        revision: u64,
+        all: bool,
+        included: BTreeSet<String>,
+        excluded: BTreeSet<String>,
+    },
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SubscriptionReport {
@@ -199,6 +316,7 @@ pub fn compare(
         added,
         removed,
         reordered: old_retained != new_retained,
+        release: None,
     }
 }
 impl SubscriptionDocument {
@@ -326,6 +444,65 @@ impl SubscriptionDocument {
         }
     }
 
+    /// Spotify's feed of new releases: releases not seen before become
+    /// notifications when one of their artists is turned on. The first read
+    /// after turning releases on only remembers what is there.
+    pub fn apply_release_feed(&mut self, feed: &[FeedRelease], now: u64) -> Vec<PlaylistChanges> {
+        let options = &mut self.artists;
+        options.last_checked = now;
+        let mut found = Vec::new();
+        let seeded = options.seeded;
+        // The feed lists the newest first; notifications keep their order.
+        for release in feed.iter().rev() {
+            if release.uri.is_empty() || options.seen.contains(&release.uri) {
+                continue;
+            }
+            options.seen.push(release.uri.clone());
+            if !seeded
+                || !release
+                    .artists
+                    .iter()
+                    .any(|(uri, _)| options.is_enabled(uri))
+            {
+                continue;
+            }
+            found.push(PlaylistChanges {
+                id: format!("release:{}", release.uri),
+                uri: release.uri.clone(),
+                name: release.name.clone(),
+                timestamp: now,
+                added: Vec::new(),
+                removed: Vec::new(),
+                reordered: false,
+                release: Some(ReleaseInfo {
+                    artists: release
+                        .artists
+                        .iter()
+                        .map(|(_, name)| name.clone())
+                        .collect(),
+                    kind: release.kind.clone(),
+                    date: release.date.clone(),
+                }),
+            });
+        }
+        options.seeded = true;
+        let excess = options.seen.len().saturating_sub(2000);
+        options.seen.drain(..excess);
+        for change in &found {
+            self.history.insert(0, change.clone());
+            self.outbox.push(change.clone());
+        }
+        self.history.truncate(200);
+        found
+    }
+
+    /// Whether a scheduled check has work: a due playlist or the release
+    /// feed.
+    #[must_use]
+    pub fn check_due(&self, now: u64) -> bool {
+        !self.due(now, false).is_empty() || self.artists.due(now, self.interval_seconds, false)
+    }
+
     pub fn due(&self, now: u64, force: bool) -> Vec<String> {
         self.entries
             .iter()
@@ -425,6 +602,23 @@ pub async fn execute(
             document.outbox.retain(|change| !ids.contains(&change.id));
             ""
         }
+        SubscriptionCommand::ArtistReleases {
+            revision,
+            all,
+            included,
+            excluded,
+        } => {
+            let options = &mut document.artists;
+            if revision > options.revision {
+                let before = options.any_enabled();
+                options.revision = revision;
+                options.all = all;
+                options.included = included;
+                options.excluded = excluded;
+                options.started(before);
+            }
+            ""
+        }
         SubscriptionCommand::Check { force } => {
             for uri in document.due(now, force) {
                 match snapshot(api, session, &uri).await {
@@ -440,6 +634,9 @@ pub async fn execute(
                         errors.push(format!("{uri}: {error}"));
                     }
                 }
+            }
+            if check_releases(&mut document, api, session, now, force, &mut errors).await {
+                checked += 1;
             }
             // A scheduled check works in the background and says nothing;
             // Check now reports that it finished.
@@ -459,6 +656,120 @@ pub async fn execute(
         errors,
         checked,
         background,
+    })
+}
+
+/// The release feed when it is due; `true` when it was read.
+async fn check_releases(
+    document: &mut SubscriptionDocument,
+    api: &crate::api::Api,
+    session: &librespot_core::Session,
+    now: u64,
+    force: bool,
+    errors: &mut Vec<String>,
+) -> bool {
+    if !document.artists.due(now, document.interval_seconds, force) {
+        return false;
+    }
+    match release_feed(api, session).await {
+        Ok(feed) => {
+            document.apply_release_feed(&feed, now);
+            true
+        }
+        Err(error) => {
+            document.artists.last_checked = now;
+            errors.push(format!("spotify_sub_releases_failed: {error}"));
+            false
+        }
+    }
+}
+
+/// Spotify's feed of new releases of the account's followed artists (the
+/// "What's new" list of the Spotify apps), newest first, at most 300.
+///
+/// # Errors
+///
+/// Returns the API error when the feed cannot be read.
+pub async fn release_feed(
+    api: &crate::api::Api,
+    session: &librespot_core::Session,
+) -> Result<Vec<FeedRelease>, crate::api::ApiError> {
+    let mut releases = Vec::new();
+    let mut offset = 0_u64;
+    loop {
+        let data = api
+            .pathfinder(
+                session,
+                "queryWhatsNewFeed",
+                serde_json::json!({
+                    "offset": offset,
+                    "limit": 50,
+                    "onlyUnPlayedItems": false,
+                    "includedContentTypes": ["ALBUM"],
+                    "includeEpisodeContentRatingsV2": false,
+                }),
+            )
+            .await?;
+        let feed = data
+            .get("whatsNewFeedItems")
+            .ok_or_else(|| crate::api::ApiError::Shape("whatsNewFeedItems".into()))?;
+        let items = feed
+            .get("items")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| crate::api::ApiError::Shape("whatsNewFeedItems items".into()))?;
+        releases.extend(items.iter().filter_map(parse_feed_release));
+        let next = feed
+            .pointer("/pagingInfo/nextOffset")
+            .and_then(serde_json::Value::as_u64);
+        match next {
+            Some(next) if next > offset && next < 300 && !items.is_empty() => offset = next,
+            _ => break,
+        }
+    }
+    Ok(releases)
+}
+
+fn parse_feed_release(item: &serde_json::Value) -> Option<FeedRelease> {
+    let album = item.pointer("/content/data")?;
+    if album.get("__typename").and_then(serde_json::Value::as_str) != Some("Album") {
+        return None;
+    }
+    let text = |pointer: &str| {
+        album
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let uri = text("/uri");
+    if !uri.starts_with("spotify:album:") {
+        return None;
+    }
+    let artists = album
+        .pointer("/artists/items")
+        .and_then(serde_json::Value::as_array)
+        .map(|artists| {
+            artists
+                .iter()
+                .filter_map(|artist| {
+                    let uri = artist.get("uri")?.as_str()?.to_owned();
+                    let name = artist
+                        .pointer("/profile/name")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                    Some((uri, name))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let date = text("/date/isoString");
+    Some(FeedRelease {
+        uri,
+        name: text("/name"),
+        kind: text("/albumType"),
+        date: date.split('T').next().unwrap_or_default().to_owned(),
+        artists,
     })
 }
 
@@ -571,6 +882,100 @@ mod tests {
             tracks: tracks.iter().map(|s| item(s)).collect(),
         }
     }
+    fn release(uri: &str, artists: &[&str]) -> FeedRelease {
+        FeedRelease {
+            uri: uri.into(),
+            name: uri.into(),
+            kind: "SINGLE".into(),
+            date: "2026-11-19".into(),
+            artists: artists
+                .iter()
+                .map(|artist| ((*artist).to_owned(), format!("Name {artist}")))
+                .collect(),
+        }
+    }
+
+    /// RC 4: the first read only remembers the feed; later releases of
+    /// turned-on artists become notifications, others are only remembered.
+    #[test]
+    fn new_releases_of_turned_on_artists_are_announced_once() {
+        const T: u64 = 1_800_000_000;
+        let mut doc = SubscriptionDocument::default();
+        doc.artists.set("a", true);
+        assert!(doc.artists.due(T, doc.interval_seconds, false));
+        assert!(
+            doc.apply_release_feed(&[release("old", &["a"])], T)
+                .is_empty()
+        );
+        let found = doc.apply_release_feed(
+            &[
+                release("new2", &["b"]),
+                release("new1", &["x", "a"]),
+                release("old", &["a"]),
+            ],
+            T + 5000,
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].uri, "new1");
+        assert_eq!(found[0].id, "release:new1");
+        assert_eq!(
+            found[0].release.as_ref().unwrap().artists,
+            ["Name x", "Name a"]
+        );
+        assert!(!found[0].is_empty());
+        assert_eq!(doc.outbox.len(), 1);
+        // Seen once, never again; an artist turned on later does not bring
+        // back what was already in the feed.
+        doc.artists.set("b", true);
+        assert!(
+            doc.apply_release_feed(&[release("new2", &["b"])], T + 9000)
+                .is_empty()
+        );
+        assert!(!doc.artists.due(T + 9001, doc.interval_seconds, false));
+    }
+
+    /// RC 4: on for all keeps exceptions; turning everything off and on
+    /// again reads the feed quietly once more.
+    #[test]
+    fn artist_options_follow_all_and_exceptions() {
+        let mut options = ArtistReleaseOptions::default();
+        assert!(!options.any_enabled());
+        options.set_all(true);
+        assert!(options.is_enabled("anyone"));
+        options.set("a", false);
+        assert!(!options.is_enabled("a"));
+        options.set("a", true);
+        assert!(options.excluded.is_empty() && options.is_enabled("a"));
+        options.seeded = true;
+        options.set_all(false);
+        assert!(!options.is_enabled("a") && !options.any_enabled());
+        options.set("b", true);
+        assert!(options.is_enabled("b") && !options.seeded);
+        options.set("b", false);
+        assert!(options.included.is_empty());
+    }
+
+    #[test]
+    fn the_feed_item_shape_is_read() {
+        let item = serde_json::json!({"content": {"__typename": "AlbumResponseWrapper", "data": {
+            "__typename": "Album", "uri": "spotify:album:1", "name": "Far Away", "albumType": "SINGLE",
+            "date": {"isoString": "2026-11-19T00:00:00Z"},
+            "artists": {"items": [{"uri": "spotify:artist:a", "profile": {"name": "A"}}]}}}});
+        let parsed = parse_feed_release(&item).unwrap();
+        assert_eq!(parsed.uri, "spotify:album:1");
+        assert_eq!(parsed.date, "2026-11-19");
+        assert_eq!(
+            parsed.artists,
+            [("spotify:artist:a".to_owned(), "A".to_owned())]
+        );
+        assert!(
+            parse_feed_release(
+                &serde_json::json!({"content": {"data": {"__typename": "Episode"}}})
+            )
+            .is_none()
+        );
+    }
+
     /// Review 2.1: two own moves together are no change by someone else.
     #[test]
     fn several_own_moves_are_not_a_reorder() {

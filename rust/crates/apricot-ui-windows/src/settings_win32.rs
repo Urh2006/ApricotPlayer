@@ -1559,6 +1559,11 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
         | SettingsCommand::ResetShortcutCategory
         | SettingsCommand::EditShortcutAlternatives => shortcut_command(window, command),
         SettingsCommand::ResetSection => reset_section(window),
+        SettingsCommand::SpotifyReleases => {
+            if let Some(owner) = state(window).map(|state| state.owner) {
+                crate::win32::open_spotify_releases(owner, window);
+            }
+        }
         SettingsCommand::BrowseDownloadFolder => browse_download_folder(window),
         SettingsCommand::SetDefaultPlayer => set_default_player(window),
         // Shown only on macOS.

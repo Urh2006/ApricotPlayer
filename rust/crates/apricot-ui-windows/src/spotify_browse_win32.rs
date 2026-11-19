@@ -3513,6 +3513,11 @@ pub(super) unsafe fn subscription_changes(
     window: HWND,
     change: apricot_spotify::playlist_subscriptions::PlaylistChanges,
 ) {
+    // A new release opens its album (2.1, RC 4).
+    if change.release.is_some() {
+        open(window, Source::Album(change.uri), change.name);
+        return;
+    }
     let title = state(window).map(|state| {
         apricot_shell::spotify_subscriptions::changes_title(
             &super::spotify::catalog(state),

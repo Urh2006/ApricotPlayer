@@ -147,6 +147,57 @@ pub(super) unsafe fn announce(window: HWND, text: &str) {
 }
 
 /// The runtime starts on first use, not with the application.
+/// The followed artists whose new releases go to the notification center
+/// (2.1, RC 4). `window` is the main window, `parent` the window the list
+/// opens over.
+pub(super) unsafe fn open_releases(window: HWND, parent: HWND) {
+    let Some(catalog) = state(window).map(catalog) else {
+        return;
+    };
+    let Some(service) = service(window).filter(|service| service.connected_account().is_some())
+    else {
+        show_error_message(parent, catalog.text("spotify_not_connected"));
+        return;
+    };
+    let options = match service.playlist_subscriptions() {
+        Ok(document) => document.artists,
+        Err(error) => {
+            show_error_message(
+                parent,
+                &apricot_shell::spotify_subscriptions::report_text(&catalog, &error),
+            );
+            return;
+        }
+    };
+    let text = |key: &str| catalog.text(key).to_owned();
+    let labels = crate::spotify_releases_win32::SpotifyReleasesLabels {
+        title: text("spotify_releases_title"),
+        instructions: text("spotify_releases_instructions"),
+        list: text("spotify_releases_list"),
+        all_on: text("spotify_releases_all_on"),
+        all_off: text("spotify_releases_all_off"),
+        close: text("file_manager_close"),
+        all_on_done: text("spotify_releases_all_on_done"),
+        all_off_done: text("spotify_releases_all_off_done"),
+        loading: text("spotify_releases_loading"),
+        none: text("spotify_releases_none"),
+        failed: text("spotify_releases_failed"),
+    };
+    let sender = service.clone();
+    let send = Box::new(
+        move |command: apricot_spotify::playlist_subscriptions::SubscriptionCommand| {
+            if let Some(state) = state_mut(window) {
+                let stamp = state.spotify.epochs_begin();
+                sender.subscription_operation(stamp, command);
+            }
+        },
+    );
+    if let Err(error) = crate::spotify_releases_win32::show(parent, labels, service, options, send)
+    {
+        show_error_message(parent, &error.to_string());
+    }
+}
+
 pub(super) unsafe fn service(window: HWND) -> Option<Arc<SpotifyService>> {
     let state = state_mut(window)?;
     if state.spotify.service.is_none() {

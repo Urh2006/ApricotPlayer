@@ -789,6 +789,7 @@ unsafe fn register_secondary_window_classes() -> Result<()> {
     crate::audiovault_login_win32::register()?;
     crate::spotify_login_win32::register()?;
     crate::spotify_queue_win32::register()?;
+    crate::spotify_releases_win32::register()?;
     crate::spotify_devices_win32::register()?;
     crate::spotify_settings_win32::register()?;
     crate::download_progress_win32::register()
@@ -4449,8 +4450,14 @@ unsafe fn activate_notification_selection(window: HWND) {
     let Some(Ok(index)) = selected.map(usize::try_from) else {
         return;
     };
-    let item =
-        state_mut(window).and_then(|state| state.application.prepare_notification_playback(index));
+    // A Spotify playlist change or new release is a list, not something to
+    // play, so it is opened before the playable check (RC 4).
+    let change_item = state(window)
+        .and_then(|state| state.application.notifications().get(index)?.item.clone())
+        .filter(|item| apricot_shell::spotify_subscriptions::item_changes(item).is_some());
+    let item = change_item.or_else(|| {
+        state_mut(window).and_then(|state| state.application.prepare_notification_playback(index))
+    });
     if let Some(item) = item {
         if let Some(change) = apricot_shell::spotify_subscriptions::item_changes(&item) {
             let account = item
@@ -14319,6 +14326,12 @@ unsafe fn finish_current_item(window: HWND) {
 }
 
 /// 2.1: Go to item, first and last item of the playing list.
+/// Settings, Spotify: the followed artists whose new releases are
+/// announced, over `parent` (2.1, RC 4).
+pub(crate) unsafe fn open_spotify_releases(window: HWND, parent: HWND) {
+    spotify::open_releases(window, parent);
+}
+
 pub(crate) unsafe fn navigate_player_to_index(window: HWND, index: usize) {
     let outcome = {
         let Some(state) = state_mut(window) else {

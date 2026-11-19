@@ -31,6 +31,11 @@ const PANEL_ACTIONS: [&str; 7] = [
 /// interface language; the service words its fixed texts as keys.
 #[must_use]
 pub fn report_text(catalog: &TranslationCatalog, text: &str) -> String {
+    if let Some((key, detail)) = text.split_once(": ")
+        && key.starts_with("spotify_sub_")
+    {
+        return format!("{} {detail}", catalog.text(key));
+    }
     if text.starts_with("spotify_sub_") {
         catalog.text(text).to_owned()
     } else {
@@ -251,6 +256,9 @@ pub fn item_changes(item: &MediaItem) -> Option<PlaylistChanges> {
 /// removed".
 #[must_use]
 pub fn summary(catalog: &TranslationCatalog, change: &PlaylistChanges) -> String {
+    if let Some(release) = &change.release {
+        return release_summary(catalog, release);
+    }
     let mut parts = Vec::new();
     if !change.added.is_empty() {
         parts.push(
@@ -273,6 +281,24 @@ pub fn summary(catalog: &TranslationCatalog, change: &PlaylistChanges) -> String
         .text("spotify_sub_summary")
         .replace("{name}", &change.name)
         .replace("{changes}", &parts.join(", "))
+}
+
+/// The start of a new release's line, "New single from Artist"; the
+/// notification adds the title from its item.
+#[must_use]
+pub fn release_summary(
+    catalog: &TranslationCatalog,
+    release: &apricot_spotify::playlist_subscriptions::ReleaseInfo,
+) -> String {
+    let key = match release.kind.as_str() {
+        "SINGLE" => "spotify_release_single",
+        "EP" => "spotify_release_ep",
+        "COMPILATION" => "spotify_release_compilation",
+        _ => "spotify_release_album",
+    };
+    catalog
+        .text(key)
+        .replace("{artists}", &release.artists.join(", "))
 }
 
 /// Adds one notification for each changed playlist. Returns the IDs safe to
@@ -298,10 +324,14 @@ pub fn publish(
         if !duplicate {
             #[allow(clippy::cast_precision_loss)] // Unix seconds.
             let timestamp = change.timestamp as f64;
+            let (kind, title) = match &change.release {
+                Some(_) => ("spotify_release", String::new()),
+                None => ("spotify_playlist", change.name.clone()),
+            };
             application
                 .add_notification(apricot_storage::AppNotification::new(
-                    "spotify_playlist",
-                    change.name.clone(),
+                    kind,
+                    title,
                     summary(&catalog, change),
                     Some(notification_item(change, &report.account)),
                     timestamp,
@@ -314,6 +344,67 @@ pub fn publish(
 }
 
 impl crate::Shell {
+    /// Settings, Spotify on macOS: new releases of all followed artists on
+    /// or off; the list of single artists is the Windows window for now
+    /// (2.1, RC 4).
+    pub fn settings_spotify_releases(&mut self, ui: &mut dyn crate::ShellUi) {
+        let catalog = self.catalog();
+        let Some(service) = self
+            .spotify_service()
+            .filter(|service| service.connected_account().is_some())
+        else {
+            ui.show_error(catalog.text("spotify_not_connected"));
+            return;
+        };
+        let mut options = match service.playlist_subscriptions() {
+            Ok(document) => document.artists,
+            Err(error) => {
+                ui.show_error(&report_text(&catalog, &error));
+                return;
+            }
+        };
+        let form = FeatureForm::localized(
+            &catalog,
+            catalog.text("spotify_releases_title"),
+            vec![FormField::choice(
+                "all",
+                catalog.text("spotify_releases_title"),
+                vec![
+                    catalog.text("spotify_releases_all_off").to_owned(),
+                    catalog.text("spotify_releases_all_on").to_owned(),
+                ],
+                usize::from(options.all),
+            )],
+        );
+        let Some(values) = ui.feature_form(&form) else {
+            return;
+        };
+        let all = values
+            .get("all")
+            .and_then(crate::FormValue::choice)
+            .is_some_and(|choice| choice == 1);
+        options.set_all(all);
+        options.revision += 1;
+        let stamp = self.spotify.epochs.begin();
+        service.subscription_operation(
+            stamp,
+            SubscriptionCommand::ArtistReleases {
+                revision: options.revision,
+                all: options.all,
+                included: options.included,
+                excluded: options.excluded,
+            },
+        );
+        ui.set_status(
+            catalog.text(if all {
+                "spotify_releases_all_on_done"
+            } else {
+                "spotify_releases_all_off_done"
+            }),
+            true,
+        );
+    }
+
     pub fn show_spotify_subscriptions(&mut self, ui: &mut dyn crate::ShellUi) {
         let Some(service) = self.spotify_service() else {
             return;
@@ -444,5 +535,18 @@ mod tests {
             "Subscribed to the playlist."
         );
         assert_eq!(report_text(&catalog, "raw error"), "raw error");
+        let release = PlaylistChanges {
+            name: "Far Away".into(),
+            release: Some(apricot_spotify::playlist_subscriptions::ReleaseInfo {
+                artists: vec!["Stereo Static".into(), "Udex".into()],
+                kind: "SINGLE".into(),
+                date: "2026-11-19".into(),
+            }),
+            ..PlaylistChanges::default()
+        };
+        assert_eq!(
+            summary(&catalog, &release),
+            "New single from Stereo Static, Udex"
+        );
     }
 }

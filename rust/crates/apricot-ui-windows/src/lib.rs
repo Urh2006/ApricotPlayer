@@ -65,6 +65,7 @@ mod spotify_devices_win32;
 mod spotify_login_win32;
 #[cfg(windows)]
 mod spotify_queue_win32;
+mod spotify_releases_win32;
 #[cfg(windows)]
 #[cfg(windows)]
 mod spotify_settings_win32;

@@ -526,11 +526,7 @@ impl SpotifyService {
         let Ok(document) = crate::playlist_subscriptions::load(&self.store, &account) else {
             return;
         };
-        if document
-            .due(crate::playlist_subscriptions::now(), false)
-            .is_empty()
-            && document.outbox.is_empty()
-        {
+        if !document.check_due(crate::playlist_subscriptions::now()) && document.outbox.is_empty() {
             return;
         }
         self.subscription_operation(
@@ -770,6 +766,34 @@ impl SpotifyService {
 
     /// Spotify's lyrics of `uri` (LRC text and provider). Blocks: call it
     /// on a worker thread, never on the UI thread.
+    /// One page of the account's followed artists, for the settings of new
+    /// releases; the answer comes on the returned channel, so a window can
+    /// wait for it without blocking (2.1, RC 4).
+    pub fn followed_artists(
+        &self,
+        offset: u64,
+    ) -> std::sync::mpsc::Receiver<Result<crate::CatalogPage, String>> {
+        let (send, receive) = std::sync::mpsc::channel();
+        let session = self.active_session();
+        let api = self.api.clone();
+        self.runtime().spawn(async move {
+            let result = match session {
+                Some(session) => crate::catalog::library(
+                    &api,
+                    &session,
+                    crate::LibraryFilter::Artists,
+                    None,
+                    offset,
+                )
+                .await
+                .map_err(|error| format!("{error:?}")),
+                None => Err("spotify_not_connected".to_owned()),
+            };
+            let _ = send.send(result);
+        });
+        receive
+    }
+
     pub fn lyrics_blocking(&self, uri: &str) -> Option<(String, String)> {
         let session = self.active_session()?;
         let api = self.api.clone();
