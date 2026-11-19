@@ -310,6 +310,56 @@ mod transport_regressions {
         task.connect_state.set_status(&task.play_status);
     }
 
+    /// ApricotPlayer patch: a further page of recommendations is added to
+    /// the recommendations, not behind the song the user started, so they
+    /// go on after the first page instead of starting over, without the
+    /// ones already in the list.
+    #[tokio::test]
+    async fn a_further_recommendation_page_extends_autoplay() {
+        let mut task = task(true);
+        first_track(&mut task);
+        let station = "spotify:station:track:0000000000000000000001";
+        let page = |track: &str| ContextPage {
+            tracks: vec![ContextTrack {
+                uri: Some(track.into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        task.connect_state
+            .update_context(
+                Context {
+                    uri: Some(station.into()),
+                    pages: vec![page(SECOND)],
+                    ..Default::default()
+                },
+                ContextType::Autoplay,
+            )
+            .unwrap();
+        task.connect_state
+            .fill_context_from_page(page(THIRD), ContextType::Autoplay, Some(station))
+            .unwrap();
+        // A recommendation already in the list is not added again.
+        task.connect_state
+            .fill_context_from_page(page(SECOND), ContextType::Autoplay, Some(station))
+            .unwrap();
+        let autoplay = task
+            .connect_state
+            .get_context(ContextType::Autoplay)
+            .unwrap();
+        let uris: Vec<_> = autoplay.tracks.iter().map(|t| t.uri.as_str()).collect();
+        assert_eq!(uris, [SECOND, THIRD]);
+        assert_eq!(autoplay.tracks[1].provider, "autoplay");
+        assert_eq!(
+            task.connect_state
+                .get_context(ContextType::Default)
+                .unwrap()
+                .tracks
+                .len(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn reopening_liked_songs_context_restarts_the_first_track_and_preserves_next() {
         let mut task = task(false);
@@ -2314,6 +2364,10 @@ impl SpircTask {
             self.playback_revision = revision;
         }
         let names_song = revision.is_some() && command.options.playing_track.is_some();
+        info!(
+            "apricot load at {:?}, revision {revision:?}",
+            command.options.playing_track
+        );
         self.selected_request = None;
         self.handle_load(command, None, None).await?;
         if names_song {
@@ -2326,6 +2380,7 @@ impl SpircTask {
     /// the list's own order also while shuffle is on. For the last song the
     /// remaining pages are read first, so it is the list's real last song.
     async fn handle_context_edge(&mut self, last: bool, revision: u64) -> Result<(), Error> {
+        info!("apricot context edge, last {last}");
         let context_uri = self.connect_state.context_uri().clone();
         if context_uri.is_empty() {
             return Ok(());

@@ -60,3 +60,12 @@ See ../LISTENING-PATCH.md for the pinned backport and test contract.
   current decoder request; Connect hands it to the new navigation revision
   with Player::set_request_revision, so Apricot keeps that song's seeks and
   pause changes instead of discarding them as events of an earlier selection.
+- 2.1: `ContextResolver::add` measures the time since a failed context
+  request the right way round (upstream it was always zero, so a failed
+  autoplay request was never retried).
+- 2.1: `fill_context_from_page` takes the context type. A further page of
+  recommendations is appended to the autoplay context instead of the
+  default one (upstream the recommendations started over after the first
+  page), without recommendations already in the list, because Spotify is
+  told only the last ten songs. Loads from Apricot and the list edges are
+  logged at info level for diagnosis.

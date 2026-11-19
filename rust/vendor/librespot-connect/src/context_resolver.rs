@@ -275,7 +275,11 @@ impl ContextResolver {
 
         let remaining = match next.action {
             ContextAction::Append if context.pages.len() == 1 => state
-                .fill_context_from_page(context.pages.remove(0))
+                .fill_context_from_page(
+                    context.pages.remove(0),
+                    next.update,
+                    context.uri.as_deref(),
+                )
                 .map(|_| None),
             ContextAction::Replace => {
                 let remaining = state.update_context(context, next.update);

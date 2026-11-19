@@ -93,6 +93,9 @@ mod regression_tests {
 // identifier used as part of the uid
 pub const IDENTIFIER_DELIMITER: &str = "delimiter";
 
+/// ApricotPlayer: how many received recommendations are named as recent.
+const MAX_RECENT_RECOMMENDATIONS: usize = 200;
+
 impl<'ct> ConnectState {
     fn new_delimiter(iteration: i64) -> ProvidedTrack {
         let mut delimiter = ProvidedTrack {
@@ -486,6 +489,20 @@ impl<'ct> ConnectState {
             .collect::<Vec<_>>();
 
         prev.push(self.current_track(|t| t.uri.clone()));
+        // ApricotPlayer patch: the recommendations already received count
+        // as recent too, so a further page brings new ones rather than
+        // repeating them (the last ten songs alone gave 33 repeats of 50).
+        if let Ok(autoplay) = self.get_context(ContextType::Autoplay) {
+            let skip = autoplay
+                .tracks
+                .len()
+                .saturating_sub(MAX_RECENT_RECOMMENDATIONS);
+            for track in autoplay.tracks.iter().skip(skip) {
+                if !prev.contains(&track.uri) {
+                    prev.push(track.uri.clone());
+                }
+            }
+        }
         prev
     }
 

@@ -1016,6 +1016,7 @@ impl SpotifyPlayback {
     /// is moved first and skipped to; a context track starts at its occurrence
     /// (the manual queue stays, plan D16).
     pub fn play_queue_entry(&self, uid: &str) -> bool {
+        log::info!("queue entry {uid} plays");
         let Some(state) = self.player_state() else {
             return false;
         };

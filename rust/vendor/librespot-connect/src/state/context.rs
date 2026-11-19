@@ -281,7 +281,8 @@ impl ConnectState {
             .into_iter()
             .flat_map(|page| {
                 if !page.tracks.is_empty() {
-                    self.fill_context_from_page(page).ok()?;
+                    self.fill_context_from_page(page, ty, context.uri.as_deref())
+                        .ok()?;
                     None
                 } else if matches!(page.page_url, Some(ref url) if !url.is_empty()) {
                     Some(page_url_to_uri(
@@ -502,18 +503,60 @@ impl ConnectState {
         Ok(track)
     }
 
-    pub fn fill_context_from_page(&mut self, page: ContextPage) -> Result<(), Error> {
-        let ctx_len = self.context.as_ref().map(|c| c.tracks.len());
-        let context = self.state_context_from_page(page, HashMap::new(), None, None, ctx_len, None);
+    /// ApricotPlayer patch: a further page goes to the context it belongs
+    /// to. Upstream appended every page to the default context, so a new
+    /// page of recommendations was added behind the song the user started
+    /// and never played: after the first 50 recommendations the same ones
+    /// started over.
+    pub fn fill_context_from_page(
+        &mut self,
+        mut page: ContextPage,
+        ty: ContextType,
+        context_uri: Option<&str>,
+    ) -> Result<(), Error> {
+        // Spotify is told only the last ten songs, so a further page of
+        // recommendations repeats earlier ones; those are left out.
+        if matches!(ty, ContextType::Autoplay) {
+            if let Ok(ctx) = self.get_context(ty) {
+                let known = ctx
+                    .tracks
+                    .iter()
+                    .map(|t| t.uri.as_str())
+                    .collect::<std::collections::HashSet<_>>();
+                let received = page.tracks.len();
+                let tracks = std::mem::take(&mut page.tracks)
+                    .into_iter()
+                    .filter(|t| !t.uri.as_deref().is_some_and(|uri| known.contains(uri)))
+                    .collect::<Vec<_>>();
+                debug!(
+                    "{} of {received} recommendations were already in the list",
+                    received - tracks.len()
+                );
+                page.tracks = tracks;
+            }
+        }
+        let ctx_len = self.get_context(ty).ok().map(|c| c.tracks.len());
+        let provider = matches!(ty, ContextType::Autoplay).then_some(Provider::Autoplay);
+        let context_uri = context_uri.map(str::to_owned);
+        let context = self.state_context_from_page(
+            page,
+            HashMap::new(),
+            None,
+            context_uri.as_deref(),
+            ctx_len,
+            provider,
+        );
 
-        let ctx = self
-            .context
-            .as_mut()
-            .ok_or(StateError::NoContext(ContextType::Default))?;
-
+        let ctx = self.get_context_mut(ty)?;
+        let before = ctx.tracks.len();
         for t in context.tracks {
             ctx.tracks.push(t)
         }
+        debug!(
+            "appended {} tracks to context {ty:?}, now {}",
+            ctx.tracks.len() - before,
+            ctx.tracks.len()
+        );
 
         Ok(())
     }
