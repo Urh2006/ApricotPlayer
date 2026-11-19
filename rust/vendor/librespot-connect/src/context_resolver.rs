@@ -142,7 +142,11 @@ impl ContextResolver {
         let last_try = self
             .unavailable_contexts
             .get(&resolve)
-            .map(|i| i.duration_since(Instant::now()));
+            // ApricotPlayer patch: the time since the failed try. Measured
+            // the other way round it was always zero, so a context that
+            // failed once (an autoplay page refused by a busy Spotify) was
+            // never asked for again and recommendations ended.
+            .map(|i| Instant::now().duration_since(*i));
 
         let last_try = if matches!(last_try, Some(last_try) if last_try > RETRY_UNAVAILABLE) {
             let _ = self.unavailable_contexts.remove(&resolve);

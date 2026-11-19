@@ -262,10 +262,11 @@ pub fn tab_into_list(dialog: HWND, message: &windows::Win32::UI::WindowsAndMessa
         let Ok(next) = GetNextDlgTabItem(dialog, Some(focus), backward) else {
             return false;
         };
-        let mut class = [0_u16; 16];
+        let mut class = [0_u16; 32];
         let length = GetClassNameW(next, &mut class);
         let is_list = usize::try_from(length).is_ok_and(|length| {
-            String::from_utf16_lossy(&class[..length]).eq_ignore_ascii_case("ListBox")
+            let class = String::from_utf16_lossy(&class[..length]);
+            class.eq_ignore_ascii_case("ListBox") || class.eq_ignore_ascii_case("SysListView32")
         });
         if !is_list || next == focus {
             return false;

@@ -25,7 +25,13 @@ impl log::Log for FileLogger {
         {
             metadata.level() <= log::Level::Info
         } else if metadata.target().starts_with("librespot") {
-            metadata.level() <= log::Level::Warn
+            // LibreSpot's own details only with APRICOT_SPOTIFY_DEBUG.
+            let limit = if log::max_level() >= log::LevelFilter::Debug {
+                log::Level::Debug
+            } else {
+                log::Level::Warn
+            };
+            metadata.level() <= limit
         } else {
             false
         }
@@ -81,6 +87,13 @@ pub fn install(app_data: &Path) {
         file: Mutex::new(None),
     };
     if log::set_boxed_logger(Box::new(logger)).is_ok() {
-        log::set_max_level(log::LevelFilter::Info);
+        // APRICOT_SPOTIFY_DEBUG writes LibreSpot's details too, for finding
+        // the cause of a Spotify problem.
+        let level = if std::env::var_os("APRICOT_SPOTIFY_DEBUG").is_some() {
+            log::LevelFilter::Debug
+        } else {
+            log::LevelFilter::Info
+        };
+        log::set_max_level(level);
     }
 }

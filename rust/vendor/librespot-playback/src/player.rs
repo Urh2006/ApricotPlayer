@@ -2126,9 +2126,21 @@ impl PlayerInternal {
             }
             PlayerState::Loading {
                 ref mut start_playback,
+                ref track_id,
+                play_request_id,
                 ..
             } => {
                 *start_playback = false;
+                // ApricotPlayer patch: a song that still loads (for example
+                // waiting for Spotify's audio key limit) is paused at once,
+                // so the sound already handed on stops now, not when the
+                // song has loaded.
+                let track_id = track_id.clone();
+                self.send_event(PlayerEvent::Paused {
+                    track_id,
+                    play_request_id,
+                    position_ms: 0,
+                });
             }
             _ => error!("Player::pause called from invalid state: {:?}", self.state),
         }
