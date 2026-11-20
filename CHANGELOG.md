@@ -1,3 +1,22 @@
+# v2.1.1 - Settings in named groups
+
+## Changed
+
+- Settings are now arranged in named groups within each section. General has Language and files, Announcements and lists, ApricotPlayer updates, yt-dlp, Window behavior, and Tools and backups. Playback, Downloads, Library and subscriptions, Podcasts and RSS, Cookies and network, and Spotify are grouped the same way. On Windows the screen reader says the group's name when Tab moves into it, for example "yt-dlp grouping". On the Mac the settings stay one list, so VoiceOver does not need to interact with a group.
+- The setting for full or short announcements is now called Announcement verbosity, so its name says what it changes.
+- Many Slovenian setting names now have their letters č, š and ž and Slovenian words instead of English ones, for example "Prikaži bližnjice ob oznakah menijev in predvajalnika".
+
+## Fixed
+
+- On the Mac, a player form such as Subtitles, Transitions or Audio processing that stays open no longer holds the sleep timer, A-B repeat, the chapter stop and the end of a CUE track until it closes.
+- A-B repeat can no longer stop at its end point instead of going back to its start.
+
+These changes apply to Windows and macOS. The Mac packages for this release are built with GitHub Actions. Existing settings and saved data are retained.
+
+Download **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, or **ApricotPlayer-macOS-arm64.dmg** for Apple silicon Macs running macOS 27 or later. The Mac ZIP is used by the in-app updater.
+
+The Mac app is not notarized by Apple. If macOS blocks its first launch, open **System Settings > Privacy & Security**, choose **Open Anyway** for ApricotPlayer, and confirm. Use packages from this project's Releases page.
+
 # v2.1.0 - ApricotPlayer 2.1
 
 ApricotPlayer 2.1 is one of the biggest updates ApricotPlayer has had. It adds a 15-band equalizer with advanced settings, audio processing, crossfade, a sleep timer, A-B repeat and saved excerpts, subtitles read aloud, an audiobook mode, a playlist editor, file management, Radio, IPTV, recording, converter options, YouTube search suggestions, media keys, global shortcuts, Spotify playlist subscriptions and notifications for new releases of the artists you follow, settings and bookmark backups, and much more. It was tested in eight betas and three release candidates.
