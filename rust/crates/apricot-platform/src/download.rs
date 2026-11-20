@@ -1008,7 +1008,7 @@ mod tests {
     }
 
     /// Review 5, B23: stopping a download also ends a process it started
-    /// with the same output (FFmpeg), so reading its output ends at once.
+    /// with the same output (`FFmpeg`), so reading its output ends at once.
     #[cfg(unix)]
     #[test]
     fn stopping_ends_the_processes_a_download_started() {
