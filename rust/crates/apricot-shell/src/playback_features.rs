@@ -23,6 +23,23 @@ pub trait PlaybackFeatureUi {
     ) -> Option<FormValues> {
         self.form(form)
     }
+    /// The form of a player tool. `app` lets the UI keep the sleep timer,
+    /// A-B repeat and CUE track ends going while the form is open (B9); the
+    /// Windows UI does that with its own timer.
+    fn player_form(&mut self, app: &mut Application, form: &FeatureForm) -> Option<FormValues> {
+        let _ = app;
+        self.form(form)
+    }
+    /// [`Self::player_form`] with a live preview of valid values.
+    fn player_form_preview(
+        &mut self,
+        app: &mut Application,
+        form: &FeatureForm,
+        preview: &mut dyn FnMut(&FormValues) -> Vec<PlaybackCommand>,
+    ) -> Option<FormValues> {
+        let _ = app;
+        self.form_preview(form, preview)
+    }
     fn speak_subtitle(&mut self, text: &str, _interrupt: bool) {
         self.announce(text);
     }
@@ -826,7 +843,8 @@ pub fn dispatch_playback_feature(
                 .get("sleep_timer_v1")
                 .and_then(|value| serde_json::from_value::<SleepTimerOptions>(value.clone()).ok())
                 .unwrap_or_default();
-            let Some(values) = ui.form(&sleep_timer_form(&catalog, app, &options)) else {
+            let form = sleep_timer_form(&catalog, app, &options);
+            let Some(values) = ui.player_form(app, &form) else {
                 return Some(commands);
             };
             if checked(&values, "cancel") {
@@ -882,7 +900,8 @@ pub fn dispatch_playback_feature(
                 return Some(commands);
             };
             let catalog = apricot_app::embedded_catalog(&app.settings().language);
-            let Some(values) = ui.form(&audio_processing_form(&catalog, &settings)) else {
+            let Some(values) = ui.player_form(app, &audio_processing_form(&catalog, &settings))
+            else {
                 return Some(commands);
             };
             let settings = audio_processing_from_values(&settings, &values);
@@ -990,7 +1009,7 @@ pub fn dispatch_playback_feature(
                 return Some(commands);
             };
             let catalog = apricot_app::embedded_catalog(&app.settings().language);
-            let Some(values) = ui.form(&transitions_form(&catalog, &settings)) else {
+            let Some(values) = ui.player_form(app, &transitions_form(&catalog, &settings)) else {
                 return Some(commands);
             };
             let settings = transitions_from_values(&settings, &values);
@@ -1021,15 +1040,18 @@ pub fn dispatch_playback_feature(
                     crate::format_duration(elapsed),
                 )
             };
-            let Some(values) = ui.form(&FeatureForm::localized(
-                &catalog,
-                catalog.text(if percent {
-                    "shortcut_player_go_to_percent"
-                } else {
-                    "shortcut_player_go_to_time"
-                }),
-                vec![field],
-            )) else {
+            let Some(values) = ui.player_form(
+                app,
+                &FeatureForm::localized(
+                    &catalog,
+                    catalog.text(if percent {
+                        "shortcut_player_go_to_percent"
+                    } else {
+                        "shortcut_player_go_to_time"
+                    }),
+                    vec![field],
+                ),
+            ) else {
                 return Some(commands);
             };
             // In audiobook mode times and percentages are within the chapter.
@@ -1111,19 +1133,22 @@ pub fn dispatch_playback_feature(
                 "player_first_item" => Some(0),
                 "player_last_item" => Some(length - 1),
                 _ => ui
-                    .form(&FeatureForm::localized(
-                        &catalog,
-                        catalog.text("shortcut_player_go_to_item"),
-                        vec![FormField::number(
-                            "item",
-                            catalog
-                                .text("go_to_item_field")
-                                .replace("{count}", &length.to_string()),
-                            f64::from(u32::try_from(current + 1).unwrap_or(u32::MAX)),
-                            1.0,
-                            f64::from(u32::try_from(length).unwrap_or(u32::MAX)),
-                        )],
-                    ))
+                    .player_form(
+                        app,
+                        &FeatureForm::localized(
+                            &catalog,
+                            catalog.text("shortcut_player_go_to_item"),
+                            vec![FormField::number(
+                                "item",
+                                catalog
+                                    .text("go_to_item_field")
+                                    .replace("{count}", &length.to_string()),
+                                f64::from(u32::try_from(current + 1).unwrap_or(u32::MAX)),
+                                1.0,
+                                f64::from(u32::try_from(length).unwrap_or(u32::MAX)),
+                            )],
+                        ),
+                    )
                     .map(|values| {
                         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                         let number = number(&values, "item").round() as usize;
@@ -1220,7 +1245,7 @@ pub fn dispatch_playback_feature(
             catalog
                 .text("opened_files_play")
                 .clone_into(&mut form.submit);
-            if let Some(values) = ui.form(&form) {
+            if let Some(values) = ui.player_form(app, &form) {
                 let index = choice(&values, "item");
                 if index != current {
                     app.playback_features_mut().pending_item_index = Some(index);
@@ -1397,7 +1422,8 @@ pub fn dispatch_playback_feature(
                 .selected
                 .unwrap_or(ranges.len() - 1)
                 .min(ranges.len() - 1);
-            let Some(values) = ui.form(&excerpts_form(&catalog, &ranges, selected)) else {
+            let Some(values) = ui.player_form(app, &excerpts_form(&catalog, &ranges, selected))
+            else {
                 return Some(commands);
             };
             let index = choice(&values, "excerpt").min(ranges.len() - 1);
@@ -1515,19 +1541,22 @@ pub fn dispatch_playback_feature(
                 "player_audio_track_next" => Some((selected + 1) % tracks.len()),
                 "player_audio_track_previous" => Some((selected + tracks.len() - 1) % tracks.len()),
                 _ => ui
-                    .form(&FeatureForm::localized(
-                        &catalog,
-                        catalog.text("audio_tracks_title"),
-                        vec![FormField::choice(
-                            "track",
-                            catalog.text("audio_track_field"),
-                            tracks
-                                .iter()
-                                .map(|track| track_label(&catalog, track))
-                                .collect(),
-                            selected,
-                        )],
-                    ))
+                    .player_form(
+                        app,
+                        &FeatureForm::localized(
+                            &catalog,
+                            catalog.text("audio_tracks_title"),
+                            vec![FormField::choice(
+                                "track",
+                                catalog.text("audio_track_field"),
+                                tracks
+                                    .iter()
+                                    .map(|track| track_label(&catalog, track))
+                                    .collect(),
+                                selected,
+                            )],
+                        ),
+                    )
                     .map(|values| choice(&values, "track")),
             };
             if let Some(track) = index.and_then(|index| tracks.get(index))
@@ -1553,11 +1582,14 @@ pub fn dispatch_playback_feature(
         }
         "player_subtitle_url" => {
             let catalog = apricot_app::embedded_catalog(&app.settings().language);
-            if let Some(values) = ui.form(&FeatureForm::localized(
-                &catalog,
-                catalog.text("subtitles_load_url"),
-                vec![FormField::text("url", catalog.text("subtitles_url"), "")],
-            )) {
+            if let Some(values) = ui.player_form(
+                app,
+                &FeatureForm::localized(
+                    &catalog,
+                    catalog.text("subtitles_load_url"),
+                    vec![FormField::text("url", catalog.text("subtitles_url"), "")],
+                ),
+            ) {
                 match url::Url::parse(text(&values, "url").trim()) {
                     Ok(url) if matches!(url.scheme(), "http" | "https") => {
                         commands.push(PlaybackCommand::AddSubtitle(url.to_string()));
@@ -1578,28 +1610,36 @@ pub fn dispatch_playback_feature(
                 .iter()
                 .position(|track| track["selected"].as_bool() == Some(true))
                 .map_or(0, |index| index + 1);
-            let Some(values) = ui.form(&FeatureForm::localized(
-                &catalog,
-                catalog.text("subtitles_title"),
-                vec![
-                    FormField::choice("track", catalog.text("subtitles_track"), options, selected),
-                    FormField::checkbox(
-                        "speak",
-                        catalog.text("subtitles_speak"),
-                        app.playback_features().subtitles_enabled,
-                    ),
-                    FormField::checkbox(
-                        "interrupt",
-                        catalog.text("subtitles_interrupt"),
-                        preferences.interrupt,
-                    ),
-                    FormField::checkbox(
-                        "remember",
-                        catalog.text("subtitles_remember_language"),
-                        preferences.remember_language,
-                    ),
-                ],
-            )) else {
+            let Some(values) = ui.player_form(
+                app,
+                &FeatureForm::localized(
+                    &catalog,
+                    catalog.text("subtitles_title"),
+                    vec![
+                        FormField::choice(
+                            "track",
+                            catalog.text("subtitles_track"),
+                            options,
+                            selected,
+                        ),
+                        FormField::checkbox(
+                            "speak",
+                            catalog.text("subtitles_speak"),
+                            app.playback_features().subtitles_enabled,
+                        ),
+                        FormField::checkbox(
+                            "interrupt",
+                            catalog.text("subtitles_interrupt"),
+                            preferences.interrupt,
+                        ),
+                        FormField::checkbox(
+                            "remember",
+                            catalog.text("subtitles_remember_language"),
+                            preferences.remember_language,
+                        ),
+                    ],
+                ),
+            ) else {
                 return Some(commands);
             };
             let preferences = SubtitlePreferences {
@@ -1838,7 +1878,8 @@ fn edit_advanced_equalizer(
     let title = catalog
         .text("equalizer_advanced_title")
         .replace("{profile}", &settings.preset_label(&catalog, &preset));
-    let Some(values) = ui.form_preview(
+    let Some(values) = ui.player_form_preview(
+        app,
         &FeatureForm::localized(&catalog, title, fields),
         &mut preview,
     ) else {
@@ -2005,10 +2046,17 @@ pub fn tick_playback_features(
         && position >= range.end - 0.015
     {
         if app.playback_features().ranges.repeat {
-            commands.push(PlaybackCommand::SeekAbsolute {
-                seconds: range.start,
-                exact: true,
-            });
+            let ranges = &mut app.playback_features_mut().ranges;
+            if ranges
+                .loop_seek_from
+                .is_none_or(|from| from.to_bits() != position.to_bits())
+            {
+                ranges.loop_seek_from = Some(position);
+                commands.push(PlaybackCommand::SeekAbsolute {
+                    seconds: range.start,
+                    exact: true,
+                });
+            }
         } else {
             commands.push(PlaybackCommand::SetPaused(true));
             commands.push(PlaybackCommand::SeekAbsolute {
@@ -2180,7 +2228,138 @@ struct ShellFeatureUi<'a> {
     ui: &'a mut dyn crate::ShellUi,
     runtime: Option<&'a apricot_playback::PlaybackRuntime>,
     generation: u64,
+    /// The shell's player state a form keeps going (B9); `None` in a tick.
+    held: Option<HeldPlayer<'a>>,
 }
+
+/// The parts of the shell's player state that the player's own tick needs
+/// while a form holds the shell (B9).
+struct HeldPlayer<'a> {
+    segment_ended: &'a mut Option<u64>,
+    deferred: &'a mut std::collections::VecDeque<apricot_playback::PlaybackUpdate>,
+}
+
+/// Windows `poll_playback_while_modal`: while a player form is open, a
+/// position and the pause state go in at once, so the sleep timer, A-B
+/// repeat, the chapter stop and the end of a CUE track act on time. Every
+/// other event waits for the form, and nothing starts the next item until
+/// it closes (review 2.1, B9).
+fn tick_while_form_open(
+    app: &mut Application,
+    runtime: Option<&apricot_playback::PlaybackRuntime>,
+    held: &mut HeldPlayer<'_>,
+    ui: &mut dyn crate::ShellUi,
+) {
+    use apricot_playback::PlaybackEvent;
+    if let Some(runtime) = runtime {
+        while let Ok(Some(update)) = runtime.poll_update() {
+            // A position goes in at once unless a waiting event changes what
+            // plays first (review 4, B7).
+            let in_order = held.deferred.iter().all(|waiting| {
+                waiting.generation == update.generation
+                    && matches!(
+                        waiting.event,
+                        PlaybackEvent::Paused(_)
+                            | PlaybackEvent::MediaInfo(_)
+                            | PlaybackEvent::AudioDevices(_)
+                            | PlaybackEvent::Position { .. }
+                    )
+            });
+            match update.event {
+                PlaybackEvent::Position { elapsed, .. } if in_order => {
+                    if app.apply_playback_event(update.generation, update.event.clone()) {
+                        segment_end_while_form_open(
+                            app,
+                            runtime,
+                            held,
+                            ui,
+                            update.generation,
+                            elapsed,
+                        );
+                    }
+                }
+                // Its announcement and the player's refresh wait for the form
+                // (review 5, B8).
+                PlaybackEvent::Paused(_) if in_order => {
+                    let _ = app.apply_playback_event(update.generation, update.event.clone());
+                    held.deferred.push_back(update);
+                }
+                _ => held.deferred.push_back(update),
+            }
+        }
+    }
+    let commands = tick_playback_features(
+        app,
+        &mut ShellFeatureUi {
+            ui: &mut *ui,
+            runtime: None,
+            generation: 0,
+            held: None,
+        },
+    );
+    if let Some(runtime) = runtime {
+        execute_while_form_open(app, runtime, ui, commands);
+    }
+}
+
+/// Windows `cue_track_position_inner` without navigation: a track that
+/// ends while a form is open waits at its own start (review 2.1, B9).
+fn segment_end_while_form_open(
+    app: &mut Application,
+    runtime: &apricot_playback::PlaybackRuntime,
+    held: &mut HeldPlayer<'_>,
+    ui: &mut dyn crate::ShellUi,
+    generation: u64,
+    elapsed: f64,
+) {
+    use crate::player::{SegmentEnd, segment_end};
+    let seek = |start| PlaybackCommand::SeekAbsolute {
+        seconds: start,
+        exact: true,
+    };
+    match segment_end(app, held.segment_ended, generation, elapsed) {
+        None => {}
+        Some(SegmentEnd::Repeat { start }) => {
+            execute_while_form_open(app, runtime, ui, vec![seek(start)]);
+        }
+        Some(SegmentEnd::Finished { start }) => {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            if let Some(commands) = natural_playback_end(app, false) {
+                execute_while_form_open(app, runtime, ui, commands);
+                ui.set_status(catalog.text("sleep_timer_finished"), true);
+                return;
+            }
+            crate::podcasts::mark_current_podcast_episode_played(app, ui);
+            ui.set_status(
+                catalog.text("playback_finished"),
+                app.settings().announce_playback_finished,
+            );
+            execute_while_form_open(
+                app,
+                runtime,
+                ui,
+                vec![PlaybackCommand::SetPaused(true), seek(start)],
+            );
+        }
+    }
+}
+
+/// `Shell::execute_player_command` for the commands of a tick during a form.
+fn execute_while_form_open(
+    app: &Application,
+    runtime: &apricot_playback::PlaybackRuntime,
+    ui: &mut dyn crate::ShellUi,
+    commands: Vec<PlaybackCommand>,
+) {
+    let generation = app.player_session().generation();
+    for command in commands {
+        if runtime.execute(generation, command).is_err() {
+            let catalog = apricot_app::embedded_catalog(&app.settings().language);
+            ui.set_status(catalog.text("timing_unavailable"), true);
+        }
+    }
+}
+
 impl PlaybackFeatureUi for ShellFeatureUi<'_> {
     fn form(&mut self, form: &FeatureForm) -> Option<FormValues> {
         self.ui.feature_form(form)
@@ -2199,6 +2378,38 @@ impl PlaybackFeatureUi for ShellFeatureUi<'_> {
                 }
             }
         })
+    }
+    fn player_form(&mut self, app: &mut Application, form: &FeatureForm) -> Option<FormValues> {
+        let runtime = self.runtime;
+        let Some(held) = self.held.as_mut() else {
+            return self.form(form);
+        };
+        self.ui.playback_form(form, None, &mut |ui| {
+            tick_while_form_open(app, runtime, held, ui);
+        })
+    }
+    fn player_form_preview(
+        &mut self,
+        app: &mut Application,
+        form: &FeatureForm,
+        preview: &mut dyn FnMut(&FormValues) -> Vec<PlaybackCommand>,
+    ) -> Option<FormValues> {
+        let runtime = self.runtime;
+        let generation = self.generation;
+        let Some(held) = self.held.as_mut() else {
+            return self.form_preview(form, preview);
+        };
+        self.ui.playback_form(
+            form,
+            Some(&mut |values| {
+                for command in preview(values) {
+                    if let Some(runtime) = runtime {
+                        let _ = runtime.execute(generation, command);
+                    }
+                }
+            }),
+            &mut |ui| tick_while_form_open(app, runtime, held, ui),
+        )
     }
     fn speak_subtitle(&mut self, text: &str, interrupt: bool) {
         self.ui.speak_subtitle(text, interrupt);
@@ -2224,6 +2435,10 @@ impl crate::Shell {
             ui,
             runtime: self.player.playback.as_ref(),
             generation: self.application.player_session().generation(),
+            held: Some(HeldPlayer {
+                segment_ended: &mut self.player.segment_ended,
+                deferred: &mut self.player.deferred_playback,
+            }),
         };
         let Some(commands) = dispatch_playback_feature(&mut self.application, &mut adapter, action)
         else {
@@ -2262,6 +2477,7 @@ impl crate::Shell {
                 ui,
                 runtime: None,
                 generation: 0,
+                held: None,
             },
         );
         for command in commands {
@@ -2394,6 +2610,156 @@ mod sleep_timer_tests {
             crate::FormField { id, label, kind: crate::FormFieldKind::Checkbox { checked: false } }
                 if id == "cancel" && label == "Cancel the running timer instead of starting a new one"
         ));
+    }
+}
+
+#[cfg(test)]
+mod form_tick_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// B9: a sleep timer that runs out while a player form is open acts at
+    /// once, not when the form closes.
+    #[test]
+    fn a_player_form_keeps_the_sleep_timer_going() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        ui.playback_form_ticks = 1;
+        let options = SleepTimerOptions {
+            seconds: 60.0,
+            fade_seconds: 0.0,
+            ..SleepTimerOptions::default()
+        };
+        let started = Instant::now()
+            .checked_sub(Duration::from_secs(120))
+            .expect("two minutes ago");
+        shell.application.playback_features_mut().timer =
+            Some(SleepTimer::new(options, started, 50.0, true).expect("timer"));
+        assert!(shell.activate_playback_feature(&mut ui, "player_subtitles"));
+        let catalog = apricot_app::english_catalog();
+        assert_eq!(ui.playback_forms, [catalog.text("subtitles_title")]);
+        assert!(
+            ui.announcements
+                .iter()
+                .any(|text| text == catalog.text("sleep_timer_finished")),
+            "{:?}",
+            ui.announcements
+        );
+    }
+
+    fn playing_item(shell: &mut crate::Shell, start: f64, end: f64) -> u64 {
+        let mut item = crate::player::local_file_item(std::path::Path::new("/Music/album.flac"));
+        item.metadata
+            .insert("apricot_segment_start".into(), serde_json::json!(start));
+        item.metadata
+            .insert("apricot_segment_end".into(), serde_json::json!(end));
+        let generation = shell.application.start_player_item(item);
+        assert!(
+            shell
+                .application
+                .apply_playback_event(generation, apricot_playback::PlaybackEvent::Started)
+        );
+        generation
+    }
+
+    fn position(shell: &mut crate::Shell, generation: u64, elapsed: f64) {
+        assert!(shell.application.apply_playback_event(
+            generation,
+            apricot_playback::PlaybackEvent::Position {
+                elapsed,
+                duration: Some(60.0),
+            },
+        ));
+    }
+
+    /// The A-B loop seeks back once per reported position: a seek on every
+    /// tick restarted the one before it and the loop stalled at B.
+    #[test]
+    fn the_ab_loop_seeks_once_until_a_new_position_comes() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        let generation = playing_item(&mut shell, 0.0, 60.0);
+        position(&mut shell, generation, 1.0);
+        let mut tick = |shell: &mut crate::Shell| {
+            tick_playback_features(
+                &mut shell.application,
+                &mut ShellFeatureUi {
+                    ui: &mut ui,
+                    runtime: None,
+                    generation: 0,
+                    held: None,
+                },
+            )
+        };
+        let _ = tick(&mut shell);
+        let ranges = &mut shell.application.playback_features_mut().ranges;
+        ranges.active = Some(MarkedRange::new(2.0, 4.0).expect("range"));
+        ranges.repeat = true;
+        position(&mut shell, generation, 4.1);
+        let seek = PlaybackCommand::SeekAbsolute {
+            seconds: 2.0,
+            exact: true,
+        };
+        assert_eq!(tick(&mut shell), std::slice::from_ref(&seek));
+        assert_eq!(tick(&mut shell), []);
+        // mpv has not reported the jump yet: a later position past B seeks again.
+        position(&mut shell, generation, 4.6);
+        assert_eq!(tick(&mut shell), [seek]);
+    }
+
+    /// B9: a CUE track that ends while a player form is open waits at its
+    /// start and says that playback finished, without starting the next.
+    #[test]
+    fn a_cue_track_ends_while_a_player_form_is_open() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        let generation = playing_item(&mut shell, 10.0, 20.0);
+        position(&mut shell, generation, 20.1);
+        let runtime = apricot_playback::PlaybackRuntime::spawn().expect("runtime");
+        let mut segment_ended = None;
+        let mut deferred = std::collections::VecDeque::new();
+        let mut held = HeldPlayer {
+            segment_ended: &mut segment_ended,
+            deferred: &mut deferred,
+        };
+        segment_end_while_form_open(
+            &mut shell.application,
+            &runtime,
+            &mut held,
+            &mut ui,
+            generation,
+            20.1,
+        );
+        assert_eq!(segment_ended, Some(generation));
+        assert_eq!(shell.application.player_session().generation(), generation);
+        let catalog = apricot_app::english_catalog();
+        assert_eq!(ui.announcements, [catalog.text("playback_finished")]);
+    }
+
+    /// B9: without a tick (the Windows UI ticks with its own timer) the form
+    /// still opens and the timer waits.
+    #[test]
+    fn a_player_form_without_ticks_leaves_the_timer() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        let started = Instant::now()
+            .checked_sub(Duration::from_secs(120))
+            .expect("two minutes ago");
+        shell.application.playback_features_mut().timer = Some(
+            SleepTimer::new(
+                SleepTimerOptions {
+                    seconds: 60.0,
+                    fade_seconds: 0.0,
+                    ..SleepTimerOptions::default()
+                },
+                started,
+                50.0,
+                true,
+            )
+            .expect("timer"),
+        );
+        assert!(shell.activate_playback_feature(&mut ui, "player_transition_settings"));
+        assert!(ui.announcements.is_empty(), "{:?}", ui.announcements);
     }
 }
 

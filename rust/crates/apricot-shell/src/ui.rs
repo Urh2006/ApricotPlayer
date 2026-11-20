@@ -99,6 +99,25 @@ pub trait ShellUi {
         self.feature_form(form)
     }
 
+    /// A player tool's form (Subtitles, Transitions, Audio processing...)
+    /// while the shell is held by the action that opened it. `tick` runs the
+    /// player's sleep timer, A-B repeat and CUE track ends; a UI whose
+    /// timers cannot reach the shell during the form calls it about as often
+    /// as its playback poll (B9). `preview` is as in
+    /// [`Self::feature_form_preview`].
+    fn playback_form(
+        &mut self,
+        form: &crate::FeatureForm,
+        preview: Option<&mut dyn FnMut(&crate::FormValues)>,
+        tick: &mut dyn FnMut(&mut dyn ShellUi),
+    ) -> Option<crate::FormValues> {
+        let _ = tick;
+        match preview {
+            Some(preview) => self.feature_form_preview(form, preview),
+            None => self.feature_form(form),
+        }
+    }
+
     /// The text of a screen's text field.
     fn screen_text(&self, id: &str) -> String;
     /// Replaces the text of a screen field, such as a chosen search

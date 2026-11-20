@@ -12,9 +12,13 @@ use objc2_app_kit::{
     NSScrollView, NSSecureTextField, NSTextField, NSTextFieldDelegate, NSView,
 };
 use objc2_foundation::{
-    NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+    NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes,
+    NSSize, NSString, NSTimer,
 };
-use std::{cell::RefCell, ffi::c_void};
+use std::{
+    cell::{Cell, RefCell},
+    ffi::c_void,
+};
 
 #[derive(Clone, Copy)]
 struct Preview {
@@ -26,9 +30,17 @@ struct PreviewState {
     controls: Vec<Control>,
     callback: Preview,
 }
+/// The player's tick while a player form is open (B9).
+#[derive(Clone, Copy)]
+struct Tick {
+    data: *mut c_void,
+    invoke: unsafe fn(*mut c_void),
+}
 #[derive(Default)]
 struct TargetIvars {
     preview: RefCell<Option<PreviewState>>,
+    tick: Cell<Option<Tick>>,
+    ticking: Cell<bool>,
 }
 
 define_class!(
@@ -47,6 +59,20 @@ define_class!(
     impl Target {
         #[unsafe(method(changed:))]
         fn changed(&self, _sender: Option<&AnyObject>) { self.preview(); }
+
+        #[unsafe(method(tick:))]
+        fn tick(&self, _timer: Option<&AnyObject>) {
+            let Some(tick) = self.ivars().tick.get() else {
+                return;
+            };
+            // A tick never runs inside another one.
+            if self.ivars().ticking.replace(true) {
+                return;
+            }
+            // SAFETY: the synchronous form loop owns the callback until the tick is cleared.
+            unsafe { (tick.invoke)(tick.data) };
+            self.ivars().ticking.set(false);
+        }
     }
 );
 
@@ -101,7 +127,53 @@ impl Target {
 }
 
 pub(crate) fn show(mtm: MainThreadMarker, form: &FeatureForm) -> Option<FormValues> {
-    show_inner(mtm, form, None)
+    show_inner(mtm, form, None, None)
+}
+
+/// A player form: `tick` keeps the sleep timer, A-B repeat and CUE track
+/// ends going while it is open, as the main window's playback poll does
+/// when no form holds the shell (B9).
+pub(crate) fn show_ticking(
+    mtm: MainThreadMarker,
+    form: &FeatureForm,
+    preview: Option<&mut dyn FnMut(&FormValues)>,
+    tick: &mut dyn FnMut(),
+) -> Option<FormValues> {
+    let mut tick = tick;
+    let tick = Tick {
+        data: std::ptr::from_mut(&mut tick).cast(),
+        invoke: invoke_tick,
+    };
+    match preview {
+        Some(preview) => {
+            let mut callback = preview;
+            let handle = Preview {
+                data: std::ptr::from_mut(&mut callback).cast(),
+                invoke: invoke_preview,
+            };
+            show_inner(mtm, form, Some(handle), Some(tick))
+        }
+        None => show_inner(mtm, form, None, Some(tick)),
+    }
+}
+
+unsafe fn invoke_tick(data: *mut c_void) {
+    // SAFETY: show_ticking retains this callback stack slot for the entire modal loop.
+    let callback = unsafe { &mut *data.cast::<&mut dyn FnMut()>() };
+    callback();
+}
+
+/// Stops the tick when the form returns, on every path.
+struct TickTimer<'a> {
+    target: &'a Target,
+    timer: Retained<NSTimer>,
+}
+
+impl Drop for TickTimer<'_> {
+    fn drop(&mut self) {
+        self.timer.invalidate();
+        self.target.ivars().tick.set(None);
+    }
 }
 
 pub(crate) fn show_preview(
@@ -114,7 +186,7 @@ pub(crate) fn show_preview(
         data: std::ptr::from_mut(&mut callback).cast(),
         invoke: invoke_preview,
     };
-    show_inner(mtm, form, Some(handle))
+    show_inner(mtm, form, Some(handle), None)
 }
 
 unsafe fn invoke_preview(data: *mut c_void, values: &FormValues) {
@@ -146,6 +218,7 @@ fn show_inner(
     mtm: MainThreadMarker,
     form: &FeatureForm,
     preview: Option<Preview>,
+    tick: Option<Tick>,
 ) -> Option<FormValues> {
     // SAFETY: NSObject's designated initialization on the main thread.
     let this = Target::alloc(mtm).set_ivars(TargetIvars::default());
@@ -245,6 +318,27 @@ fn show_inner(
             callback,
         });
     }
+    let _tick_timer = tick.map(|tick| {
+        target.ivars().tick.set(Some(tick));
+        // SAFETY: the target implements `tick:` and outlives the timer, which
+        // is invalidated when the form returns.
+        let timer = unsafe {
+            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+                crate::window::PLAYBACK_POLL_SECONDS,
+                &target,
+                sel!(tick:),
+                None,
+                true,
+            )
+        };
+        // SAFETY: AppKit's static run loop mode, so the timer runs in the
+        // form's modal loop and while one of its menus is open.
+        unsafe { NSRunLoop::currentRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+        TickTimer {
+            target: &target,
+            timer,
+        }
+    });
     loop {
         if alert.runModal() != NSAlertFirstButtonReturn {
             target.ivars().preview.borrow_mut().take();

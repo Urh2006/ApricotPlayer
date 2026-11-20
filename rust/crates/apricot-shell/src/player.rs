@@ -53,7 +53,57 @@ pub(crate) struct PlayerRuntime {
     /// whose stream is still being resolved.
     pub(crate) preparing_generation: Option<u64>,
     /// The generation whose CUE track end was reached (review 2.1).
-    segment_ended: Option<u64>,
+    pub(crate) segment_ended: Option<u64>,
+    /// Windows `deferred_playback`: events that came while a player form
+    /// held the shell; `poll_playback` handles them first (B9).
+    pub(crate) deferred_playback: std::collections::VecDeque<apricot_playback::PlaybackUpdate>,
+}
+
+/// What a position inside a CUE track asks for (review 2.1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum SegmentEnd {
+    /// Repeat starts the track again at `start`.
+    Repeat { start: f64 },
+    /// The track ended; it waits at `start` unless something plays on.
+    Finished { start: f64 },
+}
+
+/// Windows `cue_track_position_inner` up to its decision: `None` while the
+/// track goes on, or once its end was already handled. Seeking back before
+/// the end arms it again.
+pub(crate) fn segment_end(
+    application: &apricot_app::Application,
+    segment_ended: &mut Option<u64>,
+    generation: u64,
+    elapsed: f64,
+) -> Option<SegmentEnd> {
+    let session = application.player_session();
+    let item = session.current_item()?;
+    let start = segment_time(item, "apricot_segment_start")?;
+    let repeat = session.enabled_toggles().contains(&SessionToggle::Repeat);
+    // The last track ends with the file; only Repeat needs to catch that
+    // end before the file's own loop goes back to the first track.
+    let end = segment_time(item, "apricot_segment_end").or_else(|| {
+        repeat
+            .then(|| session.duration_seconds())
+            .flatten()
+            .map(|duration| duration - 0.3)
+    })?;
+    if elapsed < end - 0.5 {
+        if *segment_ended == Some(generation) {
+            *segment_ended = None;
+        }
+        return None;
+    }
+    if elapsed < end || *segment_ended == Some(generation) {
+        return None;
+    }
+    *segment_ended = Some(generation);
+    Some(if repeat {
+        SegmentEnd::Repeat { start }
+    } else {
+        SegmentEnd::Finished { start }
+    })
 }
 
 /// Python `format_rate_for_speech`.
@@ -480,42 +530,24 @@ impl Shell {
         generation: u64,
         elapsed: f64,
     ) -> Option<bool> {
-        let item = self.application.player_session().current_item()?.clone();
-        segment_time(&item, "apricot_segment_start")?;
-        let repeat = self
-            .application
-            .player_session()
-            .enabled_toggles()
-            .contains(&SessionToggle::Repeat);
-        // The last track ends with the file; only Repeat needs to catch that
-        // end before the file's own loop goes back to the first track.
-        let end = segment_time(&item, "apricot_segment_end").or_else(|| {
-            repeat
-                .then(|| self.application.player_session().duration_seconds())
-                .flatten()
-                .map(|duration| duration - 0.3)
-        })?;
-        if elapsed < end - 0.5 {
-            if self.player.segment_ended == Some(generation) {
-                self.player.segment_ended = None;
+        let start = match segment_end(
+            &self.application,
+            &mut self.player.segment_ended,
+            generation,
+            elapsed,
+        )? {
+            SegmentEnd::Repeat { start } => {
+                let _ = self.execute_player_command(
+                    ui,
+                    PlaybackCommand::SeekAbsolute {
+                        seconds: start,
+                        exact: true,
+                    },
+                );
+                return None;
             }
-            return None;
-        }
-        if elapsed < end || self.player.segment_ended == Some(generation) {
-            return None;
-        }
-        self.player.segment_ended = Some(generation);
-        if repeat {
-            let start = segment_time(&item, "apricot_segment_start").unwrap_or(0.0);
-            let _ = self.execute_player_command(
-                ui,
-                PlaybackCommand::SeekAbsolute {
-                    seconds: start,
-                    exact: true,
-                },
-            );
-            return None;
-        }
+            SegmentEnd::Finished { start } => start,
+        };
         if let Some(commands) =
             crate::playback_features::natural_playback_end(&mut self.application, false)
         {
@@ -535,7 +567,6 @@ impl Shell {
         // The finished track waits at its own start, so Play hears it again
         // instead of the rest of the album file (review 2.1).
         let _ = self.execute_player_command(ui, PlaybackCommand::SetPaused(true));
-        let start = segment_time(&item, "apricot_segment_start").unwrap_or(0.0);
         let _ = self.execute_player_command(
             ui,
             PlaybackCommand::SeekAbsolute {
@@ -590,10 +621,15 @@ impl Shell {
             self.navigate_player_relative(ui, 1, true);
         }
         loop {
-            let Some(runtime) = self.player.playback.as_ref() else {
-                return self.application.playback_features().timer.is_some();
+            let update = if let Some(update) = self.player.deferred_playback.pop_front() {
+                Ok(Some(update))
+            } else {
+                let Some(runtime) = self.player.playback.as_ref() else {
+                    return self.application.playback_features().timer.is_some();
+                };
+                runtime.poll_update()
             };
-            let update = match runtime.poll_update() {
+            let update = match update {
                 Ok(Some(update)) => update,
                 Ok(None) => return true,
                 Err(error) => {

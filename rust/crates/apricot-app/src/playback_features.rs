@@ -393,6 +393,10 @@ pub struct SelectionRanges {
     pub selected: Option<usize>,
     pub active: Option<MarkedRange>,
     pub repeat: bool,
+    /// The position from which the A-B loop last went back to A. Until mpv
+    /// reports a new position the loop does not seek again: a seek every
+    /// tick restarts the one before it, and no new position ever came.
+    pub loop_seek_from: Option<f64>,
 }
 impl SelectionRanges {
     pub fn for_media(&mut self, key: &str) {

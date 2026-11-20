@@ -29,7 +29,7 @@ use crate::player_page::PlayerPage;
 use crate::screen_buttons::ScreenButtons;
 
 /// Windows `PLAYBACK_TIMER_INTERVAL_MS`.
-const PLAYBACK_POLL_SECONDS: f64 = 0.025;
+pub(crate) const PLAYBACK_POLL_SECONDS: f64 = 0.025;
 
 /// Windows `CreateWindowExW(..., 760, 600, ...)`.
 const WINDOW_WIDTH: f64 = 760.0;
@@ -2927,6 +2927,18 @@ impl ShellUi for MacUi<'_> {
         form: &apricot_shell::FeatureForm,
     ) -> Option<apricot_shell::FormValues> {
         crate::feature_form::show(self.controller.mtm(), form)
+    }
+
+    fn playback_form(
+        &mut self,
+        form: &apricot_shell::FeatureForm,
+        preview: Option<&mut dyn FnMut(&apricot_shell::FormValues)>,
+        tick: &mut dyn FnMut(&mut dyn ShellUi),
+    ) -> Option<apricot_shell::FormValues> {
+        let controller = self.controller;
+        crate::feature_form::show_ticking(controller.mtm(), form, preview, &mut || {
+            tick(&mut MacUi { controller });
+        })
     }
 
     fn sources_browser(

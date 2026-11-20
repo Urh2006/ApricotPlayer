@@ -81,6 +81,42 @@ fn metadata_bool(item: &MediaItem, key: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Windows `current_podcast_episode`.
+fn current_podcast_episode(
+    application: &apricot_app::Application,
+) -> Option<(usize, usize, MediaItem)> {
+    let item = application.player_session().current_item()?.clone();
+    if item.kind != MediaKind::PodcastEpisode {
+        return None;
+    }
+    let (feed_index, item_index) = application.rss_episode_location(&item)?;
+    Some((feed_index, item_index, item))
+}
+
+/// Windows `mark_current_podcast_episode_played`, also while a player form
+/// holds the shell (B9).
+pub(crate) fn mark_current_podcast_episode_played(
+    application: &mut apricot_app::Application,
+    ui: &mut dyn ShellUi,
+) {
+    let Some((feed_index, item_index, item)) = current_podcast_episode(application) else {
+        return;
+    };
+    if metadata_bool(&item, "played") {
+        return;
+    }
+    match application.set_rss_episode_played(feed_index, item_index, true, unix_timestamp()) {
+        Ok(Some(_)) => {
+            let _ = application.clear_playback_position(&item);
+        }
+        Ok(None) => {}
+        Err(error) => ui.set_status(
+            &format!("Podcast played state was not saved: {error}"),
+            false,
+        ),
+    }
+}
+
 fn metadata_number(item: &MediaItem, key: &str) -> Option<f64> {
     item.metadata.get(key).and_then(serde_json::Value::as_f64)
 }
@@ -1193,38 +1229,13 @@ impl Shell {
 
     /// Windows `current_podcast_episode`.
     fn current_podcast_episode(&self) -> Option<(usize, usize, MediaItem)> {
-        let item = self.application.player_session().current_item()?.clone();
-        if item.kind != MediaKind::PodcastEpisode {
-            return None;
-        }
-        let (feed_index, item_index) = self.application.rss_episode_location(&item)?;
-        Some((feed_index, item_index, item))
+        current_podcast_episode(&self.application)
     }
 
     /// Windows `mark_current_podcast_episode_played` at the end of an
     /// episode.
     pub(crate) fn mark_current_podcast_episode_played(&mut self, ui: &mut dyn ShellUi) {
-        let Some((feed_index, item_index, item)) = self.current_podcast_episode() else {
-            return;
-        };
-        if metadata_bool(&item, "played") {
-            return;
-        }
-        match self.application.set_rss_episode_played(
-            feed_index,
-            item_index,
-            true,
-            unix_timestamp(),
-        ) {
-            Ok(Some(_)) => {
-                let _ = self.application.clear_playback_position(&item);
-            }
-            Ok(None) => {}
-            Err(error) => ui.set_status(
-                &format!("Podcast played state was not saved: {error}"),
-                false,
-            ),
-        }
+        mark_current_podcast_episode_played(&mut self.application, ui);
     }
 
     /// Windows `toggle_selected_rss_played`.

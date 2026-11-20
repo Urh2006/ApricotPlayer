@@ -174,7 +174,7 @@ pub(crate) mod equalizer {
     /// A main window that records announcements.
     #[derive(Default)]
     pub(crate) struct Ui {
-        pub(super) announcements: Vec<String>,
+        pub(crate) announcements: Vec<String>,
         pub(super) bookmarks: Option<crate::BookmarkDialog>,
         /// What a text prompt returns; `None` cancels.
         pub(super) prompt_answer: Option<String>,
@@ -198,9 +198,25 @@ pub(crate) mod equalizer {
         pub(crate) context_command: Option<apricot_app::context_menu::ContextCommand>,
         /// The conversion progress calls, in order.
         pub(crate) conversion_progress: Vec<String>,
+        /// The titles of the player forms shown; each is cancelled.
+        pub(crate) playback_forms: Vec<String>,
+        /// How often each player form runs the player's tick while open.
+        pub(crate) playback_form_ticks: usize,
     }
 
     impl ShellUi for Ui {
+        fn playback_form(
+            &mut self,
+            form: &crate::FeatureForm,
+            _preview: Option<&mut dyn FnMut(&crate::FormValues)>,
+            tick: &mut dyn FnMut(&mut dyn ShellUi),
+        ) -> Option<crate::FormValues> {
+            self.playback_forms.push(form.title.clone());
+            for _ in 0..self.playback_form_ticks {
+                tick(self);
+            }
+            None
+        }
         fn set_status(&mut self, message: &str, announce: bool) {
             if announce {
                 self.announcements.push(message.to_owned());
