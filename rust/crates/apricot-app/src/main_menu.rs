@@ -219,8 +219,10 @@ fn add_rust_only_strings(
                 locale.entry(key.clone()).or_insert_with(|| text.clone());
             }
             // A platform's own wording replaces the shared text there, for
-            // example "menu bar" instead of "system tray" on macOS.
-            Some((base, platform)) if platform == CURRENT_PLATFORM => {
+            // example "menu bar" instead of "system tray" on macOS. A fix
+            // corrects a Python text in the languages it lists, for example
+            // Slovenian without its letters č, š and ž (2.1.1).
+            Some((base, platform)) if platform == CURRENT_PLATFORM || platform == "fix" => {
                 locale.insert(base.to_owned(), text.clone());
             }
             Some(_) => {}
@@ -527,17 +529,27 @@ mod tests {
                     "{key} must not replace a Python text"
                 );
             }
-            let english = translations.get("en").expect("English text");
             let placeholders = |text: &str| {
                 text.split('{')
                     .skip(1)
                     .filter_map(|part| part.split_once('}').map(|(name, _)| name.to_owned()))
                     .collect::<Vec<_>>()
             };
+            let fix = platform.is_some_and(|(_, name)| name == "fix");
+            let base_english;
+            let english = if fix {
+                // A fix keeps the placeholders of the Python text.
+                base_english =
+                    python_english[platform.map(|(base, _)| base).unwrap_or_default()].clone();
+                &base_english
+            } else {
+                translations.get("en").expect("English text")
+            };
             for language in LANGUAGES {
-                let text = translations
-                    .get(language.code)
-                    .unwrap_or_else(|| panic!("{key} lacks {}", language.code));
+                let Some(text) = translations.get(language.code) else {
+                    assert!(fix, "{key} lacks {}", language.code);
+                    continue;
+                };
                 assert_eq!(
                     placeholders(text),
                     placeholders(english),
@@ -546,7 +558,7 @@ mod tests {
                 );
                 match platform {
                     None => assert_eq!(embedded_catalog(language.code).text(&key), text),
-                    Some((base, name)) if name == super::CURRENT_PLATFORM => {
+                    Some((base, name)) if name == super::CURRENT_PLATFORM || name == "fix" => {
                         assert_eq!(embedded_catalog(language.code).text(base), text);
                     }
                     Some(_) => {}

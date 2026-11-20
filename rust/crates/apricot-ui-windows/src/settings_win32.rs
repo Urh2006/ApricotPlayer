@@ -180,6 +180,9 @@ struct SettingsWindowState {
     pending_section: Option<SettingsSection>,
     displayed_language: String,
     controls: Vec<BoundControl>,
+    /// The group boxes of the section: the box and the first and last of
+    /// its controls (2.1.1).
+    groups: Vec<(HWND, usize, usize)>,
     scroll_offset: i32,
     content_height: i32,
     deferred_action: Option<&'static str>,
@@ -396,6 +399,7 @@ unsafe fn create_base_controls(
         controls: Vec::new(),
         scroll_offset: 0,
         content_height: 0,
+        groups: Vec::new(),
         deferred_action: None,
         announcer: crate::announcement_win32::WindowsAnnouncer::new(HWND::default()),
         pending_audio_devices: None,
@@ -483,6 +487,9 @@ unsafe fn render_controls(window: HWND) -> Result<()> {
         }
         let _ = DestroyWindow(bound.control);
     }
+    for (group, _, _) in state.groups.drain(..) {
+        let _ = DestroyWindow(group);
+    }
     if state.selected_section == SettingsSection::Cookies {
         // Python `configured_cookies_display_path` runs the legacy migration.
         let _ = (&mut *state.application).configured_cookies_display_path(
@@ -505,6 +512,7 @@ unsafe fn render_controls(window: HWND) -> Result<()> {
         );
     }
     let instance = HINSTANCE(GetModuleHandleW(None)?.0);
+    let groups = std::mem::take(&mut model.groups);
     for (index, control) in model.controls.into_iter().enumerate() {
         let id = DYNAMIC_ID_START + index;
         state
@@ -515,6 +523,38 @@ unsafe fn render_controls(window: HWND) -> Result<()> {
         if !SetWindowSubclass(bound.control, Some(settings_control_proc), index + 1, 0).as_bool() {
             return Err(windows::core::Error::from_thread());
         }
+    }
+    // A group box before every control in the window order, so NVDA finds
+    // the box around a control and says "<name> grouping" when the focus
+    // enters the group; it takes no focus itself (2.1.1, Urh).
+    for group in groups {
+        if group.last >= state.controls.len() {
+            continue;
+        }
+        let label = wide(&group.label);
+        let control = create_control(
+            window,
+            instance,
+            w!("BUTTON"),
+            PCWSTR(label.as_ptr()),
+            WS_CHILD
+                | WS_VISIBLE
+                | WINDOW_STYLE(windows::Win32::UI::WindowsAndMessaging::BS_GROUPBOX as u32),
+            windows::Win32::UI::WindowsAndMessaging::WS_EX_TRANSPARENT,
+            0,
+        )?;
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowPos(
+            control,
+            Some(windows::Win32::UI::WindowsAndMessaging::HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE
+                | windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE
+                | windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE,
+        );
+        state.groups.push((control, group.first, group.last));
     }
     layout(window);
     // Python `refresh_audio_output_devices_async` after building the
@@ -3021,7 +3061,8 @@ unsafe fn layout(window: HWND) {
     let control_width = width - control_x - margin;
     let label_width = (control_width / 2).min(330);
     let viewport_height = (height - top - margin).max(1);
-    state.content_height = state.controls.iter().map(control_row_height).sum();
+    let (tops, content_height) = row_tops(state);
+    state.content_height = content_height;
     let maximum_offset = (state.content_height - viewport_height).max(0);
     state.scroll_offset = state.scroll_offset.clamp(0, maximum_offset);
     let scroll_info = SCROLLINFO {
@@ -3035,9 +3076,8 @@ unsafe fn layout(window: HWND) {
     };
     SetScrollInfo(window, SB_VERT, &raw const scroll_info, true);
 
-    let mut logical_y = 0;
-    for bound in &state.controls {
-        let y = top + logical_y - state.scroll_offset;
+    for (index, bound) in state.controls.iter().enumerate() {
+        let y = top + tops[index] - state.scroll_offset;
         let height = control_window_height(&bound.binding);
         if let Some(label) = bound.label {
             let _ = MoveWindow(label, control_x, y + 5, label_width, 24, true);
@@ -3052,8 +3092,47 @@ unsafe fn layout(window: HWND) {
         } else {
             let _ = MoveWindow(bound.control, control_x, y, control_width, height, true);
         }
-        logical_y += control_row_height(bound);
     }
+    for &(group, first, last) in &state.groups {
+        let group_top = top + tops[first] - GROUP_HEADER + 4 - state.scroll_offset;
+        let group_bottom =
+            top + tops[last] + control_row_height(&state.controls[last]) + 2 - state.scroll_offset;
+        // Scrolled up, a box stays below the buttons at the top, so it
+        // never takes in Back, Save or Restore to defaults.
+        let group_top = group_top.max(top - 4);
+        let group_bottom = group_bottom.max(group_top);
+        let _ = MoveWindow(
+            group,
+            control_x - 8,
+            group_top,
+            control_width + 12,
+            group_bottom - group_top,
+            true,
+        );
+    }
+}
+
+/// Room above a group's first control for the group's name, and below its
+/// last control for the box's edge.
+const GROUP_HEADER: i32 = 28;
+const GROUP_FOOTER: i32 = 10;
+
+/// The top of every control's row below the section's first row, and the
+/// height of all rows, group headers included.
+fn row_tops(state: &SettingsWindowState) -> (Vec<i32>, i32) {
+    let mut tops = Vec::with_capacity(state.controls.len());
+    let mut y = 0;
+    for (index, bound) in state.controls.iter().enumerate() {
+        if state.groups.iter().any(|&(_, first, _)| first == index) {
+            y += GROUP_HEADER;
+        }
+        tops.push(y);
+        y += control_row_height(bound);
+        if state.groups.iter().any(|&(_, _, last)| last == index) {
+            y += GROUP_FOOTER;
+        }
+    }
+    (tops, y)
 }
 
 fn control_window_height(binding: &ControlBinding) -> i32 {
@@ -3115,8 +3194,14 @@ unsafe fn ensure_control_visible(window: HWND, control: HWND) {
     else {
         return;
     };
-    let control_top: i32 = state.controls[..index].iter().map(control_row_height).sum();
-    let control_bottom = control_top + control_row_height(&state.controls[index]);
+    let (tops, _) = row_tops(state);
+    // A group's first control shows its group's name with it.
+    let control_top = if state.groups.iter().any(|&(_, first, _)| first == index) {
+        tops[index] - GROUP_HEADER
+    } else {
+        tops[index]
+    };
+    let control_bottom = tops[index] + control_row_height(&state.controls[index]);
     if control_top < state.scroll_offset {
         state.scroll_offset = control_top;
     } else if control_bottom > state.scroll_offset + viewport_height {

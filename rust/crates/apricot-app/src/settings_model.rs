@@ -284,6 +284,19 @@ pub struct SettingsScreenModel {
     pub sections: Vec<SettingsSectionItem>,
     pub selected_section: SettingsSection,
     pub controls: Vec<SettingsControl>,
+    /// Named groups of neighbouring controls (2.1.1, Urh): on Windows a
+    /// group box, so the screen reader says the group's name when the
+    /// focus enters it; on the Mac nothing, so the controls stay one flat
+    /// list for VoiceOver.
+    pub groups: Vec<SettingsGroup>,
+}
+
+/// Controls `first..=last` of a section, under one name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettingsGroup {
+    pub label: String,
+    pub first: usize,
+    pub last: usize,
 }
 
 impl SettingsScreenModel {
@@ -419,6 +432,7 @@ impl SettingsScreenModel {
             .map_or(selected_section.id(), |definition| {
                 catalog.text(definition.label_key)
             });
+        let (mut controls, groups) = arrange(controls, &section_groups(selected_section), catalog);
         if selected_section != SettingsSection::Recording {
             controls.push(SettingsControl::Command {
                 command: SettingsCommand::ResetSection,
@@ -433,8 +447,403 @@ impl SettingsScreenModel {
             sections,
             selected_section,
             controls,
+            groups,
         }
     }
+}
+
+/// What places a control in a group.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GroupMember {
+    Setting(SettingId),
+    Command(SettingsCommand),
+    Info(&'static str),
+    Spotify(&'static str),
+}
+
+fn group_member(control: &SettingsControl) -> Option<GroupMember> {
+    use GroupMember::{Command, Info, Setting, Spotify};
+    Some(match control {
+        SettingsControl::ReadOnlyText { id, .. } => Info(id),
+        SettingsControl::Text { setting, .. }
+        | SettingsControl::Choice { setting, .. }
+        | SettingsControl::Checkbox { setting, .. }
+        | SettingsControl::Integer { setting, .. }
+        | SettingsControl::IntegerSlider { setting, .. } => Setting(*setting),
+        SettingsControl::Command { command, .. } => Command(*command),
+        SettingsControl::SpotifyChoice { field, .. } => Spotify(match field {
+            SpotifyField::Quality => "quality",
+            SpotifyField::Autoplay => "autoplay",
+            SpotifyField::LibraryOrder => "library_order",
+        }),
+        SettingsControl::SpotifyNormalisation { .. } => Spotify("normalisation"),
+        SettingsControl::SpotifyListeningHistory { .. } => Spotify("history"),
+        SettingsControl::SpotifyKeyCache { .. } => Spotify("key_cache"),
+        _ => return None,
+    })
+}
+
+type GroupTable = Vec<(&'static str, Vec<GroupMember>)>;
+
+/// The groups of a section, in order, by the translation key of their
+/// name; controls of no group come first, in their own order (2.1.1, Urh).
+fn section_groups(section: SettingsSection) -> GroupTable {
+    match section {
+        SettingsSection::General => general_groups(),
+        SettingsSection::Playback => playback_groups(),
+        SettingsSection::Downloads => download_groups(),
+        SettingsSection::Library => library_groups(),
+        SettingsSection::Podcasts => podcast_groups(),
+        SettingsSection::Cookies => cookie_groups(),
+        SettingsSection::Spotify => spotify_groups(),
+        _ => Vec::new(),
+    }
+}
+
+fn general_groups() -> GroupTable {
+    use GroupMember::{Command, Info, Setting};
+    use SettingsCommand as C;
+    vec![
+        (
+            "settings_group_language_files",
+            vec![
+                Setting(SettingId::Language),
+                Info("settings_file"),
+                Setting(SettingId::DownloadFolder),
+                Command(C::BrowseDownloadFolder),
+                Command(C::SetDefaultPlayer),
+                Command(C::ImportWindowsData),
+            ],
+        ),
+        (
+            "settings_group_lists_announcements",
+            vec![
+                Setting(SettingId::AnnouncementVerbosity),
+                Setting(SettingId::ShowShortcutsInLabels),
+                Setting(SettingId::ResultsLimit),
+                Setting(SettingId::DirectLinkEnterAction),
+            ],
+        ),
+        (
+            "settings_group_app_updates",
+            vec![
+                Setting(SettingId::AutoUpdateApp),
+                Setting(SettingId::UpdateChannel),
+                Setting(SettingId::AppUpdateIntervalHours),
+                Command(C::CheckAppUpdates),
+            ],
+        ),
+        (
+            "settings_group_ytdlp",
+            vec![
+                Setting(SettingId::AutoUpdateYtdlp),
+                Setting(SettingId::YtdlpUpdateChannel),
+                Command(C::CheckYtdlpUpdates),
+            ],
+        ),
+        (
+            "settings_group_window",
+            vec![
+                Setting(SettingId::CloseToTray),
+                Setting(SettingId::StartWithWindows),
+                Setting(SettingId::TrayNotification),
+            ],
+        ),
+        (
+            "settings_group_tools_backups",
+            vec![
+                Command(C::OpenIntegrations),
+                Command(C::GlobalShortcuts),
+                Command(C::ExportSettings),
+                Command(C::ImportSettings),
+                Command(C::ExportBookmarks),
+                Command(C::ImportBookmarks),
+            ],
+        ),
+    ]
+}
+
+fn playback_groups() -> GroupTable {
+    use GroupMember::{Command, Setting};
+    use SettingsCommand as C;
+    vec![
+        (
+            "settings_group_playing",
+            vec![
+                Setting(SettingId::AutoplayNext),
+                Setting(SettingId::AutoplayRelated),
+                Setting(SettingId::EnableBackgroundPlayback),
+                Setting(SettingId::ResumePlayback),
+                Setting(SettingId::ShowResumeInMenu),
+                Setting(SettingId::PlayerStartPaused),
+                Setting(SettingId::PlayerFullscreen),
+                Setting(SettingId::PreferBrowserPlayback),
+                Setting(SettingId::OpenFileMode),
+                Setting(SettingId::VideoPlaylistLinkChoice),
+            ],
+        ),
+        (
+            "settings_group_announcements_details",
+            vec![
+                Setting(SettingId::AnnouncePlayPause),
+                Setting(SettingId::AnnouncePlaybackFinished),
+                Setting(SettingId::ShowVideoDetailsByDefault),
+            ],
+        ),
+        (
+            "settings_group_volume_sound",
+            vec![
+                Setting(SettingId::DefaultVolume),
+                Setting(SettingId::VolumeStep),
+                Setting(SettingId::VolumeBoostByDefault),
+                Setting(SettingId::AudioOutputDevice),
+                Setting(SettingId::ReplaygainMode),
+                Command(C::AudioProcessing),
+                Command(C::PlaybackTransitions),
+            ],
+        ),
+        (
+            "settings_group_seeking",
+            vec![
+                Setting(SettingId::SeekSeconds),
+                Setting(SettingId::CustomSeekSeconds),
+            ],
+        ),
+        (
+            "settings_group_speed_pitch",
+            vec![
+                Setting(SettingId::PlayerSpeed),
+                Setting(SettingId::SpeedAudioMode),
+                Setting(SettingId::PitchMode),
+                Setting(SettingId::SpeedStep),
+                Setting(SettingId::PitchStep),
+                Setting(SettingId::SpeedPitchHoldDelayMs),
+                Setting(SettingId::SpeedPitchHoldIntervalMs),
+            ],
+        ),
+        (
+            "settings_group_streaming_cache",
+            vec![
+                Setting(SettingId::StreamFormatPreference),
+                Setting(SettingId::PrefetchNextStreamUrl),
+                Setting(SettingId::GaplessPlayback),
+                Setting(SettingId::EnableAgeRestrictedVideos),
+                Setting(SettingId::EnableOnlineLyrics),
+                Setting(SettingId::EnableStreamUrlCache),
+                Setting(SettingId::StreamUrlCacheMinutes),
+                Setting(SettingId::EnableStreamCache),
+                Setting(SettingId::CacheFolder),
+                Setting(SettingId::CacheSizeMb),
+            ],
+        ),
+    ]
+}
+
+fn download_groups() -> GroupTable {
+    use GroupMember::{Command, Setting};
+    use SettingsCommand as C;
+    vec![
+        (
+            "settings_group_download_steps",
+            vec![
+                Setting(SettingId::ConfirmBeforeDownload),
+                Setting(SettingId::AskDownloadLocationEachTime),
+                Setting(SettingId::OpenFolderAfterDownload),
+                Setting(SettingId::PopupWhenDownloadComplete),
+                Setting(SettingId::PopupWhenConversionComplete),
+                Setting(SettingId::QuietDownloads),
+            ],
+        ),
+        (
+            "settings_group_formats_quality",
+            vec![
+                Setting(SettingId::AudioFormat),
+                Setting(SettingId::AudioQuality),
+                Setting(SettingId::VideoFormat),
+                Setting(SettingId::MaxVideoHeight),
+                Command(C::ConverterOptions),
+            ],
+        ),
+        (
+            "settings_group_file_names",
+            vec![
+                Setting(SettingId::FilenameTemplate),
+                Setting(SettingId::RestrictFilenames),
+                Setting(SettingId::KeepPlaylistOrder),
+                Setting(SettingId::DownloadArchive),
+            ],
+        ),
+        (
+            "settings_group_download_extras",
+            vec![
+                Setting(SettingId::EmbedMetadata),
+                Setting(SettingId::EmbedThumbnail),
+                Setting(SettingId::EmbedChapters),
+                Setting(SettingId::SponsorblockRemove),
+                Setting(SettingId::WriteThumbnail),
+                Setting(SettingId::WriteDescription),
+                Setting(SettingId::WriteInfoJson),
+            ],
+        ),
+        (
+            "settings_group_subtitles",
+            vec![
+                Setting(SettingId::WriteSubtitles),
+                Setting(SettingId::AutoSubtitles),
+                Setting(SettingId::SubtitleLanguages),
+            ],
+        ),
+    ]
+}
+
+fn library_groups() -> GroupTable {
+    use GroupMember::{Command, Setting};
+    vec![
+        (
+            "settings_group_history_trending",
+            vec![
+                Setting(SettingId::EnableHistory),
+                Setting(SettingId::HistoryLimit),
+                Setting(SettingId::EnableTrending),
+            ],
+        ),
+        (
+            "settings_group_subscriptions",
+            vec![
+                Setting(SettingId::SubscriptionCheckEnabled),
+                Setting(SettingId::SubscriptionCheckIntervalHours),
+                Command(SettingsCommand::CheckSubscriptions),
+            ],
+        ),
+    ]
+}
+
+fn podcast_groups() -> GroupTable {
+    use GroupMember::{Info, Setting};
+    vec![
+        (
+            "settings_group_podcast_search",
+            vec![
+                Info("podcast_source"),
+                Setting(SettingId::PodcastSearchProvider),
+                Setting(SettingId::PodcastSearchCountry),
+                Setting(SettingId::PodcastSearchLimit),
+            ],
+        ),
+        (
+            "settings_group_feeds",
+            vec![
+                Setting(SettingId::RssMaxItems),
+                Setting(SettingId::RssRefreshOnStartup),
+                Setting(SettingId::RssAutoRefreshEnabled),
+                Setting(SettingId::RssRefreshIntervalHours),
+            ],
+        ),
+    ]
+}
+
+fn cookie_groups() -> GroupTable {
+    use GroupMember::{Command, Setting};
+    use SettingsCommand as C;
+    vec![
+        (
+            "settings_group_cookies",
+            vec![
+                Setting(SettingId::CookiesFile),
+                Command(C::ChooseCookiesFile),
+                Setting(SettingId::CookiesFromBrowser),
+                Setting(SettingId::CookiesBrowserProfile),
+                Command(C::OpenYoutubeLoginProfile),
+                Command(C::ExportBrowserCookies),
+                Setting(SettingId::CookieUserAgent),
+            ],
+        ),
+        (
+            "settings_group_network",
+            vec![
+                Setting(SettingId::Proxy),
+                Setting(SettingId::YoutubeDataApiKey),
+                Command(C::ObtainYoutubeApiKey),
+                Setting(SettingId::ShowAdvancedNetworkSettings),
+                Setting(SettingId::RateLimit),
+                Setting(SettingId::ConcurrentFragments),
+                Setting(SettingId::Retries),
+                Setting(SettingId::SocketTimeout),
+                Setting(SettingId::FfmpegLocation),
+            ],
+        ),
+    ]
+}
+
+fn spotify_groups() -> GroupTable {
+    use GroupMember::{Command, Spotify};
+    vec![
+        (
+            "settings_group_spotify_playback",
+            vec![
+                Spotify("quality"),
+                Spotify("normalisation"),
+                Spotify("autoplay"),
+                Spotify("key_cache"),
+            ],
+        ),
+        (
+            "settings_group_spotify_library",
+            vec![
+                Spotify("library_order"),
+                Spotify("history"),
+                Command(SettingsCommand::SpotifyReleases),
+            ],
+        ),
+    ]
+}
+
+/// Orders the controls by their groups and finds where each group is.
+/// Controls of no group come first, then every group's controls in the
+/// group's order; a group without controls on this system is left out.
+fn arrange(
+    controls: Vec<SettingsControl>,
+    groups: &GroupTable,
+    catalog: &TranslationCatalog,
+) -> (Vec<SettingsControl>, Vec<SettingsGroup>) {
+    if groups.is_empty() {
+        return (controls, Vec::new());
+    }
+    let grouped = |member: Option<GroupMember>| {
+        member.is_some_and(|member| groups.iter().any(|(_, members)| members.contains(&member)))
+    };
+    let mut remaining: Vec<Option<SettingsControl>> = controls.into_iter().map(Some).collect();
+    let mut ordered = Vec::with_capacity(remaining.len());
+    for slot in &mut remaining {
+        if !grouped(slot.as_ref().and_then(group_member)) {
+            ordered.extend(slot.take());
+        }
+    }
+    let mut found = Vec::new();
+    for (label, members) in groups {
+        let first = ordered.len();
+        for member in members {
+            if let Some(control) = remaining
+                .iter_mut()
+                .find(|slot| slot.as_ref().and_then(group_member) == Some(*member))
+                .and_then(Option::take)
+            {
+                ordered.push(control);
+            }
+        }
+        if ordered.len() > first {
+            found.push(SettingsGroup {
+                label: catalog.text(label).to_owned(),
+                first,
+                last: ordered.len() - 1,
+            });
+        }
+    }
+    // Never a control lost, also one named twice.
+    for slot in &mut remaining {
+        ordered.extend(slot.take());
+    }
+    (ordered, found)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1974,7 +2383,7 @@ mod tests {
     }
 
     #[test]
-    fn general_controls_preserve_python_order_and_current_values() {
+    fn general_controls_are_grouped_and_keep_current_values() {
         let settings = SettingsDocument {
             language: "sl".to_owned(),
             results_limit: 50,
@@ -1988,8 +2397,6 @@ mod tests {
         );
         // macOS adds "Import data from Windows" after "Set default player".
         let mac = usize::from(cfg!(target_os = "macos"));
-        // 2.1 adds the yt-dlp channel and appends "Media controls",
-        // "Global shortcuts" and the four import and export commands.
         assert_eq!(model.controls.len(), 26 + mac);
         assert!(matches!(
             &model.controls[0],
@@ -2000,22 +2407,50 @@ mod tests {
                 ..
             } if value == "sl" && options.len() == 27
         ));
+        // 2.1.1 (Urh): named groups in a sensible order; the announcement
+        // length opens "Announcements and lists".
+        let names: Vec<_> = model.groups.iter().map(|group| group.label.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Language and files",
+                "Announcements and lists",
+                "ApricotPlayer updates",
+                "yt-dlp",
+                "Window behavior",
+                "Tools and backups"
+            ]
+        );
+        assert_eq!((model.groups[0].first, model.groups[0].last), (0, 4 + mac));
         assert!(matches!(
             &model.controls[5 + mac],
+            SettingsControl::Choice {
+                setting: SettingId::AnnouncementVerbosity,
+                label,
+                ..
+            } if label == "Announcement verbosity"
+        ));
+        assert!(matches!(
+            &model.controls[7 + mac],
             SettingsControl::Choice {
                 setting: SettingId::ResultsLimit,
                 value,
                 ..
             } if value == "50"
         ));
+        let ytdlp = &model.groups[3];
         assert!(matches!(
-            &model.controls[8 + mac],
+            &model.controls[ytdlp.first],
             SettingsControl::Checkbox {
                 setting: SettingId::AutoUpdateYtdlp,
-                label,
                 ..
-            } if label == "Check yt-dlp updates on every startup"
+            }
         ));
+        // Groups follow each other without a gap; Reset stays outside.
+        for pair in model.groups.windows(2) {
+            assert_eq!(pair[0].last + 1, pair[1].first);
+        }
+        assert_eq!(model.groups.last().map(|group| group.last), Some(model.controls.len() - 2));
     }
 
     #[test]
