@@ -118,7 +118,7 @@ Your settings and saved data are kept, and the shortcuts you already use stay th
 ## Known limitations
 
 - On the Mac, recording only from a microphone still asks for Screen Recording permission, because macOS gives ApricotPlayer all recording sources through the same system service.
-- On the Mac, a form such as Subtitles or Transitions that stays open holds the sleep timer, A-B repeat and the end of a CUE track until it closes.
+- On the Mac, a form such as Subtitles or Transitions that stays open holds the sleep timer, A-B repeat and the end of a CUE track until it closes. This will be fixed in the next version.
 
 These changes apply to Windows and macOS. The Mac packages for this release are built with GitHub Actions. Existing settings and saved data are retained.
 
