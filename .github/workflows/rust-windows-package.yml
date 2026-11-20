@@ -6,6 +6,10 @@ name: Rust Windows package
 # and Node.js are the locked downloads of release.yml. It runs only when
 # started by hand and never publishes a release.
 on:
+  # Temporary: build 2.1.2 from its branch while the workflow is not yet on
+  # the default branch, where workflow_dispatch needs it. Removed before merge.
+  push:
+    branches: [claude/project-thread-3fnm1s]
   workflow_dispatch:
     inputs:
       release_channel:
