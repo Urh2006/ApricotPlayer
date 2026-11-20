@@ -252,6 +252,22 @@ impl SettingsController {
         Ok(())
     }
 
+    /// Saves one value the app records itself, keeping the user's unsaved
+    /// changes in the draft and out of the file (review 5, A8).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value is invalid or storage rejects the save.
+    pub fn record_value(
+        &mut self,
+        id: SettingId,
+        value: Value,
+    ) -> Result<(), SettingsControllerError> {
+        let saved = self.draft.record_value(id, value)?;
+        save_loaded_settings(&self.paths, &mut self.loaded, &saved)?;
+        Ok(())
+    }
+
     /// Atomically saves the current draft, then marks it committed in memory.
     ///
     /// # Errors
@@ -295,6 +311,37 @@ mod tests {
                 .set_shortcut("spotify_first_track", "Ctrl+PageDown")
                 .is_err(),
             "Ctrl+PageDown is Next"
+        );
+    }
+
+    /// Review 5, A8: recording a check time saves only that time; a
+    /// language the user changed without Save stays unsaved and Back still
+    /// discards it.
+    #[test]
+    fn a_recorded_check_time_does_not_save_the_draft() {
+        let root = tempdir().expect("temporary directory");
+        let paths =
+            SettingsPaths::for_app_data(&root.path().join("beta"), &root.path().join("old"));
+        let mut controller = SettingsController::load(paths.clone(), SettingsDocument::default());
+        let language = controller.current().language.clone();
+        controller
+            .set_value(SettingId::Language, json!("de"))
+            .expect("draft");
+        controller
+            .record_value(SettingId::LastSubscriptionCheck, json!(1234.0))
+            .expect("record");
+        assert_eq!(controller.current().language, "de");
+        let reloaded = SettingsController::load(paths.clone(), SettingsDocument::default());
+        assert_eq!(reloaded.current().language, language);
+        assert_eq!(
+            serde_json::to_value(reloaded.current()).expect("value")["last_subscription_check"],
+            json!(1234.0)
+        );
+        controller.cancel();
+        assert_eq!(controller.current().language, language);
+        assert_eq!(
+            serde_json::to_value(controller.current()).expect("value")["last_subscription_check"],
+            json!(1234.0)
         );
     }
 

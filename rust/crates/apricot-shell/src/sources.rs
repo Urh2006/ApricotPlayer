@@ -119,8 +119,8 @@ enum Work {
         source: IptvSource,
         channel: IptvChannel,
         /// A channel kept in favorites, a playlist or the queue, not
-        /// chosen in the IPTV lists (review 4, A1).
-        saved: bool,
+        /// chosen in the IPTV lists (review 4, A1): the kept entry.
+        saved: Option<Box<MediaItem>>,
     },
     Sources(Vec<CaptureSource>),
     Message(String),
@@ -447,7 +447,7 @@ impl SourcesController {
                     .reopen(&source, &item)
                     .map_err(|error| iptv_error(&catalog, error))?,
                 source,
-                saved: true,
+                saved: Some(Box::new(item)),
             })
         });
     }
@@ -654,10 +654,11 @@ impl SourcesController {
             }) => {
                 let catalog = environment.catalog();
                 if let Some(item) = channel.media(&source) {
-                    ui.play(item);
+                    ui.play(with_kept_entry(item, saved.as_deref()));
                     // A kept channel goes back to the list it was kept in,
                     // not to the IPTV lists.
-                    self.player_return = (!saved)
+                    self.player_return = saved
+                        .is_none()
                         .then(|| (SourceReturn::Iptv(self.opening_from), channel.id.clone()));
                     self.playing_iptv = Some(channel.id.clone());
                     self.playing_iptv_context = Some((channel.clone(), self.guide.clone()));
@@ -1995,7 +1996,7 @@ impl SourcesController {
                         .resolve_channel(&channel)
                         .map_err(|error| iptv_error(&catalog, error))?,
                     source,
-                    saved: false,
+                    saved: None,
                 })
             }
         });
@@ -2643,6 +2644,19 @@ fn clock(timestamp: i64) -> String {
     })
 }
 
+/// A kept channel opened again stays the same occurrence of its playlist,
+/// so the next entry follows it (review 5, A5).
+fn with_kept_entry(mut item: MediaItem, kept: Option<&MediaItem>) -> MediaItem {
+    if let Some(kept) = kept {
+        for (key, value) in &kept.metadata {
+            if key.starts_with("apricot_playlist_") || key == "added_at" {
+                item.metadata.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    item
+}
+
 fn iptv_error(catalog: &TranslationCatalog, error: IptvError) -> String {
     let key = match error {
         IptvError::CredentialsSave => "iptv_error_credentials_save",
@@ -2965,6 +2979,42 @@ fn station_details(catalog: &TranslationCatalog, station: &Station) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 5, A5: a kept channel of an edited playlist, opened again
+    /// from its source, is the same playlist occurrence as the kept entry.
+    #[test]
+    fn a_reopened_playlist_channel_keeps_its_entry() {
+        let source = IptvSource {
+            id: "s".into(),
+            name: "Home".into(),
+            kind: apricot_platform::iptv::SourceKind::Xtream,
+            address: "https://tv.example.test/player_api.php".into(),
+            protected_credentials: String::new(),
+            epg_address: String::new(),
+            protected_epg: String::new(),
+            prefer_hls: false,
+        };
+        let channel = IptvChannel {
+            id: "7".into(),
+            name: "News".into(),
+            group: String::new(),
+            number: String::new(),
+            epg_id: String::new(),
+            logo: String::new(),
+            url: "http://tv.example.test/live/USER/FAKE/7.ts".into(),
+            kind: ChannelKind::Live,
+            metadata: std::collections::BTreeMap::new(),
+        };
+        let playing = channel.media(&source).expect("item");
+        let mut kept = playing.without_private_address().expect("kept");
+        kept.metadata
+            .insert("apricot_playlist_entry_id".into(), "e1".into());
+        let opened = with_kept_entry(playing, Some(&kept));
+        assert_eq!(
+            apricot_app::playback_sequence::playlist_entry_identity(&opened),
+            apricot_app::playback_sequence::playlist_entry_identity(&kept)
+        );
+    }
 
     #[test]
     fn station_details_skip_unknown_properties() {

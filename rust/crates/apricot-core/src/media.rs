@@ -14,7 +14,7 @@ pub struct MediaId(pub String);
 pub const SAVED_IPTV_SCHEME: &str = "apricot-iptv";
 
 /// Item fields that carry an IPTV address, login or portal session.
-const PRIVATE_ADDRESS_KEYS: [&str; 10] = [
+pub const PRIVATE_ADDRESS_KEYS: [&str; 10] = [
     "url",
     "id",
     "webpage_url",
@@ -216,6 +216,28 @@ impl MediaItem {
             item.title.clone_from(&item.id.0);
         }
         (item != *self).then_some(item)
+    }
+
+    /// The lasting identity of a private IPTV channel, the same while it
+    /// plays and when it is saved: its saved reference, never its address
+    /// (review 5, A1 and A4). `None` for every other item.
+    #[must_use]
+    pub fn private_reference(&self) -> Option<String> {
+        if let Some(kept) = self.without_private_address() {
+            return Some(
+                kept.url
+                    .as_ref()
+                    .map_or_else(|| kept.id.0.clone(), ToString::to_string),
+            );
+        }
+        if self.is_saved_iptv_reference() || self.has_private_address() {
+            return Some(
+                self.url
+                    .as_ref()
+                    .map_or_else(|| self.id.0.clone(), ToString::to_string),
+            );
+        }
+        None
     }
 
     #[must_use]

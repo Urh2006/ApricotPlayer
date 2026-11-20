@@ -28,7 +28,7 @@ pub struct BookmarkController {
 impl BookmarkController {
     pub fn load(current: BookmarkFile, legacy: &BookmarkFile, now: f64) -> Self {
         let (mut controller, imported_legacy) = if current.path().is_file() {
-            match current.load() {
+            match current.load_repairing() {
                 Ok(bookmarks) => (Self::loaded(current, bookmarks), false),
                 Err(error) => (Self::blocked(current, error.to_string()), false),
             }

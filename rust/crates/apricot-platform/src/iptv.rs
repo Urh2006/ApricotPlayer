@@ -388,6 +388,7 @@ pub fn parse_m3u(text: &str, base: Option<&Url>) -> Result<Vec<IptvChannel>, Ipt
         return Err(IptvError::HlsStream);
     }
     let mut channels = Vec::new();
+    let mut seen = BTreeMap::<String, usize>::new();
     let mut info = String::new();
     let mut group = String::new();
     for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
@@ -418,8 +419,23 @@ pub fn parse_m3u(text: &str, base: Option<&Url>) -> Result<Vec<IptvChannel>, Ipt
             .unwrap_or_else(|| url.as_str())
             .to_owned();
         let get = |key: &str| attributes.get(key).cloned().unwrap_or_default();
+        // A lasting id within the playlist: its guide id, or its name, with
+        // the occurrence for a repeat; not its row, which moves when the
+        // provider adds a channel above it (review 5, A2).
+        let base = if get("tvg-id").is_empty() {
+            format!("name:{name}")
+        } else {
+            format!("tvg:{}", get("tvg-id"))
+        };
+        let occurrence = seen.entry(base.clone()).or_insert(0_usize);
+        *occurrence += 1;
+        let id = if *occurrence == 1 {
+            base
+        } else {
+            format!("{base}#{occurrence}")
+        };
         channels.push(IptvChannel {
-            id: format!("{}:{}", channels.len(), get("tvg-id")),
+            id,
             name,
             group: attributes
                 .get("group-title")
@@ -618,7 +634,7 @@ impl IptvClient {
                     provider_stream(source, kind, &id, extension)?
                 };
                 output.push(IptvChannel {
-                    id: id.clone(),
+                    id: xtream_id(kind, &id),
                     name: value_text(&item["name"]),
                     group: names
                         .get(&value_text(&item["category_id"]))
@@ -653,7 +669,7 @@ impl IptvClient {
         let response = self.xtream_request(
             source,
             "get_series_info",
-            &[("series_id", series_id.to_owned())],
+            &[("series_id", provider_id(series_id).1.to_owned())],
         )?;
         let seasons = response["episodes"]
             .as_object()
@@ -666,7 +682,7 @@ impl IptvClient {
                 let id = value_text(&episode["id"]);
                 let extension = episode["container_extension"].as_str().unwrap_or("mp4");
                 channels.push(IptvChannel {
-                    id: id.clone(),
+                    id: xtream_id(ChannelKind::Episode, &id),
                     name: value_text(&episode["title"]),
                     group: season.clone(),
                     number: value_text(&episode["episode_num"]),
@@ -799,11 +815,12 @@ impl IptvClient {
                 .to_owned()
         };
         if source.kind == SourceKind::Xtream {
-            let kind = match item.kind {
+            let (named, raw_id) = provider_id(&channel_id);
+            let kind = named.unwrap_or(match item.kind {
                 MediaKind::Movie => ChannelKind::Movie,
                 MediaKind::TvEpisode => ChannelKind::Episode,
                 _ => ChannelKind::Live,
-            };
+            });
             let saved = text("iptv_stream_extension");
             let extension = match (saved.as_str(), kind) {
                 ("", ChannelKind::Live) if source.prefer_hls => "m3u8",
@@ -812,8 +829,8 @@ impl IptvClient {
                 (extension, _) => extension,
             };
             return Ok(IptvChannel {
-                url: provider_stream(source, kind, &channel_id, extension)?,
-                id: channel_id,
+                url: provider_stream(source, kind, raw_id, extension)?,
+                id: channel_id.clone(),
                 name: item.title.clone(),
                 group: item.channel.clone(),
                 number: String::new(),
@@ -823,12 +840,13 @@ impl IptvClient {
                 metadata: BTreeMap::new(),
             });
         }
-        let channel = self
-            .load(source)?
-            .into_iter()
+        let channels = self.load(source)?;
+        let channel = channels
+            .iter()
             .find(|channel| channel.id == channel_id)
+            .or_else(|| older_playlist_channel(&channels, &channel_id))
             .ok_or(IptvError::ChannelGone)?;
-        self.resolve_channel(&channel)
+        self.resolve_channel(channel)
     }
 
     /// A portal channel's playback link, asked for just before it plays.
@@ -902,6 +920,48 @@ impl IptvClient {
         }
         Ok(bytes)
     }
+}
+
+/// The id of an Xtream item: a film, series or episode is named with its
+/// kind, since the provider numbers them apart from live channels and the
+/// same number may mean different items (review 5, A2). A live channel
+/// keeps its number, as saved before.
+fn xtream_id(kind: ChannelKind, id: &str) -> String {
+    match kind {
+        ChannelKind::Live => id.to_owned(),
+        ChannelKind::Movie => format!("movie:{id}"),
+        ChannelKind::Series => format!("series:{id}"),
+        ChannelKind::Episode => format!("episode:{id}"),
+    }
+}
+
+/// The kind named in an Xtream id, if any, and the provider's own number.
+#[must_use]
+pub fn provider_id(id: &str) -> (Option<ChannelKind>, &str) {
+    for (prefix, kind) in [
+        ("movie:", ChannelKind::Movie),
+        ("series:", ChannelKind::Series),
+        ("episode:", ChannelKind::Episode),
+    ] {
+        if let Some(raw) = id.strip_prefix(prefix) {
+            return (Some(kind), raw);
+        }
+    }
+    (None, id)
+}
+
+/// A playlist channel saved by 2.1 release candidates, whose id was its
+/// row and guide id ("12:news.de"): found by the guide id when exactly one
+/// channel has it. Without a guide id, or with several, the channel must be
+/// chosen again (review 5, A2).
+fn older_playlist_channel<'a>(channels: &'a [IptvChannel], id: &str) -> Option<&'a IptvChannel> {
+    let (row, guide) = id.split_once(':')?;
+    if guide.is_empty() || row.is_empty() || !row.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let mut matching = channels.iter().filter(|channel| channel.epg_id == guide);
+    let first = matching.next()?;
+    matching.next().is_none().then_some(first)
 }
 
 fn provider_stream(
@@ -1067,6 +1127,95 @@ mod tests {
         assert_eq!(opened.kind, ChannelKind::Movie);
         let again = opened.media(&source).expect("item");
         assert_eq!(again.id, kept.id);
+    }
+
+    /// Review 5, A2: a film and a live channel with the same provider
+    /// number are different items, and a film saved by an older version
+    /// (plain number, film kind) still opens as the film.
+    #[test]
+    fn xtream_items_of_different_kinds_keep_apart() {
+        let mut source = IptvSource {
+            id: "one".into(),
+            name: "Home".into(),
+            kind: SourceKind::Xtream,
+            address: "https://tv.example.test/player_api.php".into(),
+            protected_credentials: String::new(),
+            epg_address: String::new(),
+            protected_epg: String::new(),
+            prefer_hls: false,
+        };
+        source
+            .set_credentials("USER", "FAKE_SECRET", "")
+            .expect("protect");
+        let channel = |kind| IptvChannel {
+            id: xtream_id(kind, "5"),
+            name: "Five".into(),
+            group: String::new(),
+            number: String::new(),
+            epg_id: String::new(),
+            logo: String::new(),
+            url: provider_stream(&source, kind, "5", "ts").expect("url"),
+            kind,
+            metadata: BTreeMap::new(),
+        };
+        let live = channel(ChannelKind::Live).media(&source).expect("live");
+        let film = channel(ChannelKind::Movie).media(&source).expect("film");
+        assert_ne!(live.id, film.id);
+        let client = IptvClient::new(None).expect("client");
+        let kept = film.without_private_address().expect("kept");
+        let opened = client.reopen(&source, &kept).expect("film");
+        assert_eq!(opened.kind, ChannelKind::Movie);
+        assert!(opened.url.contains("/movie/"), "{}", opened.url);
+        let mut older = kept.clone();
+        older.metadata.insert("iptv_channel_id".into(), "5".into());
+        let opened = client.reopen(&source, &older).expect("older film");
+        assert_eq!(opened.kind, ChannelKind::Movie);
+        assert_eq!(provider_id("episode:9"), (Some(ChannelKind::Episode), "9"));
+    }
+
+    /// Review 5, A2: a playlist channel keeps its id when the provider adds
+    /// a channel above it; repeats are told apart by occurrence; an id of
+    /// an older version is found by its guide id only when it is unique.
+    #[test]
+    fn playlist_ids_do_not_depend_on_rows() {
+        let list = |text: &str| parse_m3u(text, None).expect("list");
+        let before = list(
+            "#EXTM3U
+#EXTINF:-1 tvg-id=\"news.de\",News
+http://a.test/1
+#EXTINF:-1,Music
+http://a.test/2
+",
+        );
+        let after = list(
+            "#EXTM3U
+#EXTINF:-1,Sport
+http://a.test/0
+#EXTINF:-1 tvg-id=\"news.de\",News
+http://a.test/1
+#EXTINF:-1,Music
+http://a.test/2
+#EXTINF:-1,Music
+http://a.test/3
+",
+        );
+        assert_eq!(before[0].id, after[1].id);
+        assert_eq!(before[1].id, after[2].id);
+        assert_ne!(after[2].id, after[3].id);
+        assert_eq!(
+            older_playlist_channel(&after, "0:news.de").map(|c| c.id.as_str()),
+            Some("tvg:news.de")
+        );
+        assert!(older_playlist_channel(&after, "1:").is_none());
+        let doubled = list(
+            "#EXTM3U
+#EXTINF:-1 tvg-id=\"x\",A
+http://a.test/1
+#EXTINF:-1 tvg-id=\"x\",B
+http://a.test/2
+",
+        );
+        assert!(older_playlist_channel(&doubled, "0:x").is_none());
     }
 
     #[test]

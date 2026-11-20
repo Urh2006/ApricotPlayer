@@ -54,12 +54,6 @@ impl MediaListFile {
                             .ok_or(MediaListFileError::InvalidItem { index })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                if values
-                    .iter()
-                    .any(crate::legacy_media::holds_private_address)
-                {
-                    self.save(&items)?;
-                }
                 Ok(items)
             }
             Ok(_) => Err(MediaListFileError::InvalidItem { index: 0 }),
@@ -68,6 +62,22 @@ impl MediaListFile {
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Loads the list and writes it again without the address and login of
+    /// a private IPTV channel saved by an older version. Only for this
+    /// version's own file: a fallback profile is read, never written
+    /// (review 5, A6).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load`], or when the cleaned list cannot be written.
+    pub fn load_repairing(&self) -> Result<Vec<MediaItem>, MediaListFileError> {
+        let items = self.load()?;
+        if crate::legacy_media::file_holds_private_address(&self.path, None) {
+            self.save(&items)?;
+        }
+        Ok(items)
     }
 
     /// Saves the complete list atomically in the current Python-compatible shape.
@@ -97,7 +107,12 @@ mod privacy_tests {
             r#"[{"title":"News","kind":"live_stream","url":"http://tv.example.test/live/USER/FAKE_SECRET/7.ts","apricot_private_address":true,"iptv_source_id":"s","iptv_channel_id":"7","stalker_token":"FAKE_TOKEN"}]"#,
         )
         .expect("write");
+        let original = std::fs::read(&path).expect("read");
+        // Review 5, A6: a plain read (a fallback profile) writes nothing.
         let items = MediaListFile::new(&path).load().expect("load");
+        assert_eq!(items.len(), 1);
+        assert_eq!(std::fs::read(&path).expect("read"), original);
+        let items = MediaListFile::new(&path).load_repairing().expect("load");
         assert_eq!(items.len(), 1);
         let text = std::fs::read_to_string(&path).expect("read");
         assert!(

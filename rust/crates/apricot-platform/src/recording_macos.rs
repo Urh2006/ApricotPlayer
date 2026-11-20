@@ -122,7 +122,15 @@ fn capture_inner(
                 .map_err(|error| error.to_string())?;
         }
     }
-    let mut stream = SCStream::new(&filter, &config).map_err(|error| error.to_string())?;
+    // The system may end the stream (the display sleeps, the permission is
+    // withdrawn): the capture then fails like an unplugged device instead
+    // of recording silence as a complete file (review 5, A7).
+    let stopped_queue = Arc::clone(&queue);
+    let on_stop = screencapturekit::stream::ErrorHandler::new(move |error| {
+        stopped_queue.fail(&format!("The system stopped the audio capture. {error}"));
+    });
+    let mut stream = SCStream::new_with_delegate(&filter, &config, on_stop)
+        .map_err(|error| error.to_string())?;
     let output_type = if microphone {
         SCStreamOutputType::Microphone
     } else {

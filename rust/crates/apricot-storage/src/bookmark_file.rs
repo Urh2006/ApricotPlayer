@@ -132,6 +132,30 @@ impl BookmarkFile {
         }
     }
 
+    /// Loads the bookmarks and writes them again when a bookmark of a
+    /// private IPTV channel still holds its address or login. Only for this
+    /// version's own file: a fallback profile is read, never written
+    /// (review 5, A1 and A6).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load`], or when the cleaned bookmarks cannot be written.
+    pub fn load_repairing(&self) -> Result<Vec<Bookmark>, BookmarkFileError> {
+        let bookmarks = self.load()?;
+        let stale = match read_json::<Value>(&self.path) {
+            Ok(Value::Array(values)) => values.iter().any(|value| {
+                bookmark_from_python_value(value).is_some_and(|bookmark| {
+                    is_private(&bookmark.media) && *value != bookmark_to_python_value(&bookmark)
+                })
+            }),
+            _ => false,
+        };
+        if stale {
+            self.save(&bookmarks)?;
+        }
+        Ok(bookmarks)
+    }
+
     /// Atomically saves the complete collection in the Python data shape.
     ///
     /// # Errors
@@ -145,6 +169,11 @@ impl BookmarkFile {
 }
 
 pub fn bookmark_media_key(item: &MediaItem) -> Option<String> {
+    // A private IPTV channel is known by its source and channel, never by
+    // its address with the login (review 5, A1).
+    if let Some(reference) = item.private_reference() {
+        return Some(reference);
+    }
     for key in ["url", "webpage_url", "path", "original_url", "watch_url"] {
         if let Some(value) = item
             .metadata
@@ -193,9 +222,10 @@ fn bookmark_from_python_value(value: &Value) -> Option<Bookmark> {
         }
     }
     let media = media_item_from_python_value(&Value::Object(media_object))?;
+    let private = is_private(&media);
     let media_key = {
         let explicit = text(object, "media_key");
-        if explicit.is_empty() {
+        if explicit.is_empty() || private {
             bookmark_media_key(&media)?
         } else {
             explicit
@@ -225,6 +255,9 @@ fn bookmark_from_python_value(value: &Value) -> Option<Bookmark> {
     ] {
         metadata.remove(key);
     }
+    if private {
+        strip_private_fields(&mut metadata);
+    }
     Some(Bookmark {
         id: text(object, "id"),
         name: text(object, "name"),
@@ -242,8 +275,28 @@ fn bookmark_from_python_value(value: &Value) -> Option<Bookmark> {
     })
 }
 
+/// A private IPTV channel, saved or playing.
+fn is_private(media: &MediaItem) -> bool {
+    media.is_saved_iptv_reference() || media.has_private_address()
+}
+
+/// The address fields of an older bookmark of a private IPTV channel, kept
+/// next to its media; they may hold the login.
+fn strip_private_fields(object: &mut serde_json::Map<String, Value>) {
+    for key in apricot_core::PRIVATE_ADDRESS_KEYS
+        .iter()
+        .chain(&["path", "local_path", "watch_url"])
+    {
+        object.remove(*key);
+    }
+}
+
 fn bookmark_to_python_value(bookmark: &Bookmark) -> Value {
     let mut object = bookmark.metadata.clone();
+    let private = is_private(&bookmark.media);
+    if private {
+        strip_private_fields(&mut object);
+    }
     object.insert("id".to_owned(), Value::String(bookmark.id.clone()));
     object.insert("name".to_owned(), Value::String(bookmark.name.clone()));
     object.insert(
@@ -254,10 +307,12 @@ fn bookmark_to_python_value(bookmark: &Bookmark) -> Value {
             round_tenth(bookmark.position)
         }),
     );
-    object.insert(
-        "media_key".to_owned(),
-        Value::String(bookmark.media_key.clone()),
-    );
+    let media_key = if private {
+        bookmark_media_key(&bookmark.media).unwrap_or_default()
+    } else {
+        bookmark.media_key.clone()
+    };
+    object.insert("media_key".to_owned(), Value::String(media_key));
     object.insert(
         "media_title".to_owned(),
         Value::String(bookmark.media_title.clone()),
@@ -313,6 +368,64 @@ mod tests {
 
     use serde_json::{Value, json};
     use tempfile::tempdir;
+
+    /// Review 5, A1: a bookmark of a private IPTV channel is keyed and
+    /// written by its source and channel; an older bookmark that kept the
+    /// address with the login is cleaned by this version's own load only.
+    #[test]
+    fn private_iptv_bookmarks_keep_no_login() {
+        let folder = tempdir().expect("folder");
+        let path = folder.path().join("bookmarks.json");
+        let address = "http://tv.example.test/live/USER/FAKE_SECRET/7.ts";
+        let media = json!({"title": "News", "kind": "live_stream", "url": address,
+            "apricot_private_address": true, "iptv_source_id": "s",
+            "iptv_channel_id": "7", "stalker_token": "FAKE_TOKEN"});
+        let playing = apricot_core::MediaItem {
+            id: apricot_core::MediaId(address.into()),
+            source: apricot_core::MediaSource::Direct,
+            kind: apricot_core::MediaKind::LiveStream,
+            title: "News".into(),
+            url: Some(address.parse().expect("url")),
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: media
+                .as_object()
+                .expect("object")
+                .clone()
+                .into_iter()
+                .collect(),
+        };
+        let key = super::bookmark_media_key(&playing).expect("key");
+        assert_eq!(key, "apricot-iptv://saved/s/7");
+        fs::write(
+            &path,
+            json!([{"id": "b1", "name": "Start", "position": 4.0, "media_key": address,
+                "url": address, "media": media}])
+            .to_string(),
+        )
+        .expect("write");
+        let original = fs::read(&path).expect("read");
+        let file = super::BookmarkFile::new(&path);
+        let loaded = file.load().expect("load");
+        assert_eq!(
+            fs::read(&path).expect("read"),
+            original,
+            "plain read writes"
+        );
+        assert_eq!(loaded[0].media_key, key);
+        file.load_repairing().expect("repair");
+        let text = fs::read_to_string(&path).expect("read");
+        for secret in ["FAKE_SECRET", "FAKE_TOKEN", "USER"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        file.save(&loaded).expect("save");
+        let text = fs::read_to_string(&path).expect("read");
+        assert!(!text.contains("FAKE_SECRET"), "{text}");
+        assert_eq!(file.load().expect("load")[0].media_key, key);
+    }
 
     /// Review 4, A8: an import with a damaged position is refused with the
     /// number of the entry; a position written as text still imports.

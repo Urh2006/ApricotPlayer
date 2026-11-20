@@ -27,7 +27,7 @@ pub struct PlaybackQueueController {
 impl PlaybackQueueController {
     pub fn load(current: PlaybackQueueFile, legacy: &PlaybackQueueFile) -> Self {
         if current.path().is_file() {
-            return match current.load() {
+            return match current.load_repairing() {
                 Ok(items) => Self::loaded(current, items),
                 Err(error) => Self {
                     queue: PlaybackQueue::default(),

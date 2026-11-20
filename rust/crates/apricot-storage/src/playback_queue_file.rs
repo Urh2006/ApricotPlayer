@@ -53,12 +53,6 @@ impl PlaybackQueueFile {
                             .ok_or(PlaybackQueueFileError::InvalidItem { index })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                if values
-                    .iter()
-                    .any(crate::legacy_media::holds_private_address)
-                {
-                    self.save(&items)?;
-                }
                 Ok(items)
             }
             Ok(_) => Err(PlaybackQueueFileError::InvalidItem { index: 0 }),
@@ -67,6 +61,22 @@ impl PlaybackQueueFile {
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Loads the queue and writes it again without the address and login of
+    /// a private IPTV channel saved by an older version. Only for this
+    /// version's own file: a fallback profile is read, never written
+    /// (review 5, A6).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load`], or when the cleaned queue cannot be written.
+    pub fn load_repairing(&self) -> Result<Vec<MediaItem>, PlaybackQueueFileError> {
+        let items = self.load()?;
+        if crate::legacy_media::file_holds_private_address(&self.path, None) {
+            self.save(&items)?;
+        }
+        Ok(items)
     }
 
     /// Saves the queue atomically using the Python-compatible JSON shape.

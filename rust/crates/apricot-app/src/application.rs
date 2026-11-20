@@ -691,12 +691,12 @@ impl Application {
         } else {
             0.0
         };
-        self.settings.set_value(
+        // Only the check time is saved, not a Settings draft the user has
+        // not saved (review 5, A8).
+        self.settings.record_value(
             SettingId::LastSubscriptionCheck,
             serde_json::json!(timestamp),
-        )?;
-        let _ = self.settings.save()?;
-        Ok(())
+        )
     }
 
     pub fn notifications(&self) -> &[AppNotification] {

@@ -24,6 +24,25 @@ pub struct SettingsDraft {
     defaults: SettingsDocument,
 }
 
+fn with_values(
+    document: &SettingsDocument,
+    values: impl IntoIterator<Item = (SettingId, Value)>,
+) -> Result<SettingsDocument, SettingsDraftError> {
+    let mut object = serde_json::to_value(document)?
+        .as_object()
+        .cloned()
+        .ok_or(SettingsDraftError::NotAnObject)?;
+    for (id, value) in values {
+        if !object.contains_key(id.key()) {
+            return Err(SettingsDraftError::MissingSetting(id.key()));
+        }
+        object.insert(id.key().to_owned(), value);
+    }
+    let mut next: SettingsDocument = serde_json::from_value(Value::Object(object))?;
+    next.normalize();
+    Ok(next)
+}
+
 impl SettingsDraft {
     pub fn new(current: SettingsDocument, defaults: SettingsDocument) -> Self {
         Self {
@@ -68,20 +87,27 @@ impl SettingsDraft {
         &mut self,
         values: impl IntoIterator<Item = (SettingId, Value)>,
     ) -> Result<(), SettingsDraftError> {
-        let mut object = serde_json::to_value(&self.current)?
-            .as_object()
-            .cloned()
-            .ok_or(SettingsDraftError::NotAnObject)?;
-        for (id, value) in values {
-            if !object.contains_key(id.key()) {
-                return Err(SettingsDraftError::MissingSetting(id.key()));
-            }
-            object.insert(id.key().to_owned(), value);
-        }
-        let mut next: SettingsDocument = serde_json::from_value(Value::Object(object))?;
-        next.normalize();
-        self.current = next;
+        self.current = with_values(&self.current, values)?;
         Ok(())
+    }
+
+    /// A value the app records itself (the time of a check), stored in the
+    /// saved settings and in the draft without saving the user's unsaved
+    /// changes (review 5, A8). Returns the saved settings to write.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SettingsDraftError`] when the value does not fit the schema.
+    pub fn record_value(
+        &mut self,
+        id: SettingId,
+        value: Value,
+    ) -> Result<SettingsDocument, SettingsDraftError> {
+        let original = with_values(&self.original, [(id, value.clone())])?;
+        let current = with_values(&self.current, [(id, value)])?;
+        self.original = original.clone();
+        self.current = current;
+        Ok(original)
     }
 
     /// Resets exactly the fields owned by one Python Settings section.

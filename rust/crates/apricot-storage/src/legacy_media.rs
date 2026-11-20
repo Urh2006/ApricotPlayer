@@ -86,6 +86,21 @@ pub fn media_item_to_python_value(item: &MediaItem) -> Value {
     Value::Object(object)
 }
 
+/// Whether a saved array (or, with `nested`, the arrays under that key of
+/// each element) still holds a private IPTV address or login.
+pub(crate) fn file_holds_private_address(path: &std::path::Path, nested: Option<&str>) -> bool {
+    let Ok(Value::Array(values)) = crate::json_file::read_json::<Value>(path) else {
+        return false;
+    };
+    values.iter().any(|value| match nested {
+        Some(key) => value
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().any(holds_private_address)),
+        None => holds_private_address(value),
+    })
+}
+
 /// A saved entry of a private IPTV channel that still holds its address,
 /// login or portal session; the file is written again without them
 /// (review 4, A1).
@@ -154,7 +169,10 @@ fn media_source(
     if explicit.contains("soundcloud") {
         return MediaSource::Soundcloud;
     }
-    if explicit.contains("audiovault") || kind.starts_with("audiovault") {
+    // An IPTV film or episode saved by a 2.1 release candidate carries
+    // AudioVault's kind; its IPTV source tells it apart (review 5, A3).
+    let iptv = object.contains_key("iptv_source_id");
+    if explicit.contains("audiovault") || (kind.starts_with("audiovault") && !iptv) {
         return MediaSource::Audiovault;
     }
     if explicit.contains("spotify")
@@ -187,9 +205,11 @@ fn media_kind(kind: &str, local_path: Option<&str>, object: &Map<String, Value>)
         "channel" | "user" => MediaKind::Channel,
         "rss_feed" | "podcast_feed" => MediaKind::PodcastFeed,
         "rss_item" | "podcast_episode" => MediaKind::PodcastEpisode,
-        "audiovault_movie" | "movie" => MediaKind::Movie,
-        "audiovault_show" | "audiovault_tv_show" | "tv_show" => MediaKind::TvShow,
-        "audiovault_episode" | "audiovault_remote_episode" | "tv_episode" => MediaKind::TvEpisode,
+        "audiovault_movie" | "movie" | "iptv_movie" => MediaKind::Movie,
+        "audiovault_show" | "audiovault_tv_show" | "tv_show" | "iptv_series" => MediaKind::TvShow,
+        "audiovault_episode" | "audiovault_remote_episode" | "tv_episode" | "iptv_episode" => {
+            MediaKind::TvEpisode
+        }
         "local_file" => local_media_kind(local_path.unwrap_or_default()),
         _ if object.get("is_live").and_then(Value::as_bool) == Some(true) => MediaKind::LiveStream,
         _ if local_path.is_some() => local_media_kind(local_path.unwrap_or_default()),
@@ -213,16 +233,20 @@ fn local_media_kind(path: &str) -> MediaKind {
 }
 
 fn python_kind(item: &MediaItem) -> String {
+    let iptv = item.metadata.contains_key("iptv_source_id");
     if let Some(kind) = item
         .metadata
         .get("kind")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|kind| !kind.is_empty())
+        .filter(|kind| !kind.is_empty() && (!iptv || !kind.starts_with("audiovault")))
     {
         return kind.to_owned();
     }
     match item.kind {
+        MediaKind::Movie if iptv => "iptv_movie",
+        MediaKind::TvShow if iptv => "iptv_series",
+        MediaKind::TvEpisode if iptv => "iptv_episode",
         MediaKind::Audio | MediaKind::Video if item.source == MediaSource::Local => "local_file",
         MediaKind::Audio => "audio",
         MediaKind::Video => "video",
@@ -280,6 +304,34 @@ mod tests {
         let again = media_item_from_python_value(&written).expect("again");
         assert_eq!((&again.id, &again.url), (&item.id, &item.url));
         assert_eq!(again.iptv_ids(), Some(("src one".into(), "77".into())));
+    }
+
+    /// Review 5, A3: a saved IPTV film or episode is read back as IPTV,
+    /// also when a release candidate saved it with the `AudioVault` kind; a
+    /// real `AudioVault` entry stays `AudioVault`.
+    #[test]
+    fn iptv_films_and_episodes_are_not_audiovault() {
+        for (kind, expected) in [
+            (MediaKind::Movie, "iptv_movie"),
+            (MediaKind::TvEpisode, "iptv_episode"),
+        ] {
+            let older = json!({"title": "Film", "kind": if kind == MediaKind::Movie { "audiovault_movie" } else { "audiovault_remote_episode" },
+                "url": "apricot-iptv://saved/one/movie%3A5", "apricot_private_address": true,
+                "iptv_source_id": "one", "iptv_channel_id": "movie:5"});
+            let item = media_item_from_python_value(&older).expect("item");
+            assert_eq!((item.source, item.kind), (MediaSource::Direct, kind));
+            assert!(item.is_saved_iptv_reference());
+            let written = media_item_to_python_value(&item);
+            assert_eq!(written["kind"], json!(expected));
+            let again = media_item_from_python_value(&written).expect("again");
+            assert_eq!((again.source, again.kind), (MediaSource::Direct, kind));
+        }
+        let audiovault = json!({"title": "Film", "kind": "audiovault_movie", "url": "https://audiovault.net/movies/1"});
+        let item = media_item_from_python_value(&audiovault).expect("item");
+        assert_eq!(
+            (item.source, item.kind),
+            (MediaSource::Audiovault, MediaKind::Movie)
+        );
     }
 
     #[test]

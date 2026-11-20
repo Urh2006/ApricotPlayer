@@ -517,7 +517,12 @@ struct PendingEditSave {
 /// Messages from Python's `file_conversion_worker` and
 /// `folder_conversion_worker`.
 enum ConversionMessage {
-    Folder(apricot_app::converter::FolderConversionEvent),
+    /// An event of the folder conversion with this Cancel flag: the flag
+    /// tells conversions that run at the same time apart (review 5, A9).
+    Folder(
+        apricot_app::converter::FolderConversionEvent,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ),
     /// A folder conversion began, with the Cancel flag of that conversion,
     /// not of whichever started last (review 4, B13).
     FolderStarted(usize, std::sync::Arc<std::sync::atomic::AtomicBool>),
@@ -526,7 +531,10 @@ enum ConversionMessage {
         std::result::Result<PathBuf, String>,
         std::sync::Arc<std::sync::atomic::AtomicBool>,
     ),
-    FolderFinished(std::result::Result<apricot_app::converter::FolderConversionOutcome, String>),
+    FolderFinished(
+        std::result::Result<apricot_app::converter::FolderConversionOutcome, String>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ),
 }
 
 /// Messages from Python's `update_ytdlp_worker`, `app_update_worker` and
@@ -739,6 +747,8 @@ struct WindowState {
     global_hotkeys: Vec<&'static str>,
     /// Python `conversion_progress_dialog`.
     conversion_progress_window: Option<crate::converter_win32::ConversionProgressWindow>,
+    /// The Cancel flag of the folder conversion the progress window shows.
+    conversion_progress_owner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pending_updates: Vec<Receiver<UpdateMessage>>,
     /// Python `app_update_check_running`.
     app_update_check_running: bool,
@@ -2369,6 +2379,7 @@ unsafe fn create_controls(
         media_controls: None,
         global_hotkeys: Vec::new(),
         conversion_progress_window: None,
+        conversion_progress_owner: None,
         pending_updates: Vec::new(),
         app_update_check_running: false,
         pending_app_update: None,
@@ -4582,11 +4593,8 @@ unsafe fn start_media_item_with_options(
     if let Some(state) = state_mut(window) {
         spotify::forget_pending_resume(state);
     }
-    // Python plays AudioVault movies from their resolved stream and TV show
-    // episodes from the playback cache.
-    if audiovault::intercept_start(window, &item) {
-        return;
-    }
+    // A saved IPTV film or episode is never an AudioVault item, also when
+    // an older version saved it with AudioVault's kind (review 5, A3).
     if item.is_saved_iptv_reference() {
         if let Some(state) = state_mut(window) {
             state.pending_saved_iptv = Some(SavedIptvStart {
@@ -4598,6 +4606,11 @@ unsafe fn start_media_item_with_options(
             });
         }
         sources_ui::play_saved_iptv(window, &item);
+        return;
+    }
+    // Python plays AudioVault movies from their resolved stream and TV show
+    // episodes from the playback cache.
+    if audiovault::intercept_start(window, &item) {
         return;
     }
     let Some(state) = state_mut(window) else {
@@ -17157,12 +17170,14 @@ unsafe fn start_conversion(window: HWND, start: crate::converter_win32::Converte
                                     std::sync::Arc::clone(&cancel),
                                 )
                             }
-                            event => ConversionMessage::Folder(event),
+                            event => {
+                                ConversionMessage::Folder(event, std::sync::Arc::clone(&cancel))
+                            }
                         };
                         let _ = events.send(message);
                     },
                 );
-                let _ = sender.send(ConversionMessage::FolderFinished(result));
+                let _ = sender.send(ConversionMessage::FolderFinished(result, cancel));
             });
         }
     }
@@ -17191,7 +17206,7 @@ unsafe fn poll_conversions(window: HWND) {
                         let finished = matches!(
                             message,
                             ConversionMessage::FileFinished(..)
-                                | ConversionMessage::FolderFinished(_)
+                                | ConversionMessage::FolderFinished(..)
                         );
                         messages.push(message);
                         if finished {
@@ -17224,9 +17239,10 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
     };
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     match message {
-        ConversionMessage::Folder(FolderConversionEvent::Started { .. }) => {}
+        ConversionMessage::Folder(FolderConversionEvent::Started { .. }, _) => {}
         ConversionMessage::FolderStarted(total, flag) => {
             close_conversion_progress(state);
+            state.conversion_progress_owner = Some(std::sync::Arc::clone(&flag));
             let cancel = Some(crate::converter_win32::ProgressCancel {
                 flag,
                 label: catalog.text("cancel").to_owned(),
@@ -17251,21 +17267,25 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
             }
             .ok();
         }
-        ConversionMessage::Folder(FolderConversionEvent::FileStarted { index, total, name }) => {
+        ConversionMessage::Folder(FolderConversionEvent::FileStarted { index, total, name }, _) => {
             let text = format!(
                 "{} {index}/{total}: {name}",
                 catalog.text("conversion_started")
             );
             set_status(state, &text, false);
         }
-        ConversionMessage::Folder(FolderConversionEvent::Progress {
-            file,
-            converted,
-            total,
-        }) => {
+        ConversionMessage::Folder(
+            FolderConversionEvent::Progress {
+                file,
+                converted,
+                total,
+            },
+            flag,
+        ) => {
             if let Some(progress) = state
                 .conversion_progress_window
                 .filter(|progress| progress.is_open())
+                .filter(|_| shows_conversion(state, &flag))
             {
                 progress.update(
                     converted,
@@ -17290,7 +17310,8 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
                     finish_conversion_message(window, text);
                 }
                 Err(error) => {
-                    close_conversion_progress(state);
+                    // A single file has no progress window; one shown is a
+                    // folder conversion's that still runs (review 5, A9).
                     let text = catalog.text("conversion_failed").replace(
                         "{error}",
                         &apricot_app::comments::friendly_error(&catalog, &error),
@@ -17303,19 +17324,22 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
                 }
             }
         }
-        ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::NoMediaFiles)) => {
+        ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::NoMediaFiles), _) => {
             show_message_box(
                 window,
                 catalog.text("conversion_no_media_files"),
                 MB_ICONINFORMATION,
             );
         }
-        ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::Done {
-            converted,
-            failed,
-            failures,
-            cancelled,
-        })) => {
+        ConversionMessage::FolderFinished(
+            Ok(FolderConversionOutcome::Done {
+                converted,
+                failed,
+                failures,
+                cancelled,
+            }),
+            flag,
+        ) => {
             let text = if cancelled {
                 catalog
                     .text("conversion_stopped")
@@ -17324,7 +17348,9 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
                 folder_done_message(&catalog, converted, failed)
             };
             set_status(state, &text, false);
-            close_conversion_progress(state);
+            if shows_conversion(state, &flag) {
+                close_conversion_progress(state);
+            }
             finish_conversion_message(window, &text);
             if !failures.is_empty() {
                 show_error_message(
@@ -17333,8 +17359,10 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
                 );
             }
         }
-        ConversionMessage::FolderFinished(Err(error)) => {
-            close_conversion_progress(state);
+        ConversionMessage::FolderFinished(Err(error), flag) => {
+            if shows_conversion(state, &flag) {
+                close_conversion_progress(state);
+            }
             let text = catalog.text("conversion_failed").replace(
                 "{error}",
                 &apricot_app::comments::friendly_error(&catalog, &error),
@@ -17350,9 +17378,22 @@ unsafe fn handle_conversion_message(window: HWND, message: ConversionMessage) {
 
 /// Python `close_conversion_progress_dialog`.
 unsafe fn close_conversion_progress(state: &mut WindowState) {
+    state.conversion_progress_owner = None;
     if let Some(progress) = state.conversion_progress_window.take() {
         progress.destroy();
     }
+}
+
+/// Whether the progress window shows the folder conversion with this
+/// Cancel flag (review 5, A9).
+fn shows_conversion(
+    state: &WindowState,
+    flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> bool {
+    state
+        .conversion_progress_owner
+        .as_ref()
+        .is_some_and(|owner| std::sync::Arc::ptr_eq(owner, flag))
 }
 
 /// Python `UPDATE_LOG_FILE`.
@@ -17805,6 +17846,16 @@ unsafe fn begin_app_update_install(
         return;
     };
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    // Nothing is downloaded while a recording runs; the install would be
+    // refused anyway (review 5, A10).
+    if state.source_tools.is_recording() || state.lent_recording.is_some() {
+        show_message_box(
+            window,
+            catalog.text("update_after_recording"),
+            MB_ICONINFORMATION,
+        );
+        return;
+    }
     let unknown = catalog
         .text("update_download_unknown")
         .replace("{version}", &version);
@@ -17857,6 +17908,7 @@ unsafe fn close_update_progress(window: HWND) {
 
 /// Python `finish_app_update_install`: write and start the install script,
 /// then leave so it can replace the app.
+#[allow(clippy::too_many_lines)] // Python's checks, script and exit in order.
 unsafe fn finish_app_update_install(
     window: HWND,
     downloaded: &apricot_updater::DownloadedUpdate,
@@ -17883,6 +17935,7 @@ unsafe fn finish_app_update_install(
         .is_some_and(|state| state.source_tools.is_recording() || state.lent_recording.is_some())
     {
         close_update_progress(window);
+        apricot_updater::discard_downloaded_update(downloaded);
         show_message_box(
             window,
             catalog.text("update_after_recording"),

@@ -76,17 +76,6 @@ impl UserPlaylistFile {
                     .enumerate()
                     .map(|(index, value)| playlist_from_python_value(value, index))
                     .collect::<Result<Vec<_>, _>>()?;
-                let private = values.iter().any(|playlist| {
-                    playlist
-                        .get("items")
-                        .and_then(Value::as_array)
-                        .is_some_and(|items| {
-                            items.iter().any(crate::legacy_media::holds_private_address)
-                        })
-                });
-                if private {
-                    self.save(&playlists)?;
-                }
                 Ok(playlists)
             }
             Ok(_) => Err(UserPlaylistFileError::InvalidPlaylist { index: 0 }),
@@ -95,6 +84,22 @@ impl UserPlaylistFile {
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Loads the playlists and writes them again without the address and
+    /// login of a private IPTV channel saved by an older version. Only for
+    /// this version's own file: a fallback profile is read, never written
+    /// (review 5, A6).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load`], or when the cleaned playlists cannot be written.
+    pub fn load_repairing(&self) -> Result<Vec<UserPlaylist>, UserPlaylistFileError> {
+        let playlists = self.load()?;
+        if crate::legacy_media::file_holds_private_address(&self.path, Some("items")) {
+            self.save(&playlists)?;
+        }
+        Ok(playlists)
     }
 
     /// Atomically writes the full playlist collection in the Python shape.

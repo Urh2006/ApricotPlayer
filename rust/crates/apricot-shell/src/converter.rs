@@ -285,10 +285,12 @@ impl ConverterDialog {
 
 /// A message from a conversion worker (Windows `ConversionMessage`).
 enum ConversionMessage {
-    Folder(FolderConversionEvent),
+    /// An event of the folder conversion with this Cancel flag: the flag
+    /// tells conversions that run at the same time apart (review 5, A9).
+    Folder(FolderConversionEvent, Arc<AtomicBool>),
     /// The result and the Cancel flag of a single file conversion.
     FileFinished(Result<PathBuf, String>, Arc<AtomicBool>),
-    FolderFinished(Result<FolderConversionOutcome, String>),
+    FolderFinished(Result<FolderConversionOutcome, String>, Arc<AtomicBool>),
 }
 
 /// The conversions and clip exports that run (Windows
@@ -300,6 +302,8 @@ pub(crate) struct ConversionState {
     /// The Cancel flags of the conversions that run.
     cancels: Vec<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     progress_open: bool,
+    /// The Cancel flag of the folder conversion the progress shows.
+    progress_owner: Option<Arc<AtomicBool>>,
     clip_exports: Vec<ClipExport>,
     /// Target names of the clip exports that run, so that a batch never sends
     /// two clips to one file before the first file exists.
@@ -533,10 +537,13 @@ impl Shell {
                             )
                         },
                         &mut |event| {
-                            let _ = events.send(ConversionMessage::Folder(event));
+                            let _ = events.send(ConversionMessage::Folder(
+                                event,
+                                std::sync::Arc::clone(&cancel),
+                            ));
                         },
                     );
-                    let _ = sender.send(ConversionMessage::FolderFinished(result));
+                    let _ = sender.send(ConversionMessage::FolderFinished(result, cancel));
                 });
             }
         }
@@ -553,7 +560,7 @@ impl Shell {
             loop {
                 match receiver.try_recv() {
                     Ok(message) => {
-                        let finished = !matches!(message, ConversionMessage::Folder(_));
+                        let finished = !matches!(message, ConversionMessage::Folder(..));
                         messages.push(message);
                         if finished {
                             break false;
@@ -598,17 +605,29 @@ impl Shell {
 
     /// Windows `close_conversion_progress`.
     fn close_conversion_progress(&mut self, ui: &mut dyn ShellUi) {
+        self.conversions.progress_owner = None;
         if std::mem::take(&mut self.conversions.progress_open) {
             ui.close_conversion_progress();
         }
     }
 
+    /// Whether the progress shows the folder conversion with this Cancel
+    /// flag (review 5, A9).
+    fn shows_conversion(&self, flag: &Arc<AtomicBool>) -> bool {
+        self.conversions
+            .progress_owner
+            .as_ref()
+            .is_some_and(|owner| Arc::ptr_eq(owner, flag))
+    }
+
     /// Windows `handle_conversion_message`.
+    #[allow(clippy::too_many_lines)] // One match over the conversion messages.
     fn handle_conversion_message(&mut self, ui: &mut dyn ShellUi, message: ConversionMessage) {
         let catalog = self.catalog();
         match message {
-            ConversionMessage::Folder(FolderConversionEvent::Started { total }) => {
+            ConversionMessage::Folder(FolderConversionEvent::Started { total }, flag) => {
                 self.close_conversion_progress(ui);
+                self.conversions.progress_owner = Some(flag);
                 ui.show_conversion_progress(
                     catalog.text("conversion_progress_title"),
                     &progress_message(&catalog, "", 0, total),
@@ -616,23 +635,25 @@ impl Shell {
                 );
                 self.conversions.progress_open = true;
             }
-            ConversionMessage::Folder(FolderConversionEvent::FileStarted {
-                index,
-                total,
-                name,
-            }) => {
+            ConversionMessage::Folder(
+                FolderConversionEvent::FileStarted { index, total, name },
+                _,
+            ) => {
                 let text = format!(
                     "{} {index}/{total}: {name}",
                     catalog.text("conversion_started")
                 );
                 ui.set_status(&text, false);
             }
-            ConversionMessage::Folder(FolderConversionEvent::Progress {
-                file,
-                converted,
-                total,
-            }) => {
-                if self.conversions.progress_open {
+            ConversionMessage::Folder(
+                FolderConversionEvent::Progress {
+                    file,
+                    converted,
+                    total,
+                },
+                flag,
+            ) => {
+                if self.conversions.progress_open && self.shows_conversion(&flag) {
                     ui.update_conversion_progress(
                         converted,
                         &progress_message(&catalog, &file, converted, total),
@@ -656,7 +677,8 @@ impl Shell {
                         self.finish_conversion_message(ui, text);
                     }
                     Err(error) => {
-                        self.close_conversion_progress(ui);
+                        // A single file has no progress; a shown one is a
+                        // folder conversion's that still runs (review 5, A9).
                         let text = catalog.text("conversion_failed").replace(
                             "{error}",
                             &apricot_app::comments::friendly_error(&catalog, &error),
@@ -665,15 +687,18 @@ impl Shell {
                     }
                 }
             }
-            ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::NoMediaFiles)) => {
+            ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::NoMediaFiles), _) => {
                 ui.show_error(catalog.text("conversion_no_media_files"));
             }
-            ConversionMessage::FolderFinished(Ok(FolderConversionOutcome::Done {
-                converted,
-                failed,
-                failures,
-                cancelled,
-            })) => {
+            ConversionMessage::FolderFinished(
+                Ok(FolderConversionOutcome::Done {
+                    converted,
+                    failed,
+                    failures,
+                    cancelled,
+                }),
+                flag,
+            ) => {
                 let text = if cancelled {
                     catalog
                         .text("conversion_stopped")
@@ -682,7 +707,9 @@ impl Shell {
                     folder_done_message(&catalog, converted, failed)
                 };
                 ui.set_status(&text, false);
-                self.close_conversion_progress(ui);
+                if self.shows_conversion(&flag) {
+                    self.close_conversion_progress(ui);
+                }
                 self.finish_conversion_message(ui, &text);
                 if !failures.is_empty() {
                     ui.show_error(&apricot_app::converter::failures_message(
@@ -690,8 +717,10 @@ impl Shell {
                     ));
                 }
             }
-            ConversionMessage::FolderFinished(Err(error)) => {
-                self.close_conversion_progress(ui);
+            ConversionMessage::FolderFinished(Err(error), flag) => {
+                if self.shows_conversion(&flag) {
+                    self.close_conversion_progress(ui);
+                }
                 let text = catalog.text("conversion_failed").replace(
                     "{error}",
                     &apricot_app::comments::friendly_error(&catalog, &error),
@@ -1079,6 +1108,60 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 5, A9: when folder conversion A ends while B runs, B keeps
+    /// its progress; A's late progress does not move it.
+    #[test]
+    fn a_finished_conversion_leaves_the_others_progress() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        let (a, b) = (
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let started = |total| FolderConversionEvent::Started { total };
+        shell.handle_conversion_message(
+            &mut ui,
+            ConversionMessage::Folder(started(3), Arc::clone(&a)),
+        );
+        shell.handle_conversion_message(
+            &mut ui,
+            ConversionMessage::Folder(started(5), Arc::clone(&b)),
+        );
+        ui.conversion_progress.clear();
+        let progress = |converted| FolderConversionEvent::Progress {
+            file: "x".into(),
+            converted,
+            total: 5,
+        };
+        shell.handle_conversion_message(
+            &mut ui,
+            ConversionMessage::Folder(progress(2), Arc::clone(&a)),
+        );
+        let done = || {
+            Ok(FolderConversionOutcome::Done {
+                converted: 1,
+                failed: 0,
+                failures: Vec::new(),
+                cancelled: false,
+            })
+        };
+        shell.handle_conversion_message(
+            &mut ui,
+            ConversionMessage::FolderFinished(done(), Arc::clone(&a)),
+        );
+        assert!(
+            ui.conversion_progress.is_empty(),
+            "{:?}",
+            ui.conversion_progress
+        );
+        shell.handle_conversion_message(
+            &mut ui,
+            ConversionMessage::Folder(progress(4), Arc::clone(&b)),
+        );
+        shell.handle_conversion_message(&mut ui, ConversionMessage::FolderFinished(done(), b));
+        assert_eq!(ui.conversion_progress, ["update 4", "close"]);
+    }
 
     #[test]
     fn clips_that_differ_only_by_milliseconds_get_distinct_reserved_names() {

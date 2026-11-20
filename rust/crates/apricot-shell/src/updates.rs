@@ -495,6 +495,12 @@ impl Shell {
         log_update_event(&format!("Beginning update {version}; asset={}", asset.name));
         self.close_update_progress(ui);
         let catalog = self.catalog();
+        // Nothing is downloaded while a recording runs; the install would
+        // be refused anyway (review 5, A10).
+        if self.recording_is_active() {
+            ui.show_error(catalog.text("update_after_recording"));
+            return;
+        }
         ui.show_conversion_progress(
             catalog.text("update_progress_title"),
             &catalog
@@ -561,6 +567,7 @@ impl Shell {
         // a recording may need to be saved: it waits for Stop (review 4, A6).
         if self.recording_is_active() {
             self.close_update_progress(ui);
+            apricot_updater::discard_downloaded_update(downloaded);
             ui.show_error(catalog.text("update_after_recording"));
             return;
         }

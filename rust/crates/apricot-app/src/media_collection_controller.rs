@@ -32,7 +32,7 @@ pub struct MediaCollectionController {
 impl MediaCollectionController {
     pub fn load(current: MediaListFile, legacy: &MediaListFile) -> Self {
         if current.path().is_file() {
-            return match current.load() {
+            return match current.load_repairing() {
                 Ok(items) => Self::loaded(current, items),
                 Err(error) => Self::blocked(current, error.to_string()),
             };
@@ -230,7 +230,11 @@ impl MediaCollectionController {
 }
 
 fn collection_identity(item: &MediaItem) -> Option<String> {
-    item.copy_location().or_else(|| item.stable_identity())
+    // A private IPTV channel has the same identity while it plays and
+    // when it is saved (review 5, A4).
+    item.private_reference()
+        .or_else(|| item.copy_location())
+        .or_else(|| item.stable_identity())
 }
 
 #[cfg(test)]
@@ -261,6 +265,50 @@ mod tests {
             duration_seconds: None,
             metadata: BTreeMap::new(),
         }
+    }
+
+    /// Review 5, A4: a private IPTV channel saved before a restart (its
+    /// reference) and the same channel playing (its resolved address) are
+    /// one entry: adding it again finds it, removing it removes it.
+    #[test]
+    fn a_saved_iptv_channel_is_the_playing_one() {
+        let folder = tempdir().expect("folder");
+        let path = folder.path().join("favorites.json");
+        let mut playing = item("unused");
+        playing.source = MediaSource::Direct;
+        playing.kind = MediaKind::LiveStream;
+        playing.url = Some(
+            "http://tv.example.test/live/USER/FAKE/7.ts"
+                .parse()
+                .expect("url"),
+        );
+        playing.id = MediaId("iptv:s/7".into());
+        for (key, value) in [
+            ("apricot_private_address", serde_json::json!(true)),
+            ("iptv_source_id", serde_json::json!("s")),
+            ("iptv_channel_id", serde_json::json!("7")),
+        ] {
+            playing.metadata.insert(key.into(), value);
+        }
+        let mut controller = MediaCollectionController::load(
+            MediaListFile::new(&path),
+            &MediaListFile::new(folder.path().join("old.json")),
+        );
+        assert!(matches!(
+            controller.add_unique(playing.clone()),
+            Ok(CollectionAddOutcome::Added)
+        ));
+        let mut restarted = MediaCollectionController::load(
+            MediaListFile::new(&path),
+            &MediaListFile::new(folder.path().join("old.json")),
+        );
+        assert!(restarted.items()[0].is_saved_iptv_reference());
+        assert!(restarted.contains(&playing));
+        assert!(matches!(
+            restarted.add_unique(playing.clone()),
+            Ok(CollectionAddOutcome::AlreadyPresent)
+        ));
+        assert!(restarted.position(&playing).is_some());
     }
 
     #[test]

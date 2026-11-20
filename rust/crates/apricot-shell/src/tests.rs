@@ -196,6 +196,8 @@ pub(crate) mod equalizer {
         pub(crate) row_updates: Vec<(usize, String)>,
         pub(crate) context_menus: Vec<Vec<apricot_app::context_menu::ContextMenuEntry>>,
         pub(crate) context_command: Option<apricot_app::context_menu::ContextCommand>,
+        /// The conversion progress calls, in order.
+        pub(crate) conversion_progress: Vec<String>,
     }
 
     impl ShellUi for Ui {
@@ -358,9 +360,15 @@ pub(crate) mod equalizer {
         }
         fn settings_cookie_source(&mut self, _path: &str, _browser_index: usize) {}
         fn open_action_finder(&mut self, _model: apricot_app::ActionFinderModel) {}
-        fn show_conversion_progress(&mut self, _title: &str, _message: &str, _total: usize) {}
-        fn update_conversion_progress(&mut self, _converted: usize, _message: &str) {}
-        fn close_conversion_progress(&mut self) {}
+        fn show_conversion_progress(&mut self, _title: &str, _message: &str, total: usize) {
+            self.conversion_progress.push(format!("show {total}"));
+        }
+        fn update_conversion_progress(&mut self, converted: usize, _message: &str) {
+            self.conversion_progress.push(format!("update {converted}"));
+        }
+        fn close_conversion_progress(&mut self) {
+            self.conversion_progress.push("close".into());
+        }
         fn set_subscription_timer(&mut self, _interval_seconds: Option<f64>) {}
         fn set_app_update_timer(&mut self, _interval_seconds: Option<f64>) {}
         fn choose_import_source(&mut self, _title: &str) -> Option<std::path::PathBuf> {

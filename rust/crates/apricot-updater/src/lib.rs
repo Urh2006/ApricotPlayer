@@ -9,8 +9,8 @@ pub mod version;
 
 pub use flow::{
     AppUpdateCheck, DownloadedUpdate, GithubReleaseFeed, UpdateTransport, YTDLP_INSTALLED_NAME,
-    YtdlpUpdate, check_app_update, download_app_update, update_ytdlp_component,
-    update_ytdlp_component_from, ytdlp_release_api_url,
+    YtdlpUpdate, check_app_update, discard_downloaded_update, download_app_update,
+    update_ytdlp_component, update_ytdlp_component_from, ytdlp_release_api_url,
 };
 pub use release::{
     APP_PACKAGE, PackageNames, RUST_BETA_PACKAGE, Release, ReleaseAsset, STABLE_PACKAGE,

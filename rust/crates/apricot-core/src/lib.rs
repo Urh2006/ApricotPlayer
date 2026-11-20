@@ -26,8 +26,8 @@ pub use locale::{
     LanguageDefinition, TranslationCatalog, set_short_announcements, short_announcements,
 };
 pub use media::{
-    MediaId, MediaItem, MediaKind, MediaSource, SAVED_IPTV_SCHEME, iptv_reference_id,
-    url_carries_login,
+    MediaId, MediaItem, MediaKind, MediaSource, PRIVATE_ADDRESS_KEYS, SAVED_IPTV_SCHEME,
+    iptv_reference_id, url_carries_login,
 };
 pub use menu::{CUSTOMIZABLE_MAIN_MENU, MainMenuDefinition, PERMANENT_MAIN_MENU_IDS};
 pub use navigation::{FocusId, NavigationStack, Route, RouteFrame};

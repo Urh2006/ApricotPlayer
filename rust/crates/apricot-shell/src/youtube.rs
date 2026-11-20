@@ -902,11 +902,8 @@ impl Shell {
         start_position_seconds: Option<f64>,
     ) {
         self.spotify_forget_pending_resume();
-        // Python plays AudioVault movies from their resolved stream and TV
-        // show episodes from the playback cache.
-        if self.audiovault_intercept_start(ui, &item) {
-            return;
-        }
+        // A saved IPTV film or episode is never an AudioVault item, also
+        // when an older version saved it with AudioVault's kind (review 5, A3).
         if item.is_saved_iptv_reference() {
             let start = crate::player::SavedIptvStart {
                 id: item.id.0.clone(),
@@ -916,6 +913,11 @@ impl Shell {
                 start_position_seconds,
             };
             self.play_saved_iptv(ui, &item, start);
+            return;
+        }
+        // Python plays AudioVault movies from their resolved stream and TV
+        // show episodes from the playback cache.
+        if self.audiovault_intercept_start(ui, &item) {
             return;
         }
         self.cancel_youtube_work();

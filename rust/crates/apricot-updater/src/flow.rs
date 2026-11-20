@@ -209,6 +209,21 @@ pub fn download_app_update(
     result
 }
 
+/// Removes a downloaded package that will not be installed (a recording
+/// began while it downloaded), with the temporary folder it was saved in,
+/// so a later try does not leave another copy (review 5, A10).
+pub fn discard_downloaded_update(downloaded: &DownloadedUpdate) {
+    let _ = fs::remove_file(&downloaded.path);
+    if let Some(folder) = downloaded.path.parent().filter(|folder| {
+        folder
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("apricotplayer-update-"))
+    }) {
+        let _ = fs::remove_dir_all(folder);
+    }
+}
+
 /// Python `download_update_asset`.
 fn download_update_asset(
     transport: &mut dyn UpdateTransport,
@@ -653,6 +668,31 @@ mod tests {
         let path = folder.path().join("x");
         fs::write(&path, bytes).expect("write");
         file_sha256(&path).expect("sha")
+    }
+
+    /// Review 5, A10: a package refused because a recording began is
+    /// removed with its temporary folder; other folders are left alone.
+    #[test]
+    fn a_refused_package_is_removed_with_its_folder() {
+        let root = tempfile::tempdir().expect("root");
+        let folder = root.path().join("apricotplayer-update-abc");
+        fs::create_dir(&folder).expect("folder");
+        let path = folder.join("ApricotPlayer.zip");
+        fs::write(&path, b"zip").expect("package");
+        super::discard_downloaded_update(&super::DownloadedUpdate {
+            path,
+            sha256: String::new(),
+        });
+        assert!(!folder.exists());
+        let other = root.path().join("Downloads");
+        fs::create_dir(&other).expect("other");
+        let kept = other.join("ApricotPlayer.zip");
+        fs::write(&kept, b"zip").expect("package");
+        super::discard_downloaded_update(&super::DownloadedUpdate {
+            path: kept,
+            sha256: String::new(),
+        });
+        assert!(other.exists());
     }
 
     #[test]

@@ -44,7 +44,7 @@ pub struct UserPlaylistController {
 impl UserPlaylistController {
     pub fn load(current: UserPlaylistFile, legacy: &UserPlaylistFile) -> Self {
         if current.path().is_file() {
-            return match current.load() {
+            return match current.load_repairing() {
                 Ok(playlists) => Self::loaded(current, playlists),
                 Err(error) => Self::blocked(current, error.to_string()),
             };
@@ -516,7 +516,11 @@ impl UserPlaylistController {
 }
 
 fn playlist_identity(item: &MediaItem) -> Option<String> {
-    item.copy_location().or_else(|| item.stable_identity())
+    // A private IPTV channel has the same identity while it plays and
+    // when it is saved (review 5, A4).
+    item.private_reference()
+        .or_else(|| item.copy_location())
+        .or_else(|| item.stable_identity())
 }
 
 fn titles_match(left: &str, right: &str) -> bool {
