@@ -58,6 +58,7 @@ pub fn spawn_batch_download(
     thread::spawn(move || {
         let result = YtDlpDownloader::new(&executable).and_then(|downloader| {
             let mut summary = DownloadSummary::default();
+            let mut failed = 0_usize;
             for request in &requests {
                 if cancelled.load(std::sync::atomic::Ordering::Acquire) {
                     return Err(DownloadError::Cancelled);
@@ -71,6 +72,7 @@ pub fn spawn_batch_download(
                     }
                     Err(DownloadError::Cancelled) => return Err(DownloadError::Cancelled),
                     Err(error) => {
+                        failed += 1;
                         let message = format!("{}: {error}", request.title);
                         summary.item_failures.push(message.clone());
                         let _ = sender.send(DownloadWorkerUpdate::Event {
@@ -80,7 +82,7 @@ pub fn spawn_batch_download(
                     }
                 }
             }
-            Ok(summary)
+            apricot_platform::batch_outcome(summary, failed, requests.len())
         });
         let _ = sender.send(DownloadWorkerUpdate::Finished {
             task_id,

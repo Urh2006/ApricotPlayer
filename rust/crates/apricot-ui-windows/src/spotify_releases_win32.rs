@@ -440,7 +440,8 @@ unsafe fn set_all(window: HWND, enabled: bool) {
 }
 
 fn save(state: &mut DialogState) {
-    state.options.revision += 1;
+    state.options.revision =
+        apricot_spotify::playlist_subscriptions::next_artist_revision(state.options.revision);
     (state.send)(SubscriptionCommand::ArtistReleases {
         revision: state.options.revision,
         all: state.options.all,

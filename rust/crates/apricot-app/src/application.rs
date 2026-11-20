@@ -710,6 +710,11 @@ impl Application {
         self.state.notifications.notifications()
     }
 
+    /// Changes of the notification center so far (review 5, B18).
+    pub fn notifications_revision(&self) -> u64 {
+        self.state.notifications.revision()
+    }
+
     pub fn notification_load_error(&self) -> Option<&str> {
         self.state.notifications.load_error()
     }

@@ -314,12 +314,17 @@ pub fn publish(
     let catalog = apricot_app::embedded_catalog(&application.settings().language);
     let mut acknowledged = Vec::new();
     for change in &report.document.outbox {
+        // The same change of another account is its own notification: one
+        // account cannot open the other's (review 5, B21).
         let duplicate = application.notifications().iter().any(|notification| {
-            notification
-                .item
-                .as_ref()
-                .and_then(item_changes)
-                .is_some_and(|existing| existing.id == change.id)
+            notification.item.as_ref().is_some_and(|item| {
+                item_changes(item).is_some_and(|existing| existing.id == change.id)
+                    && item
+                        .metadata
+                        .get("spotify_subscription_account")
+                        .and_then(serde_json::Value::as_str)
+                        .is_none_or(|account| account == report.account)
+            })
         });
         if !duplicate {
             #[allow(clippy::cast_precision_loss)] // Unix seconds.
@@ -384,7 +389,8 @@ impl crate::Shell {
             .and_then(crate::FormValue::choice)
             .is_some_and(|choice| choice == 1);
         options.set_all(all);
-        options.revision += 1;
+        options.revision =
+            apricot_spotify::playlist_subscriptions::next_artist_revision(options.revision);
         let stamp = self.spotify.epochs.begin();
         service.subscription_operation(
             stamp,
@@ -496,6 +502,7 @@ impl crate::Shell {
             Err(error) => ui.show_error(&error),
             _ => {}
         }
+        self.sync_notification_center(ui);
         if !report.message.is_empty() {
             ui.set_status(&report_text(&catalog, &report.message), true);
         }
@@ -520,6 +527,28 @@ impl crate::Shell {
 mod tests {
     use super::*;
     use apricot_spotify::playlist_subscriptions::PlaylistChanges;
+
+    /// Review 5, B21: the same release for a second account is its own
+    /// notification; for the same account it is not repeated.
+    #[test]
+    fn each_account_gets_its_own_notification() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut report = SubscriptionReport {
+            account: "a".into(),
+            ..SubscriptionReport::default()
+        };
+        report.document.outbox.push(PlaylistChanges {
+            id: "release:spotify:album:1".into(),
+            uri: "spotify:album:1".into(),
+            ..PlaylistChanges::default()
+        });
+        assert_eq!(publish(&mut shell.application, &report).unwrap().len(), 1);
+        assert_eq!(publish(&mut shell.application, &report).unwrap().len(), 1);
+        assert_eq!(shell.application.notifications().len(), 1);
+        report.account = "b".into();
+        publish(&mut shell.application, &report).unwrap();
+        assert_eq!(shell.application.notifications().len(), 2);
+    }
 
     #[test]
     fn the_summary_names_each_kind_of_change() {

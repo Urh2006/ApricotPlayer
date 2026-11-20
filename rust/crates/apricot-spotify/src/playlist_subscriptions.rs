@@ -97,7 +97,40 @@ pub struct ArtistReleaseOptions {
     pub last_checked: u64,
 }
 
+/// The revision of a new artist choice: later than every choice before,
+/// also one made in another window that read the same saved revision, so
+/// the last choice the user made is the one kept (review 5, B19).
+#[must_use]
+pub fn next_artist_revision(current: u64) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        });
+    now.max(current.saturating_add(1))
+}
+
 impl ArtistReleaseOptions {
+    /// A choice from the window; an older one than the kept choice is
+    /// ignored (review 5, B19).
+    pub fn apply_choice(
+        &mut self,
+        revision: u64,
+        all: bool,
+        included: BTreeSet<String>,
+        excluded: BTreeSet<String>,
+    ) {
+        if revision <= self.revision {
+            return;
+        }
+        let before = self.any_enabled();
+        self.revision = revision;
+        self.all = all;
+        self.included = included;
+        self.excluded = excluded;
+        self.started(before);
+    }
+
     #[must_use]
     pub fn is_enabled(&self, artist: &str) -> bool {
         if self.all {
@@ -447,7 +480,16 @@ impl SubscriptionDocument {
     /// Spotify's feed of new releases: releases not seen before become
     /// notifications when one of their artists is turned on. The first read
     /// after turning releases on only remembers what is there.
-    pub fn apply_release_feed(&mut self, feed: &[FeedRelease], now: u64) -> Vec<PlaylistChanges> {
+    /// `followed`, when known, are the account's followed artists: with
+    /// exceptions, only those are a reason for a release, so turning off an
+    /// artist also silences that artist's release with someone not followed
+    /// (review 5, B20).
+    pub fn apply_release_feed(
+        &mut self,
+        feed: &[FeedRelease],
+        now: u64,
+        followed: Option<&BTreeSet<String>>,
+    ) -> Vec<PlaylistChanges> {
         let options = &mut self.artists;
         options.last_checked = now;
         let mut found = Vec::new();
@@ -459,10 +501,10 @@ impl SubscriptionDocument {
             }
             options.seen.push(release.uri.clone());
             if !seeded
-                || !release
-                    .artists
-                    .iter()
-                    .any(|(uri, _)| options.is_enabled(uri))
+                || !release.artists.iter().any(|(uri, _)| {
+                    options.is_enabled(uri)
+                        && followed.is_none_or(|followed| followed.contains(uri))
+                })
             {
                 continue;
             }
@@ -608,15 +650,9 @@ pub async fn execute(
             included,
             excluded,
         } => {
-            let options = &mut document.artists;
-            if revision > options.revision {
-                let before = options.any_enabled();
-                options.revision = revision;
-                options.all = all;
-                options.included = included;
-                options.excluded = excluded;
-                options.started(before);
-            }
+            document
+                .artists
+                .apply_choice(revision, all, included, excluded);
             ""
         }
         SubscriptionCommand::Check { force } => {
@@ -673,7 +709,14 @@ async fn check_releases(
     }
     match release_feed(api, session).await {
         Ok(feed) => {
-            document.apply_release_feed(&feed, now);
+            // Exceptions need the followed artists (review 5, B20); without
+            // them every artist of a release counts, as before.
+            let followed = if document.artists.all && !document.artists.excluded.is_empty() {
+                followed_artists(api, session).await.ok()
+            } else {
+                None
+            };
+            document.apply_release_feed(&feed, now, followed.as_ref());
             true
         }
         Err(error) => {
@@ -682,6 +725,22 @@ async fn check_releases(
             false
         }
     }
+}
+
+/// The account's followed artists, at most 2000.
+async fn followed_artists(
+    api: &crate::api::Api,
+    session: &librespot_core::Session,
+) -> Result<BTreeSet<String>, crate::api::ApiError> {
+    let mut artists = BTreeSet::new();
+    let mut offset = Some(0);
+    while let Some(next) = offset.filter(|_| artists.len() < 2000) {
+        let page = crate::catalog::library(api, session, crate::LibraryFilter::Artists, None, next)
+            .await?;
+        artists.extend(page.items.into_iter().map(|item| item.uri));
+        offset = page.next_offset;
+    }
+    Ok(artists)
 }
 
 /// Spotify's feed of new releases of the account's followed artists (the
@@ -904,7 +963,7 @@ mod tests {
         doc.artists.set("a", true);
         assert!(doc.artists.due(T, doc.interval_seconds, false));
         assert!(
-            doc.apply_release_feed(&[release("old", &["a"])], T)
+            doc.apply_release_feed(&[release("old", &["a"])], T, None)
                 .is_empty()
         );
         let found = doc.apply_release_feed(
@@ -914,6 +973,7 @@ mod tests {
                 release("old", &["a"]),
             ],
             T + 5000,
+            None,
         );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].uri, "new1");
@@ -928,10 +988,49 @@ mod tests {
         // back what was already in the feed.
         doc.artists.set("b", true);
         assert!(
-            doc.apply_release_feed(&[release("new2", &["b"])], T + 9000)
+            doc.apply_release_feed(&[release("new2", &["b"])], T + 9000, None)
                 .is_empty()
         );
         assert!(!doc.artists.due(T + 9001, doc.interval_seconds, false));
+    }
+
+    /// Review 5, B20: with all on and A turned off, A's release with B,
+    /// whom the account does not follow, stays silent; with B followed and
+    /// on, it is announced.
+    #[test]
+    fn a_turned_off_artist_silences_a_release_with_someone_not_followed() {
+        const T: u64 = 1_800_000_000;
+        let mut doc = SubscriptionDocument::default();
+        doc.artists.set_all(true);
+        doc.artists.set("a", false);
+        doc.apply_release_feed(&[], T, None);
+        let followed: BTreeSet<String> = ["a".to_owned()].into();
+        assert!(
+            doc.apply_release_feed(&[release("one", &["a", "b"])], T + 1, Some(&followed))
+                .is_empty()
+        );
+        let followed: BTreeSet<String> = ["a".to_owned(), "b".to_owned()].into();
+        let found = doc.apply_release_feed(&[release("two", &["a", "b"])], T + 2, Some(&followed));
+        assert_eq!(found.len(), 1);
+    }
+
+    /// Review 5, B19: the last artist choice is kept, also when two windows
+    /// read the same saved choice and their saves arrive in either order.
+    #[test]
+    fn the_last_artist_choice_wins_over_two_windows() {
+        let mut saved = ArtistReleaseOptions::default();
+        let read = saved.revision;
+        // Two windows read the same choice; the first turns all on, the
+        // second, later, all off; their saves may arrive in either order.
+        let first = next_artist_revision(read);
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        let second = next_artist_revision(read);
+        assert!(second > first);
+        saved.apply_choice(second, false, BTreeSet::new(), BTreeSet::new());
+        saved.apply_choice(first, true, BTreeSet::new(), BTreeSet::new());
+        assert!(!saved.all);
+        // In one window quick changes keep their order.
+        assert!(next_artist_revision(u64::MAX - 1) > u64::MAX - 1);
     }
 
     /// RC 4: on for all keeps exceptions; turning everything off and on

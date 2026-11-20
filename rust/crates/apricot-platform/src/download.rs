@@ -238,6 +238,10 @@ impl YtDlpDownloader {
             .stderr(Stdio::piped());
         #[cfg(windows)]
         command.creation_flags(CREATE_NO_WINDOW);
+        // Its own process group, so Cancel also ends the FFmpeg it started
+        // for merging or converting (review 5, B23).
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         let mut child = command
             .spawn()
             .map_err(|error| DownloadError::Launch(error.to_string()))?;
@@ -245,6 +249,27 @@ impl YtDlpDownloader {
         let _kill_on_close_job = process_job::KillOnCloseJob::attach(&child);
         collect_download(&mut child, request, cancelled, &mut emit)
     }
+}
+
+/// The end of a batch of downloads: when every item failed, the batch
+/// failed and does not end as finished; items skipped as already downloaded
+/// are not failures (review 5, B24).
+///
+/// # Errors
+///
+/// Returns the items' failures when every item failed.
+pub fn batch_outcome(
+    summary: DownloadSummary,
+    failed: usize,
+    total: usize,
+) -> Result<DownloadSummary, DownloadError> {
+    if failed > 0 && failed == total {
+        return Err(DownloadError::Request(summary.item_failures.join(
+            "
+",
+        )));
+    }
+    Ok(summary)
 }
 
 fn validate_request(request: &DownloadRequest) -> Result<(), DownloadError> {
@@ -952,12 +977,65 @@ fn stop_process_tree(child: &mut Child) {
 
 #[cfg(not(windows))]
 fn stop_process_tree(child: &mut Child) {
+    // The whole process group: yt-dlp and the FFmpeg it runs, which would
+    // otherwise go on writing and keep the output pipes open (review 5, B23).
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{}", child.id())])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
     let _ = child.kill();
     let _ = child.wait();
 }
 
 #[cfg(test)]
 mod tests {
+    /// Review 5, B24.
+    #[test]
+    fn a_batch_fails_only_when_every_item_failed() {
+        let summary = |failures: &[&str]| super::DownloadSummary {
+            item_failures: failures
+                .iter()
+                .map(|failure| (*failure).to_owned())
+                .collect(),
+            ..super::DownloadSummary::default()
+        };
+        assert!(super::batch_outcome(summary(&["a", "b"]), 2, 2).is_err());
+        assert!(super::batch_outcome(summary(&["a"]), 1, 2).is_ok());
+        // Already downloaded: nothing new, nothing failed.
+        assert!(super::batch_outcome(summary(&[]), 0, 2).is_ok());
+    }
+
+    /// Review 5, B23: stopping a download also ends a process it started
+    /// with the same output (FFmpeg), so reading its output ends at once.
+    #[cfg(unix)]
+    #[test]
+    fn stopping_ends_the_processes_a_download_started() {
+        use std::io::Read;
+        let mut command = std::process::Command::new("sh");
+        command
+            .args(["-c", "sleep 60 & wait"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped());
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        let mut child = command.spawn().expect("shell");
+        let mut output = child.stdout.take().expect("pipe");
+        let (done, ended) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = output.read_to_end(&mut Vec::new());
+            let _ = done.send(());
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        super::stop_process_tree(&mut child);
+        assert!(
+            ended
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok(),
+            "the started process still holds the output"
+        );
+    }
+
     #[test]
     fn chapters_and_sponsorblock_add_their_arguments_only_when_chosen() {
         let mut arguments = Vec::new();

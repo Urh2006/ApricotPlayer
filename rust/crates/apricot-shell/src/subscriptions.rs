@@ -251,6 +251,24 @@ impl Shell {
         let previous = (self.view == View::NotificationCenter)
             .then(|| ui.selected_row())
             .flatten();
+        // The selected notification keeps the selection when new ones came
+        // above it (review 5, B18).
+        let previous = previous.map(|row| {
+            self.shown_notifications
+                .1
+                .get(row)
+                .and_then(|shown| {
+                    self.application
+                        .notifications()
+                        .iter()
+                        .position(|notification| notification == shown)
+                })
+                .unwrap_or(row)
+        });
+        self.shown_notifications = (
+            self.application.notifications_revision(),
+            self.application.notifications().to_vec(),
+        );
         let notifications = self.application.notifications();
         let (rows, selected) = if notifications.is_empty() {
             ui.set_status(catalog.text("notification_center_empty"), announce_status);
@@ -281,6 +299,16 @@ impl Shell {
             ],
             focus_list: focus,
         });
+    }
+
+    /// The notification center shows what changed without moving the focus,
+    /// so Enter and Delete act on the row read (review 5, B18).
+    pub(crate) fn sync_notification_center(&mut self, ui: &mut dyn ShellUi) {
+        if self.view == View::NotificationCenter
+            && self.shown_notifications.0 != self.application.notifications_revision()
+        {
+            self.refresh_notification_center(ui, false, false, None);
+        }
     }
 
     fn selected_subscription_index(&self, ui: &dyn ShellUi) -> Option<usize> {
@@ -324,6 +352,7 @@ impl Shell {
             return;
         }
         // Windows `activate_notification_selection`.
+        self.sync_notification_center(ui);
         let Some(index) = ui.selected_row() else {
             return;
         };
@@ -520,6 +549,7 @@ impl Shell {
 
     /// Delete and Remove on both screens.
     pub(crate) fn remove_selected_subscription_row(&mut self, ui: &mut dyn ShellUi) {
+        self.sync_notification_center(ui);
         if self.view == View::Subscriptions {
             self.remove_selected_subscription(ui);
         } else if let Some(index) = ui.selected_row() {
@@ -876,6 +906,7 @@ impl Shell {
             let focus = !self.settings_window_open();
             self.refresh_subscriptions(ui, focus, None);
         }
+        self.sync_notification_center(ui);
         if pending.manual {
             let message = if summary.successes == 0 && summary.failures > 0 {
                 catalog.text("subscription_check_failed").replace(
@@ -898,6 +929,32 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 5, B18: a notification that arrives while the notification
+    /// center is open shows at once, the selection stays on the
+    /// notification it was on, and Delete removes that one.
+    #[test]
+    fn a_new_notification_does_not_move_the_selected_one() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        let note = |title: &str| AppNotification::new("subscription", "New", title, None, 1.0);
+        shell.application.add_notification(note("first")).unwrap();
+        shell.application.add_notification(note("second")).unwrap();
+        shell.show_notification_center(&mut ui);
+        // The older notification, "first", is selected.
+        ui.selected = Some(1);
+        shell.application.add_notification(note("third")).unwrap();
+        shell.sync_notification_center(&mut ui);
+        assert_eq!(ui.selected, Some(2));
+        shell.remove_selected_subscription_row(&mut ui);
+        let left: Vec<_> = shell
+            .application
+            .notifications()
+            .iter()
+            .map(|notification| notification.message.clone())
+            .collect();
+        assert_eq!(left, ["third", "second"]);
+    }
 
     #[test]
     fn the_interval_stays_between_half_an_hour_and_a_week() {

@@ -706,9 +706,6 @@ impl Shell {
         if !self.confirm_download(ui, item, choice) {
             return;
         }
-        if remove_queued {
-            let _ = self.application.downloads_mut().remove_queued(item);
-        }
         let request = match self.build_download_request(ui, item, choice, None) {
             Ok(Some(request)) => request,
             Ok(None) => {
@@ -724,6 +721,11 @@ impl Shell {
             ui.show_error("Application path is unavailable.");
             return;
         };
+        // The queued entry leaves only when its download really starts, not
+        // when the folder choice is cancelled (review 5, B22).
+        if remove_queued {
+            let _ = self.application.downloads_mut().remove_queued(item);
+        }
         let task_kind = match item.kind {
             MediaKind::Playlist => DownloadTaskKind::Playlist,
             MediaKind::Channel => DownloadTaskKind::Channel,
@@ -1625,6 +1627,37 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 5, B22: cancelling the folder choice of a queued download
+    /// keeps it in the queue.
+    #[test]
+    fn a_cancelled_folder_choice_keeps_the_queued_download() {
+        let mut shell = crate::tests::keyboard::shell();
+        let mut ui = crate::tests::equalizer::Ui::default();
+        shell
+            .application
+            .set_boolean_setting(apricot_core::SettingId::AskDownloadLocationEachTime, true)
+            .expect("setting");
+        let item = MediaItem {
+            id: apricot_core::MediaId("abc".into()),
+            source: apricot_core::MediaSource::Youtube,
+            kind: MediaKind::Video,
+            title: "Video".into(),
+            url: Some("https://www.youtube.com/watch?v=abc".parse().expect("url")),
+            stream_url: None,
+            external_audio_url: None,
+            local_path: None,
+            channel: String::new(),
+            duration_seconds: None,
+            metadata: std::collections::BTreeMap::new(),
+        };
+        let _ = shell
+            .application
+            .downloads_mut()
+            .queue_item(item.clone(), DownloadChoice::Audio);
+        shell.start_download_item(&mut ui, &item, DownloadChoice::Audio, true);
+        assert!(shell.application.downloads().queued_item(&item).is_some());
+    }
 
     #[test]
     fn the_same_shortcut_for_the_same_item_is_ignored_briefly() {

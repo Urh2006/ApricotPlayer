@@ -3483,6 +3483,9 @@ pub(super) unsafe fn subscription_report(
         let stamp = state.spotify.epochs_begin();
         service.subscription_operation(stamp, SubscriptionCommand::Acknowledge(ids));
     }
+    if let Some(state) = state_mut(window) {
+        super::sync_notification_center(state);
+    }
     let Some(catalog) = state(window).map(super::spotify::catalog) else {
         return;
     };

@@ -52,7 +52,7 @@ pub use clip_export::{
 pub use diagnostics::{DiagnosticLog, DiagnosticLogError, install_panic_hook};
 pub use download::{
     DownloadError, DownloadEvent, DownloadMode, DownloadOptions, DownloadPhase, DownloadRequest,
-    DownloadSummary, VideoDownloadFormat, YtDlpDownloader,
+    DownloadSummary, VideoDownloadFormat, YtDlpDownloader, batch_outcome,
 };
 pub use local_edit::{
     LocalEditJob, LocalEditRender, run_ffmpeg_conversion, run_ffmpeg_conversion_cancellable,

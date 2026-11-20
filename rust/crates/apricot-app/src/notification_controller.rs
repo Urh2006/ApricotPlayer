@@ -17,6 +17,8 @@ pub enum NotificationControllerError {
 
 #[derive(Debug, Default)]
 pub struct NotificationController {
+    /// Changes so far, for a shown list to follow (review 5, B18).
+    revision: u64,
     notifications: Vec<AppNotification>,
     file: Option<NotificationFile>,
     load_error: Option<String>,
@@ -39,6 +41,7 @@ impl NotificationController {
                     file: Some(current),
                     load_error: Some(error.to_string()),
                     save_blocked: false,
+                    revision: 0,
                 },
             };
         }
@@ -51,6 +54,7 @@ impl NotificationController {
             file: Some(file),
             load_error: None,
             save_blocked: false,
+            revision: 0,
         }
     }
 
@@ -60,6 +64,7 @@ impl NotificationController {
             file: Some(file),
             load_error: Some(message),
             save_blocked: true,
+            revision: 0,
         }
     }
 
@@ -129,7 +134,14 @@ impl NotificationController {
             file.save(&candidate)?;
         }
         self.notifications = candidate;
+        self.revision = self.revision.wrapping_add(1);
         Ok(())
+    }
+
+    /// Changes so far: a shown list whose revision differs is out of date
+    /// (review 5, B18).
+    pub const fn revision(&self) -> u64 {
+        self.revision
     }
 
     fn ensure_writable(&self) -> Result<(), NotificationControllerError> {

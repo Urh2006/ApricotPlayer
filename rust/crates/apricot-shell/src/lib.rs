@@ -147,6 +147,9 @@ pub struct Shell {
     sources: sources::SourcesController,
     /// A kept private IPTV channel being opened from its source.
     pending_saved_iptv: Option<player::SavedIptvStart>,
+    /// The notifications the notification center shows and their revision
+    /// (review 5, B18).
+    shown_notifications: (u64, Vec<apricot_app::AppNotification>),
     view: View,
     model: MainMenuModel,
     /// Windows `last_activated_menu_item`: the main menu returns to it.
@@ -193,6 +196,7 @@ impl Shell {
             application,
             sources: sources::SourcesController::default(),
             pending_saved_iptv: None,
+            shown_notifications: (0, Vec::new()),
             view: View::MainMenu,
             model,
             last_activated_menu_item: None,

@@ -799,6 +799,7 @@ impl Shell {
                                 ui.show_system_notification(catalog.text("rss_feeds"), &message);
                             }
                         }
+                        self.sync_notification_center(ui);
                         if !silent {
                             let message = if summary.failures == 0 {
                                 self.text("rss_refresh_done")

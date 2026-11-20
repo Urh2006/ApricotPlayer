@@ -718,6 +718,9 @@ struct WindowState {
     /// Another source asked for while lists of one are open: it opens once
     /// those lists closed and their controller is back (review 5, B13).
     pending_source_action: Option<String>,
+    /// The notifications the notification center shows and their revision,
+    /// so the selection follows its notification (review 5, B18).
+    shown_notifications: (u64, Vec<apricot_app::AppNotification>),
     /// The screen a podcast search or category was asked from.
     podcast_search_view: Option<MainView>,
     /// Counts the screens shown, so late source answers stay away from a
@@ -2370,6 +2373,7 @@ unsafe fn create_controls(
         podcast_search_view: None,
         view_changes: 0,
         pending_source_action: None,
+        shown_notifications: (0, Vec::new()),
         defer_open_label: std::cell::Cell::new(false),
         pending_saved_iptv: None,
         deferred_open_label: std::cell::RefCell::new(None),
@@ -6576,6 +6580,7 @@ unsafe fn poll_podcast_work(window: HWND) {
                         };
                         set_status(state, &message, true);
                     }
+                    sync_notification_center(state);
                     if state.view == MainView::RssFeeds {
                         refresh_rss_feeds(state, false, None);
                     } else if state.view == MainView::RssItems {
@@ -8014,6 +8019,7 @@ unsafe fn finish_subscription_item(
     }
 }
 
+#[allow(clippy::too_many_lines)] // Python's summary, notifications and refresh in order.
 unsafe fn finish_subscription_check(window: HWND) {
     let Some(pending) = state_mut(window).and_then(|state| state.pending_subscription_check.take())
     else {
@@ -8097,6 +8103,7 @@ unsafe fn finish_subscription_check(window: HWND) {
             refresh_subscriptions(state, !state.modal_open, None);
             layout_controls_state(window, state);
         }
+        sync_notification_center(state);
         if pending.manual {
             let final_message = if summary.successes == 0 && summary.failures > 0 {
                 catalog.text("subscription_check_failed").replace(
@@ -9402,9 +9409,6 @@ unsafe fn start_download_item(
     if !confirm_download(window, item, choice) {
         return;
     }
-    if remove_queued && let Some(state) = state_mut(window) {
-        let _ = state.application.downloads_mut().remove_queued(item);
-    }
     let request = match build_download_request(window, item, choice, None) {
         Ok(Some(request)) => request,
         Ok(None) => {
@@ -9428,6 +9432,11 @@ unsafe fn start_download_item(
         show_error_message(window, "Application path is unavailable.");
         return;
     };
+    // The queued entry leaves only when its download really starts, not
+    // when the folder choice is cancelled (review 5, B22).
+    if remove_queued && let Some(state) = state_mut(window) {
+        let _ = state.application.downloads_mut().remove_queued(item);
+    }
     let allow_playlist = request.allow_playlist;
     let task_kind = match item.kind {
         apricot_core::MediaKind::Playlist => DownloadTaskKind::Playlist,
@@ -12349,6 +12358,26 @@ unsafe fn refresh_notification_center(
     selected_index: Option<usize>,
 ) {
     let previous = usize::try_from(SendMessageW(state.list, LB_GETCURSEL, None, None).0).ok();
+    // The selected notification keeps the selection when new ones came
+    // above it (review 5, B18).
+    let previous = previous.map(|row| {
+        state
+            .shown_notifications
+            .1
+            .get(row)
+            .and_then(|shown| {
+                state
+                    .application
+                    .notifications()
+                    .iter()
+                    .position(|notification| notification == shown)
+            })
+            .unwrap_or(row)
+    });
+    state.shown_notifications = (
+        state.application.notifications_revision(),
+        state.application.notifications().to_vec(),
+    );
     SendMessageW(state.list, LB_RESETCONTENT, None, None);
     let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
     crate::accessibility_win32::set_control_name(state.list, catalog.text("notification_center"));
@@ -12374,6 +12403,17 @@ unsafe fn refresh_notification_center(
     }
     if focus {
         focus_list(state.list);
+    }
+}
+
+/// The notification center shows what changed (new notifications from a
+/// check) without moving the focus, so Enter and Delete act on the row
+/// read (review 5, B18).
+unsafe fn sync_notification_center(state: &mut WindowState) {
+    if state.view == MainView::NotificationCenter
+        && state.shown_notifications.0 != state.application.notifications_revision()
+    {
+        refresh_notification_center(state, false, false, None);
     }
 }
 
@@ -14526,6 +14566,10 @@ unsafe fn confirm_pending_queued_start(window: HWND, state: &mut WindowState) {
 }
 
 unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
+    // A row acts on the notification it shows (review 5, B18).
+    if let Some(state) = state_mut(window) {
+        sync_notification_center(state);
+    }
     let state = state(window)?;
     // Python `active_item`: the background player acts on the playing item.
     if focus_in_background_player(state) {
@@ -14767,6 +14811,10 @@ unsafe fn remove_active_favorite(window: HWND) {
 }
 
 unsafe fn remove_selected_collection_item(window: HWND) {
+    // A row acts on the notification it shows (review 5, B18).
+    if let Some(state) = state_mut(window) {
+        sync_notification_center(state);
+    }
     let selection = state(window).and_then(|state| {
         let selected = SendMessageW(state.list, LB_GETCURSEL, None, None).0;
         usize::try_from(selected)
