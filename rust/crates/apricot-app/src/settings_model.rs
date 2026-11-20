@@ -2409,7 +2409,11 @@ mod tests {
         ));
         // 2.1.1 (Urh): named groups in a sensible order; the announcement
         // length opens "Announcements and lists".
-        let names: Vec<_> = model.groups.iter().map(|group| group.label.as_str()).collect();
+        let names: Vec<_> = model
+            .groups
+            .iter()
+            .map(|group| group.label.as_str())
+            .collect();
         assert_eq!(
             names,
             [
@@ -2450,7 +2454,10 @@ mod tests {
         for pair in model.groups.windows(2) {
             assert_eq!(pair[0].last + 1, pair[1].first);
         }
-        assert_eq!(model.groups.last().map(|group| group.last), Some(model.controls.len() - 2));
+        assert_eq!(
+            model.groups.last().map(|group| group.last),
+            Some(model.controls.len() - 2)
+        );
     }
 
     #[test]
