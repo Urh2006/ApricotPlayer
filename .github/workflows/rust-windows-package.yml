@@ -1,0 +1,136 @@
+name: Rust Windows package
+
+# Builds the Windows installer and portable zip with
+# rust/scripts/build_stable_release.ps1, the script of the local Windows
+# releases, and keeps them as a workflow artifact. The bundled mpv, FFmpeg
+# and Node.js are the locked downloads of release.yml. It runs only when
+# started by hand and never publishes a release.
+on:
+  workflow_dispatch:
+    inputs:
+      release_channel:
+        description: "Update channel for the package"
+        type: choice
+        options: [stable, beta]
+        default: stable
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Windows package
+    runs-on: windows-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install the pinned toolchain
+        working-directory: rust
+        run: rustup toolchain install
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rust
+
+      - name: Download locked mpv x86_64 runtime
+        shell: pwsh
+        run: |
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept        = "application/vnd.github+json"
+          }
+          $expectedMpvHash = 'FACAC536BAA73C7B925771AF5E39A3C9CB16B8D75B59A6E9800DE89799DFFCA7'
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/tags/20260610" -Headers $headers
+          $asset = $release.assets | Where-Object { $_.name -eq 'mpv-x86_64-20260610-git-304426c.7z' } | Select-Object -First 1
+          if (-not $asset) { throw "Could not find the locked mpv x86_64 release asset" }
+          Write-Host "Downloading mpv asset: $($asset.name)"
+          if ($asset.digest -ne "sha256:$($expectedMpvHash.ToLowerInvariant())") { throw "mpv release metadata digest changed" }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv.7z
+          $actualMpvHash = (Get-FileHash -LiteralPath mpv.7z -Algorithm SHA256).Hash
+          if ($actualMpvHash -ne $expectedMpvHash) { throw "mpv SHA-256 verification failed" }
+
+          Write-Host "Extracting mpv archive..."
+          & "C:\Program Files\7-Zip\7z.exe" x mpv.7z -o"mpv_extracted" -y | Out-Null
+
+          # Robustly find mpv.exe regardless of archive structure
+          # (some shinchiro builds are flat, some have a root wrapper directory)
+          $mpvExe = Get-ChildItem -Path mpv_extracted -Filter "mpv.exe" -Recurse | Select-Object -First 1
+          if (-not $mpvExe) {
+            Write-Host "Archive contents:"
+            Get-ChildItem mpv_extracted -Recurse | Select-Object FullName
+            throw "mpv.exe was not found anywhere in the extracted archive"
+          }
+          Write-Host "Found mpv.exe at: $($mpvExe.FullName)"
+
+          # Copy mpv.exe and all sibling files (required DLLs) to vendor\mpv
+          New-Item -ItemType Directory -Force -Path vendor\mpv | Out-Null
+          Get-ChildItem -Path $mpvExe.Directory.FullName -File |
+            Copy-Item -Destination vendor\mpv\ -Force
+
+          Write-Host "mpv installed. Files in vendor\mpv:"
+          Get-ChildItem vendor\mpv -Name
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download locked FFmpeg win64 GPL runtime
+        shell: pwsh
+        run: |
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept        = "application/vnd.github+json"
+          }
+          $expectedFfmpegHash = '8069A62DFEC0B2F57A3F226695B94F4FACF1102AF517291E4BFD0E3DB42DF5DC'
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-07-10-13-44" -Headers $headers
+          $asset = $release.assets | Where-Object { $_.name -eq 'ffmpeg-N-125515-g35f8f4bdc0-win64-gpl.zip' } | Select-Object -First 1
+          if (-not $asset) { throw "Could not find the locked FFmpeg release asset" }
+          Write-Host "Downloading ffmpeg asset: $($asset.name)"
+          if ($asset.digest -ne "sha256:$($expectedFfmpegHash.ToLowerInvariant())") { throw "FFmpeg release metadata digest changed" }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg.zip
+          $actualFfmpegHash = (Get-FileHash -LiteralPath ffmpeg.zip -Algorithm SHA256).Hash
+          if ($actualFfmpegHash -ne $expectedFfmpegHash) { throw "ffmpeg SHA-256 verification failed" }
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_extracted -Force
+          $ffmpegExe = Get-ChildItem -Path ffmpeg_extracted -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+          if (-not $ffmpegExe) { throw "ffmpeg.exe not found in archive" }
+          New-Item -ItemType Directory -Force -Path vendor\ffmpeg | Out-Null
+          Copy-Item -Path $ffmpegExe.FullName -Destination vendor\ffmpeg\ffmpeg.exe -Force
+          Write-Host "ffmpeg.exe placed in vendor\ffmpeg"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download locked Node.js LTS runtime
+        shell: pwsh
+        run: |
+          $nodeVersion = '24.18.0'
+          $expectedNodeHash = '9A4EB5F1C29C6A2E93852EAD46B999E284A6A5CA8BAB4D4E241D587D025A52DE'
+          New-Item -ItemType Directory -Force -Path vendor\node | Out-Null
+          Invoke-WebRequest -Uri "https://nodejs.org/dist/v$nodeVersion/win-x64/node.exe" -OutFile vendor\node\node.exe
+          $actualNodeHash = (Get-FileHash -LiteralPath vendor\node\node.exe -Algorithm SHA256).Hash
+          if ($actualNodeHash -ne $expectedNodeHash) { throw "Node.js SHA-256 verification failed" }
+          $signature = Get-AuthenticodeSignature -LiteralPath vendor\node\node.exe
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Node.js Authenticode verification failed"
+          }
+          & vendor\node\node.exe --version
+
+      - name: Install Inno Setup 6
+        run: choco install innosetup --version=6.7.1 --yes --no-progress
+
+      - name: Build the installer and the portable zip
+        shell: pwsh
+        env:
+          RELEASE_CHANNEL: ${{ inputs.release_channel }}
+        run: .\rust\scripts\build_stable_release.ps1 -Channel $env:RELEASE_CHANNEL
+
+      - name: Keep the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apricotplayer-windows-x64
+          path: |
+            rust/local-dist/stable/*/ApricotPlayerSetup.exe
+            rust/local-dist/stable/*/ApricotPlayer.zip
+            rust/local-dist/stable/*/SHA256SUMS.txt
+          if-no-files-found: error
