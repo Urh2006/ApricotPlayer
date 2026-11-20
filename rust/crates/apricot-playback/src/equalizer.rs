@@ -7,9 +7,9 @@ pub const EQUALIZER_FILTER_LABEL: &str = "apricot_eq";
 /// Python `EQ_FILTER_ALT_LABEL`, used while replacing a running equalizer.
 pub const EQUALIZER_FILTER_ALT_LABEL: &str = "apricot_eq_next";
 /// Python `EQ_LIMITER_FILTER`.
-const LIMITER_FILTER: &str = "alimiter=limit=0.95:attack=5:release=80";
+pub const LIMITER_FILTER: &str = "alimiter=limit=0.95:attack=5:release=80";
 /// Python `EQ_CLIPPING_HEADROOM_LIMIT_DB`.
-const CLIPPING_HEADROOM_LIMIT_DB: f64 = 12.0;
+pub const CLIPPING_HEADROOM_LIMIT_DB: f64 = 12.0;
 
 /// Python `equalizer_filter` without its `@label:` prefix: the `lavfi` graph
 /// for the given gains, or `None` when no band is audible.
@@ -64,6 +64,41 @@ pub fn equalizer_filters(gains: &BTreeMap<String, f64>, clipping_protection: boo
     filters
 }
 
+/// The headroom in dB that clipping protection takes in the equalizer of a
+/// tagged filter or a whole `af` chain, `None` when that equalizer is
+/// unprotected or missing. A protected graph starts with its `volume=-XdB`
+/// headroom and ends with [`LIMITER_FILTER`], as both graph builders write it.
+#[must_use]
+pub fn clipping_headroom_db(filters: &str, label: &str) -> Option<f64> {
+    let start = filters.find(&format!("@{label}:lavfi=["))?;
+    if start > 0 && !filters[..start].ends_with(',') {
+        return None;
+    }
+    let graph = &filters[start + label.len() + 2..];
+    let graph = &graph[..=graph.find(']')?];
+    let headroom = graph.strip_prefix("lavfi=[volume=-")?;
+    let headroom: f64 = headroom[..headroom.find("dB,")?].parse().ok()?;
+    (graph.ends_with(&format!(",{LIMITER_FILTER}]")) && headroom.is_finite() && headroom > 0.0)
+        .then(|| headroom.min(CLIPPING_HEADROOM_LIMIT_DB))
+}
+
+/// The mpv `volume` that plays `volume` through an equalizer whose clipping
+/// protection took `headroom_db`. mpv applies its volume after the filters
+/// and as a cube, (volume / 100)^3, so at a lower volume the boosted bands
+/// cannot reach full scale and the headroom only makes everything quieter.
+/// Below 100 the volume therefore gets back as much of the headroom as still
+/// keeps the output at or below full scale: the result is as loud as without
+/// protection until that limit, and never louder than it. From 100 up, with
+/// volume boost, the volume is unchanged, as before 2.1.2.
+#[must_use]
+pub fn protected_volume(volume: f64, headroom_db: f64) -> f64 {
+    if !volume.is_finite() || volume >= 100.0 || headroom_db <= 0.0 {
+        return volume;
+    }
+    let headroom_db = headroom_db.min(CLIPPING_HEADROOM_LIMIT_DB);
+    (volume.max(0.0) * 10_f64.powf(headroom_db / 60.0)).min(100.0)
+}
+
 /// Tagged filter string for `af add` and the initial `af` chain.
 pub fn tagged_equalizer_filter(label: &str, graph: &str) -> String {
     format!("@{label}:{graph}")
@@ -89,7 +124,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        EQUALIZER_FILTER_LABEL, equalizer_filter_graph, equalizer_filters, tagged_equalizer_filter,
+        EQUALIZER_FILTER_ALT_LABEL, EQUALIZER_FILTER_LABEL, clipping_headroom_db,
+        equalizer_filter_graph, equalizer_filters, protected_volume, tagged_equalizer_filter,
     };
 
     #[test]
@@ -171,5 +207,67 @@ mod tests {
                 "alimiter=limit=0.95:attack=5:release=80",
             ]
         );
+    }
+
+    #[test]
+    fn headroom_is_read_back_from_a_protected_graph_or_chain() {
+        let gains = BTreeMap::from([("62".to_owned(), 6.0), ("8000".to_owned(), -2.0)]);
+        let protected = equalizer_filter_graph(&gains, true).expect("protected");
+        let plain = equalizer_filter_graph(&gains, false).expect("plain");
+        let tagged = tagged_equalizer_filter(EQUALIZER_FILTER_LABEL, &protected);
+        assert_eq!(
+            clipping_headroom_db(&tagged, EQUALIZER_FILTER_LABEL),
+            Some(6.0)
+        );
+        assert_eq!(
+            clipping_headroom_db(&tagged, EQUALIZER_FILTER_ALT_LABEL),
+            None
+        );
+        let next = tagged_equalizer_filter(EQUALIZER_FILTER_ALT_LABEL, &protected);
+        assert_eq!(
+            clipping_headroom_db(&next, EQUALIZER_FILTER_ALT_LABEL),
+            Some(6.0)
+        );
+        assert_eq!(clipping_headroom_db(&next, EQUALIZER_FILTER_LABEL), None);
+        let chain =
+            format!("@apricot_speed:scaletempo2,{tagged},@apricot_processing:lavfi=[pan=mono]");
+        assert_eq!(
+            clipping_headroom_db(&chain, EQUALIZER_FILTER_LABEL),
+            Some(6.0)
+        );
+        let unprotected = tagged_equalizer_filter(EQUALIZER_FILTER_LABEL, &plain);
+        assert_eq!(
+            clipping_headroom_db(&unprotected, EQUALIZER_FILTER_LABEL),
+            None
+        );
+        // A user filter that only looks similar is not the equalizer.
+        assert_eq!(
+            clipping_headroom_db(
+                "@x@apricot_eq:lavfi=[volume=-6dB,alimiter=limit=0.95:attack=5:release=80]",
+                EQUALIZER_FILTER_LABEL
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn protected_volume_keeps_the_sound_until_full_scale() {
+        // +6 dB boost: 50 % gets the whole headroom back, the output is as
+        // loud as without protection: (63 / 100)^3 * 10^(-6 / 20) = (50 / 100)^3.
+        let restored = protected_volume(50.0, 6.0);
+        assert!((restored - 50.0 * 10_f64.powf(0.1)).abs() < 1e-9);
+        let without = (0.5_f64).powi(3);
+        let with = (restored / 100.0).powi(3) * 10_f64.powf(-6.0 / 20.0);
+        assert!((without - with).abs() < 1e-12);
+        // From about 79 % up the output stays at full scale.
+        assert!((protected_volume(80.0, 6.0) - 100.0).abs() < 1e-9);
+        assert!((protected_volume(99.0, 6.0) - 100.0).abs() < 1e-9);
+        // 100 % and volume boost keep their old behaviour.
+        assert!((protected_volume(100.0, 6.0) - 100.0).abs() < 1e-9);
+        assert!((protected_volume(200.0, 6.0) - 200.0).abs() < 1e-9);
+        assert!(protected_volume(0.0, 6.0).abs() < 1e-9);
+        assert!((protected_volume(40.0, 0.0) - 40.0).abs() < 1e-9);
+        // The headroom never exceeds the 12 dB limit.
+        assert!((protected_volume(10.0, 30.0) - protected_volume(10.0, 12.0)).abs() < 1e-9);
     }
 }

@@ -144,17 +144,12 @@ fn tick_transitions(
         if let Some(started) = old.started {
             let progress = (now.saturating_duration_since(started).as_secs_f64() / old.seconds)
                 .clamp(0.0, 1.0);
-            let (outgoing_gain, incoming_gain) = if old.equal_power {
-                let angle = progress * std::f64::consts::FRAC_PI_2;
-                (angle.cos(), angle.sin())
-            } else {
-                (1.0 - progress, progress)
-            };
+            let (outgoing_gain, incoming_gain) = crossfade_gains(progress, old.equal_power);
             let _ = old.engine.execute(PlaybackCommand::SetVolume(
-                old.target_volume * outgoing_gain,
+                old.target_volume * crossfade_volume_factor(outgoing_gain),
             ));
             let _ = engine.execute(PlaybackCommand::SetVolume(
-                old.target_volume * incoming_gain,
+                old.target_volume * crossfade_volume_factor(incoming_gain),
             ));
             if progress >= 1.0 {
                 *outgoing = None;
@@ -869,7 +864,11 @@ fn start_or_replace_engine(
             }
         };
     }
-    match factory(options) {
+    match factory(options).map(|engine| -> Box<dyn PlaybackEngine> {
+        Box::new(crate::headroom_volume::HeadroomVolume::wrap(
+            engine, options,
+        ))
+    }) {
         Ok(mut engine) => match engine.execute(PlaybackCommand::Load {
             item,
             start_position_seconds: options.initial_position_seconds,
@@ -885,6 +884,27 @@ fn start_or_replace_engine(
             None
         }
     }
+}
+
+/// Amplitude gains of the outgoing and incoming item at `progress` (0 to 1)
+/// of a crossfade: equal power keeps the summed power of two songs steady,
+/// linear keeps the summed amplitude.
+fn crossfade_gains(progress: f64, equal_power: bool) -> (f64, f64) {
+    if equal_power {
+        let angle = progress * std::f64::consts::FRAC_PI_2;
+        (angle.cos(), angle.sin())
+    } else {
+        (1.0 - progress, progress)
+    }
+}
+
+/// The factor of the mpv `volume` that plays an amplitude gain. mpv turns its
+/// volume into amplitude as (volume / 100)^3, so a gain applied to the volume
+/// itself was cubed: halfway through an equal power crossfade both items were
+/// at about -9 dB instead of -3 dB and the incoming item stayed almost silent
+/// for the first third (2.1.2). The cube root undoes that.
+fn crossfade_volume_factor(gain: f64) -> f64 {
+    gain.clamp(0.0, 1.0).cbrt()
 }
 
 /// Python starts a fresh mpv process for every item. A reused libmpv instance
@@ -1318,6 +1338,29 @@ mod tests {
             important,
             vec![PlaybackEvent::Paused(true), PlaybackEvent::Ended]
         );
+    }
+
+    #[test]
+    fn crossfade_gains_reach_the_output_uncubed() {
+        // mpv plays (volume / 100)^3, so the volume factor is a cube root.
+        let amplitude = |gain: f64| super::crossfade_volume_factor(gain).powi(3);
+        for step in 0..=20 {
+            let progress = f64::from(step) / 20.0;
+            let (outgoing, incoming) = super::crossfade_gains(progress, true);
+            let power = amplitude(outgoing).powi(2) + amplitude(incoming).powi(2);
+            assert!(
+                (power - 1.0).abs() < 1e-9,
+                "equal power at {progress}: {power}"
+            );
+            let (outgoing, incoming) = super::crossfade_gains(progress, false);
+            let sum = amplitude(outgoing) + amplitude(incoming);
+            assert!((sum - 1.0).abs() < 1e-9, "linear at {progress}: {sum}");
+        }
+        // Halfway, equal power plays each item at -3 dB: volume 100 * 0.707^(1/3).
+        let (outgoing, _) = super::crossfade_gains(0.5, true);
+        assert!((100.0 * super::crossfade_volume_factor(outgoing) - 89.09).abs() < 0.01);
+        assert!(super::crossfade_volume_factor(0.0).abs() < 1e-12);
+        assert!((super::crossfade_volume_factor(1.0) - 1.0).abs() < 1e-12);
     }
 
     #[test]

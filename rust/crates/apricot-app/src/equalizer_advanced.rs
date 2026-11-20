@@ -16,9 +16,9 @@ pub const SHELF_GAIN_RANGE: (f64, f64) = (-24.0, 24.0);
 const LOW_SHELF_FREQUENCY: f64 = 80.0;
 const HIGH_SHELF_FREQUENCY: f64 = 8_000.0;
 const SHELF_WIDTH: f64 = 0.7;
-/// Same headroom rule as the plain equalizer (Python `EQ_CLIPPING_HEADROOM_LIMIT_DB`).
-const CLIPPING_HEADROOM_LIMIT_DB: f64 = 12.0;
-const LIMITER_FILTER: &str = "alimiter=limit=0.95:attack=5:release=80";
+// Same headroom rule and limiter as the plain equalizer, so the player can
+// read the headroom back (`apricot_playback::clipping_headroom_db`).
+use apricot_playback::{CLIPPING_HEADROOM_LIMIT_DB, LIMITER_FILTER};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub struct BandShape {
