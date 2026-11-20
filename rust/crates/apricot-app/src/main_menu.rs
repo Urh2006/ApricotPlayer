@@ -518,7 +518,9 @@ mod tests {
     #[test]
     fn rust_only_strings_cover_every_language_without_replacing_python_texts() {
         let python_english = super::parse_embedded_locale(super::locale_source("en"));
-        for (key, translations) in super::rust_only_strings() {
+        let strings = super::rust_only_strings();
+        for (key, translations) in &strings {
+            let key = key.clone();
             let platform = key.split_once('@');
             if let Some((base, _)) = platform {
                 // A platform's wording of a Python text, never a new key.
@@ -558,6 +560,11 @@ mod tests {
                 );
                 match platform {
                     None => assert_eq!(embedded_catalog(language.code).text(&key), text),
+                    // This platform's own wording of a text wins over a fix.
+                    Some((base, "fix"))
+                        if strings
+                            .get(&format!("{base}@{}", super::CURRENT_PLATFORM))
+                            .is_some_and(|platform| platform.contains_key(language.code)) => {}
                     Some((base, name)) if name == super::CURRENT_PLATFORM || name == "fix" => {
                         assert_eq!(embedded_catalog(language.code).text(base), text);
                     }
