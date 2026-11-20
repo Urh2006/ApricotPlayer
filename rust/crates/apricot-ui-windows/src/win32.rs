@@ -13706,8 +13706,8 @@ fn run_shortcut_action(
 
 /// A row command of the screen under the Radio, IPTV or Recording lists
 /// (Delete, rename, copy): it would act on that screen's hidden selection,
-/// so the lists keep it (review 5, B11). Global and player keys, and plain
-/// letters for first-letter search, still pass.
+/// so the lists keep it (review 5, B11). Global keys, keys only the player
+/// has, and plain letters for first-letter search still pass.
 fn hidden_row_shortcut(state: &WindowState, chord: apricot_core::shortcut::ShortcutChord) -> bool {
     if matches!(chord.key, ShortcutKey::Character(_)) && !chord.control && !chord.alt {
         return false;
@@ -13715,9 +13715,10 @@ fn hidden_row_shortcut(state: &WindowState, chord: apricot_core::shortcut::Short
     let shortcuts = &state.application.settings().keyboard_shortcuts;
     let (scope, accepts_text) = view_shortcut_scope(state.view);
     let context = ShortcutContext::new(scope, accepts_text);
+    // A list action, also one the player has too (Delete, Ctrl+F): with the
+    // screen's scope it would take the hidden row.
     action_for_shortcut(shortcuts, chord, context).is_some_and(|action| {
-        !action.scopes.contains(&ActionScope::Global)
-            && !action.scopes.contains(&ActionScope::Player)
+        !action.scopes.contains(&ActionScope::Global) && action.scopes.contains(&ActionScope::List)
     })
 }
 

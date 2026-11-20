@@ -268,7 +268,11 @@ pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
     // go back to the screen below and come again (beta 7). A running
     // recording is not loading: Back closes the list (review 4, B3).
     if controller.is_loading() {
-        ui.showed_list = false;
+        if unsafe { super::sources_panel::left_with_back(window) } {
+            controller.cancel_loading();
+        } else {
+            ui.showed_list = false;
+        }
     }
     drop(ui);
     if let Some(state) = state_mut(window) {
@@ -383,8 +387,11 @@ pub(super) unsafe fn poll(window: HWND) {
     let busy = controller.poll(&mut ui, &environment);
     // A list kept open while work loaded closes when the work ended without
     // showing another one, for example with an error.
-    if controller.is_loading() {
+    if controller.is_loading() && !(outermost && super::sources_panel::left_with_back(window)) {
         ui.showed_list = false;
+    } else if controller.is_loading() {
+        controller.cancel_loading();
+        ui.showed_list = true;
     } else if outermost {
         ui.showed_list = true;
     }

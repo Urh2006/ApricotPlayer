@@ -52,6 +52,9 @@ pub(super) struct SourcesPanel {
     /// Waits for a choice that run (nested lists count each); while the
     /// next list loads none does, and Back leaves the lists (review 5, B12).
     waiting: u32,
+    /// The last answer of the lists was Back: when work still loads after
+    /// the lists' controller returned, the user left them (review 5, B12).
+    left_with_back: bool,
     /// Where the focus returns when the list closes.
     previous: HWND,
 }
@@ -111,6 +114,7 @@ impl SourcesPanel {
             done: false,
             active: false,
             waiting: 0,
+            left_with_back: false,
             previous: HWND::default(),
         })
     }
@@ -325,6 +329,7 @@ unsafe fn finish(window: HWND, choice: Option<SourceSelection>) {
     let Some(panel) = state.sources_panel.as_mut() else {
         return;
     };
+
     if panel.waiting == 0 {
         // Back while the next list loads: the load is dropped and the lists
         // close, so the focus goes to the screen below (review 5, B12).
@@ -340,12 +345,21 @@ unsafe fn finish(window: HWND, choice: Option<SourceSelection>) {
     panel.done = true;
 }
 
+/// The lists' controller returned after Back while work still loads: the
+/// user left the lists, so the work is dropped (review 5, B12).
+pub(super) unsafe fn left_with_back(window: HWND) -> bool {
+    state(window)
+        .and_then(|state| state.sources_panel.as_ref())
+        .is_some_and(|panel| panel.active && panel.left_with_back)
+}
+
 /// Escape on the lists while the next one loads (no choice is awaited):
 /// Back, from the main window's message loop (review 5, B12).
 pub(super) unsafe fn escape_while_loading(window: HWND, message: &MSG) -> bool {
     let Some(panel) = state(window).and_then(|state| state.sources_panel.as_ref()) else {
         return false;
     };
+
     if !panel.active
         || panel.waiting > 0
         || message.message != WM_KEYDOWN
@@ -494,6 +508,7 @@ unsafe fn wait(window: HWND) -> Option<SourceSelection> {
     let choice = wait_for_choice(window);
     if let Some(panel) = state_mut(window).and_then(|state| state.sources_panel.as_mut()) {
         panel.waiting = panel.waiting.saturating_sub(1);
+        panel.left_with_back = choice.is_none();
     }
     choice
 }
