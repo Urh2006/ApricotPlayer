@@ -1882,35 +1882,12 @@ pub fn timer_description(app: &Application) -> String {
     )
 }
 
-/// A Spotify song chosen by the user (Play in the Spotify queue), not by
-/// Next or Previous, for [`spotify_track_end`] (review 4, B12).
-static MANUAL_TRACK_CHANGE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
-
-/// The user chose the next Spotify song; the change that follows is not
-/// the natural end of the song (review 4, B12).
-pub fn note_manual_track_change() {
-    if let Ok(mut change) = MANUAL_TRACK_CHANGE.lock() {
-        *change = Some(Instant::now());
-    }
-}
-
 /// A Spotify track that went on by itself, not by Next, Previous or a song
 /// chosen in the queue, ends like a file: a sleep timer set to the end of
-/// the track stops there (review 2.1). The choice counts for the next song
-/// change, up to a slow answer of Spotify (review 4, B12).
-pub fn spotify_track_end(
-    app: &mut Application,
-    manual_change: Option<Instant>,
-) -> Option<Vec<PlaybackCommand>> {
-    let chosen = MANUAL_TRACK_CHANGE
-        .lock()
-        .ok()
-        .and_then(|mut change| change.take());
-    if manual_change
-        .into_iter()
-        .chain(chosen)
-        .any(|at| at.elapsed().as_secs_f64() < 15.0)
-    {
+/// the track stops there (review 2.1). Whether the user chose the song is
+/// known for each change, however long Spotify took (review 5, B6).
+pub fn spotify_track_end(app: &mut Application, chosen: bool) -> Option<Vec<PlaybackCommand>> {
+    if chosen {
         return None;
     }
     natural_playback_end(app, false)

@@ -55,9 +55,8 @@ integration, not an upstream-supported history API.
   Dropping the load ends the wait. A load whose key is refused no longer
   decodes an encrypted file without decryption (that read and downloaded the
   whole file before failing); only plain Ogg or MP3 data plays without a key.
-- 2.1: Pause while a song still loads (for example waiting for a key) sends
-  PlayerEvent::Paused at once, so Apricot stops the sound already handed on
-  immediately instead of when the key arrives.
+- 2.1 (review 5, B2): `account_keys_refused` is true only after several
+  keys in a row were refused with 0x0001 and none granted since.
 - Beta 23: Player::set_request_revision lets Connect move an existing request
   to a new navigation revision (Previous that only seeks to the start).
 - Beta 24: AudioKeyManager accepts an optional AudioKeyStore (set_store,

@@ -102,9 +102,6 @@ impl SelectedAccount {
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)] // As on Windows.
 pub(crate) struct SpotifyState {
-    /// When Next, Previous or a list edge was asked, so that track change
-    /// is not a natural end for the sleep timer.
-    manual_change: Option<std::time::Instant>,
     service: Option<Arc<SpotifyService>>,
     receiver: Option<Receiver<SpotifyEvent>>,
     pub(crate) epochs: SpotifyEpochs,
@@ -1221,6 +1218,7 @@ impl Shell {
             PlaybackNotice::Playing {
                 track,
                 requested: true,
+                chosen,
                 ..
             } => {
                 // An album or playlist started as a whole becomes its first
@@ -1237,7 +1235,7 @@ impl Shell {
                     .current_item()
                     .is_some_and(|item| item.id.0 != track.uri && item.title != track.title);
                 if collection || other_track {
-                    self.spotify_continue_item(ui, &track);
+                    self.spotify_continue_item(ui, &track, chosen);
                 }
                 self.spotify_push_volume();
             }
@@ -1245,8 +1243,9 @@ impl Shell {
                 track,
                 position_ms,
                 requested: false,
+                chosen,
             } => {
-                if self.spotify_continue_item(ui, &track) {
+                if self.spotify_continue_item(ui, &track, chosen) {
                     return;
                 }
                 let mut item = track.media_item();
@@ -1272,6 +1271,9 @@ impl Shell {
             }
             PlaybackNotice::KeyLimit => {
                 ui.set_status(&self.text("spotify_key_limit"), true);
+            }
+            PlaybackNotice::ListStillLoading => {
+                ui.set_status(&self.text("spotify_list_still_loading"), true);
             }
             PlaybackNotice::QueueChanged => {
                 if let Some(player) = self
@@ -1351,7 +1353,12 @@ impl Shell {
     /// Spotify moved on to the next track while Apricot plays a Spotify
     /// item: only the item changes, with one "Playing: title"; `false`
     /// when no Spotify item plays.
-    fn spotify_continue_item(&mut self, ui: &mut dyn ShellUi, track: &SpotifyTrack) -> bool {
+    fn spotify_continue_item(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        track: &SpotifyTrack,
+        chosen: bool,
+    ) -> bool {
         let session = self.application.player_session();
         let running = matches!(
             session.phase(),
@@ -1410,10 +1417,7 @@ impl Shell {
                 }
             }
         }
-        let timer_end = crate::playback_features::spotify_track_end(
-            &mut self.application,
-            self.spotify.manual_change.take(),
-        );
+        let timer_end = crate::playback_features::spotify_track_end(&mut self.application, chosen);
         if !self.application.replace_current_player_item(item.clone()) {
             return false;
         }
@@ -1471,19 +1475,13 @@ impl Shell {
         };
         let player = playback.player_state().unwrap_or_default();
         let mut smart_start = None;
-        if matches!(
-            action_id,
-            "player_next" | "player_previous" | "spotify_first_track" | "spotify_last_track"
-        ) {
-            self.spotify.manual_change = Some(std::time::Instant::now());
-        }
         let key = match action_id {
             "player_next" => {
                 playback.next();
                 None
             }
             "player_previous" => {
-                playback.previous();
+                playback.previous(self.application.player_session().position_seconds() >= 3.0);
                 None
             }
             // Beta 17: the list's first or last song, announced as it plays.

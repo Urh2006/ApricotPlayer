@@ -369,9 +369,7 @@ impl Shell {
             .spotify_service_ref()
             .and_then(apricot_spotify::SpotifyService::playback)
             .is_some_and(|playback| playback.play_queue_entry(&uid));
-        if played {
-            crate::playback_features::note_manual_track_change();
-        } else {
+        if !played {
             self.spotify_queue_changed(ui);
         }
         // The player announces the new track once it plays.

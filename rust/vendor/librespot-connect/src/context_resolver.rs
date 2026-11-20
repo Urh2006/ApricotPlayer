@@ -37,11 +37,13 @@ pub(super) struct ResolveContext {
 }
 
 impl ResolveContext {
-    fn append_context(uri: impl Into<String>) -> Self {
+    /// ApricotPlayer patch: a further page belongs to the context it came
+    /// from; upstream always named the default one (review 5, B4).
+    fn append_context(uri: impl Into<String>, update: ContextType) -> Self {
         Self {
             resolve: Resolve::Uri(uri.into()),
             fallback: None,
-            update: ContextType::Default,
+            update,
             action: ContextAction::Append,
         }
     }
@@ -128,6 +130,7 @@ pub struct ContextResolver {
 
 // time after which an unavailable context is retried
 const RETRY_UNAVAILABLE: Duration = Duration::from_secs(3600);
+const RETRY_AUTOPLAY: Duration = Duration::from_secs(30);
 
 impl ContextResolver {
     pub fn new(session: Session) -> Self {
@@ -148,7 +151,15 @@ impl ContextResolver {
             // never asked for again and recommendations ended.
             .map(|i| Instant::now().duration_since(*i));
 
-        let last_try = if matches!(last_try, Some(last_try) if last_try > RETRY_UNAVAILABLE) {
+        // ApricotPlayer patch: a failed recommendation request (a busy
+        // Spotify) may be asked again soon; a list that failed waits longer
+        // (review 5, B4).
+        let retry = if resolve.update == ContextType::Autoplay {
+            RETRY_AUTOPLAY
+        } else {
+            RETRY_UNAVAILABLE
+        };
+        let last_try = if matches!(last_try, Some(last_try) if last_try > retry) {
             let _ = self.unavailable_contexts.remove(&resolve);
             debug!(
                 "context was requested {}s ago, trying again to resolve the requested context",
@@ -208,6 +219,19 @@ impl ContextResolver {
 
     pub fn has_next(&self) -> bool {
         self.find_next().is_some()
+    }
+
+    /// ApricotPlayer: which context the next request updates.
+    pub fn next_update(&self) -> Option<ContextType> {
+        self.find_next().map(|(next, _, _)| next.update)
+    }
+
+    /// ApricotPlayer: a page of the list itself (not recommendations) still
+    /// waits to be loaded (review 5, B3).
+    pub fn has_pending_list_page(&self) -> bool {
+        self.queue
+            .iter()
+            .any(|next| next.update == ContextType::Default && next.resolve_uri().is_some())
     }
 
     pub async fn get_next_context(
@@ -295,10 +319,11 @@ impl ContextResolver {
             }
         }?;
 
+        let update = next.update;
         Ok(remaining.map(|remaining| {
             remaining
                 .into_iter()
-                .map(ResolveContext::append_context)
+                .map(|uri| ResolveContext::append_context(uri, update))
                 .collect::<Vec<_>>()
         }))
     }

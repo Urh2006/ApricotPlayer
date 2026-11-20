@@ -53,9 +53,6 @@ enum ReturnTo {
 
 #[derive(Default)]
 pub(super) struct SpotifyState {
-    /// When Next, Previous or a list edge was asked, so that track change
-    /// is not a natural end for the sleep timer.
-    manual_change: std::cell::Cell<Option<std::time::Instant>>,
     service: Option<Arc<SpotifyService>>,
     receiver: Option<Receiver<SpotifyEvent>>,
     epochs: SpotifyEpochs,
@@ -1537,6 +1534,7 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
         PlaybackNotice::Playing {
             track,
             requested: true,
+            chosen,
             ..
         } => {
             // An album or playlist started as a whole becomes its first track.
@@ -1556,7 +1554,7 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
                 .current_item()
                 .is_some_and(|item| item.id.0 != track.uri && item.title != track.title);
             if collection || other_track {
-                continue_spotify_item(window, &track);
+                continue_spotify_item(window, &track, chosen);
             }
             push_volume(window);
         }
@@ -1564,8 +1562,9 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
             track,
             position_ms,
             requested: false,
+            chosen,
         } => {
-            if continue_spotify_item(window, &track) {
+            if continue_spotify_item(window, &track, chosen) {
                 return;
             }
             let Some(state) = state_mut(window) else {
@@ -1597,6 +1596,10 @@ unsafe fn handle_notice(window: HWND, notice: PlaybackNotice) {
         }
         PlaybackNotice::KeyLimit => {
             let text = texts.text("spotify_key_limit").to_owned();
+            set_status(state, &text, true);
+        }
+        PlaybackNotice::ListStillLoading => {
+            let text = texts.text("spotify_list_still_loading").to_owned();
             set_status(state, &text, true);
         }
         PlaybackNotice::QueueChanged => {
@@ -1807,7 +1810,7 @@ pub(super) unsafe fn show_devices(window: HWND) {
 /// keeps running and only the item changes, with one "Playing: title"
 /// announcement as for any started item. `false` when no Spotify item
 /// plays, so the track is taken over as a new item.
-unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack) -> bool {
+unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack, chosen: bool) -> bool {
     let Some(state) = state_mut(window) else {
         return false;
     };
@@ -1873,10 +1876,8 @@ unsafe fn continue_spotify_item(window: HWND, track: &SpotifyTrack) -> bool {
             }
         }
     }
-    let timer_end = apricot_shell::playback_features::spotify_track_end(
-        &mut state.application,
-        state.spotify.manual_change.take(),
-    );
+    let timer_end =
+        apricot_shell::playback_features::spotify_track_end(&mut state.application, chosen);
     if !state.application.replace_current_player_item(item.clone()) {
         return false;
     }
@@ -1945,20 +1946,13 @@ pub(super) unsafe fn transport(window: HWND, action_id: &str) -> bool {
     };
     let player = playback.player_state().unwrap_or_default();
     let mut smart_start = None;
-    if matches!(
-        action_id,
-        "player_next" | "player_previous" | "spotify_first_track" | "spotify_last_track"
-    ) {
-        let now = std::time::Instant::now();
-        state.spotify.manual_change.set(Some(now));
-    }
     let key = match action_id {
         "player_next" => {
             playback.next();
             None
         }
         "player_previous" => {
-            playback.previous();
+            playback.previous(state.application.player_session().position_seconds() >= 3.0);
             None
         }
         // Beta 17: the list's first or last song, announced as it plays.

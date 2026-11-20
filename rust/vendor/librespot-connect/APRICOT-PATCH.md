@@ -69,3 +69,11 @@ See ../LISTENING-PATCH.md for the pinned backport and test contract.
   page), without recommendations already in the list, because Spotify is
   told only the last ten songs. Loads from Apricot and the list edges are
   logged at info level for diagnosis.
+- 2.1 (review 5): the last song of a list is chosen only when every page
+  of the list loaded within its limit, otherwise Player sends
+  ListStillLoading (B3); further pages keep their context type, a failed
+  recommendation request may be asked again after 30 s, the used request
+  leaves the queue before more recommendations are asked for, and pages of
+  repeats are asked again at most three times in a row (B4);
+  `Spirc::skip_to_upcoming` plays an upcoming recommendation by skipping to
+  it, and skipping toward a named song ends when no song is left (B5).

@@ -101,6 +101,8 @@ struct SpircTask {
     /// A skip at the end waits for the authoritative context resolver.
     pending_next: bool,
     pending_next_at_end: bool,
+    /// ApricotPlayer: recommendation pages in a row that brought nothing new.
+    empty_autoplay_pages: u8,
 
     connection_id_update: BoxedStreamResult<String>,
     connect_state_update: BoxedStreamResult<ClusterUpdate>,
@@ -211,6 +213,7 @@ mod transport_regressions {
             spirc_id: 0,
             pending_next: false,
             pending_next_at_end: false,
+            empty_autoplay_pages: 0,
         }
     }
     #[tokio::test]
@@ -308,6 +311,114 @@ mod transport_regressions {
             .reset_playback_to_position(Some(0))
             .unwrap();
         task.connect_state.set_status(&task.play_status);
+    }
+
+    /// Review 5, B5: Play on an upcoming recommendation plays that song,
+    /// not the first song of the list; one that is gone changes nothing.
+    #[tokio::test]
+    async fn an_upcoming_recommendation_plays_by_skipping_to_it() {
+        let mut task = task(true);
+        first_track(&mut task);
+        task.add_autoplay_resolving_when_required();
+        task.handle_next_context(Ok(Context {
+            uri: Some("spotify:station:track:0000000000000000000001".into()),
+            pages: vec![ContextPage {
+                tracks: [SECOND, THIRD]
+                    .into_iter()
+                    .map(|track| ContextTrack {
+                        uri: Some(track.into()),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        let uid = task
+            .connect_state
+            .player()
+            .next_tracks
+            .iter()
+            .find(|track| track.uri == THIRD)
+            .map(|track| track.uid.clone())
+            .expect("upcoming");
+        task.connect_state.set_active(true);
+        task.handle_command(SpircCommand::SkipToUpcoming {
+            uid: "gone".into(),
+            revision: 1,
+        })
+        .await
+        .unwrap();
+        assert_eq!(task.connect_state.player().track.uri, FIRST);
+        task.handle_command(SpircCommand::SkipToUpcoming { uid, revision: 2 })
+            .await
+            .unwrap();
+        assert_eq!(task.connect_state.player().track.uri, THIRD);
+    }
+
+    /// Review 5, B4: after a page of recommendations the next request is
+    /// kept, not dropped as already queued; pages of repeats are asked
+    /// again at most three times in a row; a page with new songs extends
+    /// the recommendations again.
+    #[tokio::test]
+    async fn recommendations_are_asked_again_but_not_without_end() {
+        let mut task = task(true);
+        first_track(&mut task);
+        let station = "spotify:station:track:0000000000000000000001";
+        let page = |track: &str| Context {
+            uri: Some(station.into()),
+            pages: vec![ContextPage {
+                tracks: vec![ContextTrack {
+                    uri: Some(track.into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        task.add_autoplay_resolving_when_required();
+        assert!(task.context_resolver.has_next());
+        task.handle_next_context(Ok(page(SECOND)));
+        assert_eq!(task.autoplay_len(), 1);
+        // The recommendation plays; the next page is asked for.
+        task.handle_next(None).unwrap();
+        assert!(
+            task.context_resolver.has_next(),
+            "the next page is asked for"
+        );
+        for _ in 0..3 {
+            assert!(task.context_resolver.has_next());
+            task.handle_next_context(Ok(page(SECOND)));
+            assert_eq!(task.autoplay_len(), 1);
+        }
+        assert!(!task.context_resolver.has_next(), "repeats end the asking");
+        task.add_autoplay_resolving_when_required();
+        task.handle_next_context(Ok(page(THIRD)));
+        assert_eq!(task.autoplay_len(), 2);
+        assert_eq!(task.empty_autoplay_pages, 0);
+    }
+
+    /// Review 5, B3: only a page of the list itself keeps the last song
+    /// from being chosen; a pending recommendation request does not.
+    #[tokio::test]
+    async fn the_last_song_waits_only_for_pages_of_the_list() {
+        let mut task = task(true);
+        first_track(&mut task);
+        task.context_resolver.add(ResolveContext::from_uri(
+            "spotify:playlist:list",
+            FIRST,
+            ContextType::Autoplay,
+            ContextAction::Replace,
+        ));
+        assert!(task.context_resolver.has_next());
+        assert!(!task.context_resolver.has_pending_list_page());
+        task.context_resolver.add(ResolveContext::from_uri(
+            "hm://playlist/page/2",
+            "",
+            ContextType::Default,
+            ContextAction::Append,
+        ));
+        assert!(task.context_resolver.has_pending_list_page());
     }
 
     /// ApricotPlayer patch: a further page of recommendations is added to
@@ -882,6 +993,11 @@ enum SpircCommand {
         last: bool,
         revision: u64,
     },
+    // ApricotPlayer patch: skip to an upcoming recommendation (review 5, B5).
+    SkipToUpcoming {
+        uid: String,
+        revision: u64,
+    },
     // ApricotPlayer patch: local queue edits.
     AddToQueue(String),
     SetQueue {
@@ -1013,6 +1129,7 @@ impl Spirc {
             play_status: SpircPlayStatus::Stopped,
             pending_next: false,
             pending_next_at_end: false,
+            empty_autoplay_pages: 0,
 
             connection_id_update,
             connect_state_update,
@@ -1163,6 +1280,14 @@ impl Spirc {
         Ok(self
             .commands
             .send(SpircCommand::PlayContextEdge { last, revision })?)
+    }
+
+    /// ApricotPlayer: plays the upcoming song with `uid` (a recommendation)
+    /// by skipping to it; nothing happens when it is no longer upcoming.
+    pub fn skip_to_upcoming(&self, uid: String, revision: u64) -> Result<(), Error> {
+        Ok(self
+            .commands
+            .send(SpircCommand::SkipToUpcoming { uid, revision })?)
     }
 
     /// Loads for a manual intent tag. When the request names its song and
@@ -1467,6 +1592,8 @@ impl SpircTask {
 
         debug!("handling next context {:?}", next_context.uri);
 
+        let recommendations = self.context_resolver.next_update() == Some(ContextType::Autoplay);
+        let received_before = self.autoplay_len();
         match self
             .context_resolver
             .apply_next_context(&mut self.connect_state, next_context)
@@ -1481,17 +1608,30 @@ impl SpircTask {
             }
         }
 
-        let update_state = if self
+        let finished = self
             .context_resolver
-            .try_finish(&mut self.connect_state, &mut self.transfer_state)
-        {
-            self.add_autoplay_resolving_when_required();
+            .try_finish(&mut self.connect_state, &mut self.transfer_state);
+        // ApricotPlayer patch: the used request leaves the queue before more
+        // recommendations are asked for; upstream asked first, and the new
+        // request was dropped as already queued. A page that brought no new
+        // recommendation (only repeats) is asked again at most twice in a
+        // row; Next asks again too (review 5, B4).
+        self.context_resolver.remove_used_and_invalid();
+        if recommendations {
+            if self.autoplay_len() > received_before {
+                self.empty_autoplay_pages = 0;
+            } else {
+                self.empty_autoplay_pages = self.empty_autoplay_pages.saturating_add(1);
+            }
+        }
+        let update_state = if finished {
+            if self.empty_autoplay_pages < 3 {
+                self.add_autoplay_resolving_when_required();
+            }
             true
         } else {
             false
         };
-
-        self.context_resolver.remove_used_and_invalid();
         if self.pending_next && self.connect_state.has_playable_next_track() {
             self.pending_next = false;
             self.pending_next_at_end = false;
@@ -1510,6 +1650,13 @@ impl SpircTask {
             }
         }
         update_state
+    }
+
+    /// ApricotPlayer: how many recommendations were received so far.
+    fn autoplay_len(&self) -> usize {
+        self.connect_state
+            .get_context(ContextType::Autoplay)
+            .map_or(0, |context| context.tracks.len())
     }
 
     // todo: is the time_delta still necessary?
@@ -1597,6 +1744,23 @@ impl SpircTask {
             }
             SpircCommand::PlayContextEdge { last, revision } => {
                 self.handle_context_edge(last, revision).await?;
+            }
+            SpircCommand::SkipToUpcoming { uid, revision } => {
+                // Only a song that is still upcoming: skipping toward a song
+                // that is not there would never end (review 5, B5).
+                let uri = self
+                    .connect_state
+                    .player()
+                    .next_tracks
+                    .iter()
+                    .find(|track| track.uid == uid)
+                    .map(|track| track.uri.clone());
+                if let Some(uri) = uri {
+                    self.playback_revision = revision;
+                    self.handle_next(Some(uri))?;
+                } else {
+                    info!("the chosen upcoming song is no longer upcoming");
+                }
             }
             SpircCommand::AddToQueue(uri) => {
                 let mut track = ProvidedTrack::new();
@@ -2391,22 +2555,35 @@ impl SpircTask {
         let mut passes = 0;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         while last
-            && self.context_resolver.has_next()
+            && self.context_resolver.has_pending_list_page()
             && passes < 64
             && tokio::time::Instant::now() < deadline
         {
             passes += 1;
-            let context = self
-                .context_resolver
-                .get_next_context(|| {
+            // The whole wait keeps to its limit, also inside a slow request
+            // (review 5, B3).
+            let Ok(context) = tokio::time::timeout_at(
+                deadline,
+                self.context_resolver.get_next_context(|| {
                     self.connect_state
                         .recent_track_uris()
                         .into_iter()
                         .filter(|t| !t.starts_with("spotify:local"))
                         .collect::<Vec<_>>()
-                })
-                .await;
+                }),
+            )
+            .await
+            else {
+                break;
+            };
             self.handle_next_context(context);
+        }
+        // The last song is only known once every page loaded; a song that
+        // merely came last so far is not chosen (review 5, B3).
+        if last && self.context_resolver.has_pending_list_page() {
+            info!("the list did not load completely; the last song is not chosen");
+            self.player.emit_list_still_loading();
+            return Ok(());
         }
         let mut ordered = self
             .connect_state
@@ -2730,6 +2907,11 @@ impl SpircTask {
         if !has_next_track {
             has_next_track = loop {
                 let index = self.connect_state.next_track()?;
+                // ApricotPlayer patch: no song left ends the search for the
+                // named one; upstream searched forever (review 5, B5).
+                if index.is_none() {
+                    break false;
+                }
 
                 let current_uri = self.connect_state.current_track(|t| &t.uri);
                 if matches!(track_uri, Some(ref track_uri) if current_uri != track_uri) {

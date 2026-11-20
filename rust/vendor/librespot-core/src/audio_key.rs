@@ -33,14 +33,16 @@ pub const AUDIO_KEY_RATE_LIMITED: u16 = 0x0002;
 /// 1649).
 pub const AUDIO_KEY_REFUSED: u16 = 0x0001;
 
-/// ApricotPlayer patch: a key was refused with [`AUDIO_KEY_REFUSED`] since
-/// the last [`take_key_refused`].
-static KEY_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// ApricotPlayer patch: keys refused in a row with [`AUDIO_KEY_REFUSED`];
+/// a key Spotify grants sets it back to zero.
+static KEYS_REFUSED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// ApricotPlayer patch: whether Spotify refused a key with
-/// [`AUDIO_KEY_REFUSED`] since the last call.
-pub fn take_key_refused() -> bool {
-    KEY_REFUSED.swap(false, std::sync::atomic::Ordering::SeqCst)
+/// ApricotPlayer patch: whether Spotify refuses this account's keys:
+/// several keys in a row were refused with [`AUDIO_KEY_REFUSED`] and none
+/// was granted since. One refusal (a single song, a preload) is not enough
+/// to tell the user the account is affected (review 5, B2).
+pub fn account_keys_refused() -> bool {
+    KEYS_REFUSED.load(std::sync::atomic::Ordering::SeqCst) >= 2
 }
 
 #[derive(Debug, Error)]
@@ -121,6 +123,7 @@ impl AudioKeyManager {
 
         match cmd {
             PacketType::AesKey => {
+                KEYS_REFUSED.store(0, std::sync::atomic::Ordering::SeqCst);
                 let mut key = [0u8; 16];
                 key.copy_from_slice(data.as_ref());
                 sender
@@ -134,7 +137,7 @@ impl AudioKeyManager {
                 };
                 error!("error audio key {:x} {:x}", code >> 8, code & 0xff);
                 if code == AUDIO_KEY_REFUSED {
-                    KEY_REFUSED.store(true, std::sync::atomic::Ordering::SeqCst);
+                    KEYS_REFUSED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
                 sender
                     .send(Err(AudioKeyError::AesKey(code).into()))

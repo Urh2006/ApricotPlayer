@@ -431,6 +431,10 @@ pub struct LibMpvEngine {
     render: Option<crate::render::RenderAttachment>,
     /// Latest requested state, independent of delayed PCM pause acknowledgements.
     requested_paused: bool,
+    /// A sound change came after Pause was asked but before mpv paused (a
+    /// Spotify pause is confirmed later): the buffers are emptied once it
+    /// pauses (review 5, B7).
+    flush_on_pause: bool,
 }
 
 /// A PCM item: mpv positions are relative to the loaded generation.
@@ -580,6 +584,7 @@ impl LibMpvEngine {
             pcm: None,
             render,
             requested_paused: options.initial_playback_state == InitialPlaybackState::Paused,
+            flush_on_pause: false,
         })
     }
 
@@ -960,6 +965,9 @@ impl LibMpvEngine {
                         yes_no(paused).to_owned(),
                     ],
                 )?;
+                if std::mem::take(&mut self.flush_on_pause) && paused {
+                    self.flush_sound();
+                }
                 Ok(None)
             }
             Some(crate::pcm_source::PcmSourceEvent::Failed(reason)) => {
@@ -1175,6 +1183,37 @@ unsafe fn probe_devices(
     }
 }
 
+impl LibMpvEngine {
+    /// Drops the sound mpv and the device hold, so Play starts with the new
+    /// settings. A file seeks to where playback stands, which also empties
+    /// the filters (speed, pitch); a live stream or a Spotify song cannot,
+    /// so only the sound device starts again, also when a seek fails
+    /// (review 5, B7). Measured: without either, about 30 ms at the old
+    /// setting followed Play.
+    unsafe fn flush_sound(&mut self) {
+        let seekable = self.pcm.is_none()
+            && unsafe { self.api.property_flag(self.handle(), "seekable") } == Some(true);
+        if seekable
+            && self
+                .api
+                .run_command(
+                    self.handle(),
+                    &[
+                        "seek".to_owned(),
+                        self.elapsed.max(0.0).to_string(),
+                        "absolute+exact".to_owned(),
+                    ],
+                )
+                .is_ok()
+        {
+            return;
+        }
+        let _ = self
+            .api
+            .run_command(self.handle(), &["ao-reload".to_owned()]);
+    }
+}
+
 impl PlaybackEngine for LibMpvEngine {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
         if matches!(&command, PlaybackCommand::SetTransitions(_)) {
@@ -1182,21 +1221,22 @@ impl PlaybackEngine for LibMpvEngine {
         }
         if let PlaybackCommand::SetPaused(paused) = &command {
             self.requested_paused = *paused;
+            if !*paused {
+                self.flush_on_pause = false;
+            }
         }
         // A sound change while paused empties the audio buffers at once,
         // while still paused: emptying them on Play came too late, because
         // mpv resumes the device before it runs the seek.
-        // mpv's own pause state decides: after a song change, Spotify and
-        // the end of a song set it without a pause from the user, and a
-        // flush while playing stopped the sound for half a second (RC 2).
-        let flush_now = self.requested_paused
-            && changes_sound(&command)
-            && unsafe { self.api.property_flag(self.handle(), "pause") } == Some(true);
-        // A file can seek, which also empties the filters (speed, pitch); a
-        // live stream or a Spotify song cannot, so only the sound device is
-        // started again, which drops the sound it already holds. Measured:
-        // without either, about 30 ms at the old setting followed Play.
-        let seekable = self.pcm.is_none() && self.duration.is_some_and(|duration| duration > 0.0);
+        // mpv's own pause state decides, whoever paused (also a phone that
+        // paused Spotify): a flush while playing stopped the sound for half
+        // a second (RC 2). A change after Pause was asked but before mpv
+        // paused is flushed when it pauses (review 5, B7).
+        let mpv_paused = unsafe { self.api.property_flag(self.handle(), "pause") } == Some(true);
+        let flush_now = changes_sound(&command) && mpv_paused;
+        if changes_sound(&command) && self.requested_paused && !mpv_paused {
+            self.flush_on_pause = true;
+        }
         if unsafe { self.execute_pcm(&command)? } {
             if matches!(&command, PlaybackCommand::Load { .. }) {
                 self.media_info = PlaybackMediaInfo::default();
@@ -1242,21 +1282,8 @@ impl PlaybackEngine for LibMpvEngine {
                     ],
                 )?;
             }
-            if flush_now && !seekable {
-                let _ = self
-                    .api
-                    .run_command(self.handle(), &["ao-reload".to_owned()]);
-            } else if flush_now {
-                // A seek to where playback stands drops what the device and
-                // mpv hold, so Play starts with the new settings.
-                let _ = self.api.run_command(
-                    self.handle(),
-                    &[
-                        "seek".to_owned(),
-                        self.elapsed.max(0.0).to_string(),
-                        "absolute+exact".to_owned(),
-                    ],
-                );
+            if flush_now {
+                self.flush_sound();
             }
         }
         Ok(())

@@ -265,6 +265,10 @@ pub enum PlaybackNotice {
         track: SpotifyTrack,
         position_ms: u32,
         requested: bool,
+        /// The user chose this song (Next, Previous, a queue row, the first
+        /// or last song): not the natural end of the song before
+        /// (review 5, B6).
+        chosen: bool,
     },
     /// The track cannot be played (market, rights); it is skipped by Spotify.
     Unavailable { uri: String },
@@ -279,6 +283,9 @@ pub enum PlaybackNotice {
     /// Spotify limits how many new songs the account may start; the chosen
     /// song starts by itself when Spotify allows it. Once until a song plays.
     KeyLimit,
+    /// The last song was asked for before the whole list loaded; nothing
+    /// was chosen (review 5, B3).
+    ListStillLoading,
 }
 
 struct Generation {
@@ -451,6 +458,11 @@ pub struct Shared {
     requested: AtomicBool,
     /// The key limit was announced and no song has played since.
     key_limit_announced: AtomicBool,
+    /// A song loads (for example waiting for an audio key): no confirmed
+    /// Playing or Paused has come since its Loading.
+    loading: AtomicBool,
+    /// The user chose another song and it has not started yet (review 5, B6).
+    chosen_change: AtomicBool,
     track: Mutex<Option<SpotifyTrack>>,
     bitrate_kbps: u32,
     notify: Notify,
@@ -607,6 +619,7 @@ impl Shared {
     /// Manual navigation that does (`names_song`) or does not start a song
     /// the user chose.
     fn manual_selection(&self, names_song: bool) -> u64 {
+        self.chosen_change.store(true, Ordering::SeqCst);
         let revision = self.manual_navigation();
         self.selection_revision
             .store(if names_song { revision } else { 0 }, Ordering::SeqCst);
@@ -631,7 +644,7 @@ impl Shared {
     fn report_interrupted(&self) {
         // Spotify refuses the keys of every song for some accounts; trying
         // again does not help, so the message says so (librespot issue 1649).
-        let key = if librespot_core::audio_key::take_key_refused() {
+        let key = if librespot_core::audio_key::account_keys_refused() {
             "spotify_key_refused"
         } else {
             "spotify_playback_interrupted"
@@ -855,6 +868,8 @@ impl SpotifyPlayback {
             player: Mutex::default(),
             requested: AtomicBool::new(false),
             key_limit_announced: AtomicBool::new(false),
+            loading: AtomicBool::new(false),
+            chosen_change: AtomicBool::new(false),
             track: Mutex::default(),
             bitrate_kbps,
             notify,
@@ -899,8 +914,13 @@ impl SpotifyPlayback {
         });
     }
 
-    pub fn previous(&self) {
+    /// Previous; `restarts` when the song played 3 s or more, so Connect
+    /// only returns to its start and no other song is chosen (review 5, B6).
+    pub fn previous(&self, restarts: bool) {
         let revision = self.shared.manual_selection(false);
+        if restarts {
+            self.shared.chosen_change.store(false, Ordering::SeqCst);
+        }
         self.with_spirc(|spirc| {
             let _ = spirc.prev_with_revision(revision);
         });
@@ -1030,6 +1050,18 @@ impl SpotifyPlayback {
             }
             self.next();
             return true;
+        }
+        // A recommendation is not in the list's own context: it plays by
+        // skipping to it, never by loading the list at its first song
+        // (review 5, B5).
+        if track.provider == "autoplay" {
+            let revision = self.shared.manual_selection(false);
+            let mut sent = false;
+            let uid = uid.to_owned();
+            self.with_spirc(|spirc| {
+                sent = spirc.skip_to_upcoming(uid, revision).is_ok();
+            });
+            return sent;
         }
         if state.context_uri.is_empty() {
             return false;
@@ -1209,6 +1241,18 @@ impl SpotifyPlayback {
             {
                 continue;
             }
+            match &event {
+                PlayerEvent::Loading { .. } => shared.loading.store(true, Ordering::SeqCst),
+                PlayerEvent::Playing { .. }
+                | PlayerEvent::Paused { .. }
+                | PlayerEvent::Stopped { .. }
+                | PlayerEvent::EndOfTrack { .. }
+                | PlayerEvent::Unavailable { .. }
+                | PlayerEvent::LoadingFailed { .. } => {
+                    shared.loading.store(false, Ordering::SeqCst);
+                }
+                _ => {}
+            }
             match event {
                 PlayerEvent::TrackChanged { audio_item } => {
                     if let Ok(mut track) = shared.track.lock() {
@@ -1225,6 +1269,11 @@ impl SpotifyPlayback {
                     // active. Always synchronize its confirmed Playing state,
                     // including Next/Previous and a resumed generation.
                     paused = false;
+                    // A failure reported for an earlier song that has not
+                    // reached the player yet no longer applies (review 5, B2).
+                    if let Ok(mut events) = shared.events.lock() {
+                        events.retain(|event| !matches!(event, PcmSourceEvent::Failed(_)));
+                    }
                     shared.push_event(PcmSourceEvent::Paused(false));
                     shared.key_limit_announced.store(false, Ordering::SeqCst);
                     if request_id != Some(play_request_id) {
@@ -1232,12 +1281,14 @@ impl SpotifyPlayback {
                         let track = shared.track.lock().ok().and_then(|track| track.clone());
                         if let Some(track) = track {
                             let requested = shared.requested.swap(false, Ordering::SeqCst);
+                            let chosen = shared.chosen_change.swap(false, Ordering::SeqCst);
                             shared.push_notice_at(
                                 revision,
                                 PlaybackNotice::Playing {
                                     track,
                                     position_ms,
                                     requested,
+                                    chosen,
                                 },
                             );
                         }
@@ -1276,6 +1327,9 @@ impl SpotifyPlayback {
                     }) =>
                 {
                     shared.report_key_limit(revision);
+                }
+                PlayerEvent::ListStillLoading => {
+                    shared.push_notice_at(revision, PlaybackNotice::ListStillLoading);
                 }
                 PlayerEvent::Unavailable {
                     track_id,
@@ -1475,6 +1529,16 @@ impl PcmSource for SpotifyPlayback {
     }
 
     fn set_paused(&self, paused: bool) {
+        // A song that still loads has no player state to pause until it
+        // loads, which may take as long as Spotify's key limit; the sound
+        // stops here at once. Its own Playing resumes it after a Play, and
+        // Connect keeps the intent, so a later Play is never undone by this
+        // pause (review 5, B1).
+        if paused && self.shared.loading.load(Ordering::SeqCst) {
+            log::info!("pause while the song loads");
+            self.shared.push_event(PcmSourceEvent::Paused(true));
+            (self.shared.notify)();
+        }
         self.with_spirc(|spirc| {
             let _ = if paused { spirc.pause() } else { spirc.play() };
         });
@@ -1896,6 +1960,101 @@ mod tests {
         );
     }
 
+    /// Review 5, B6: each new song says whether the user chose it, however
+    /// long it took; a song that follows by itself, also after a Previous
+    /// that only returned to the start, is a natural end.
+    #[tokio::test]
+    async fn each_song_change_tells_whether_the_user_chose_it() {
+        let (playback, shared) = SpotifyPlayback::new(320, Arc::new(|| {}));
+        *shared.track.lock().unwrap() = Some(SpotifyTrack {
+            uri: "spotify:track:4u7EnebtmKWzUH433cf5Qv".into(),
+            title: "Title".into(),
+            artists: "Artist".into(),
+            artist_uri: String::new(),
+            album: String::new(),
+            duration_ms: 1000,
+        });
+        let track =
+            librespot_core::SpotifyUri::from_uri("spotify:track:4u7EnebtmKWzUH433cf5Qv").unwrap();
+        let play = |play_request_id| {
+            let shared = shared.clone();
+            let track = track.clone();
+            async move {
+                let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+                sender
+                    .send(PlayerEvent::Playing {
+                        play_request_id,
+                        track_id: track,
+                        position_ms: 0,
+                    })
+                    .unwrap();
+                drop(sender);
+                SpotifyPlayback::listen(shared.clone(), receiver).await;
+                match shared.take_notice() {
+                    Some(PlaybackNotice::Playing { chosen, .. }) => chosen,
+                    other => panic!("{other:?}"),
+                }
+            }
+        };
+        playback.next();
+        assert!(play(1).await, "Next");
+        assert!(!play(2).await, "the next song by itself");
+        playback.previous(true);
+        assert!(!play(3).await, "a restart chose no song");
+        playback.previous(false);
+        assert!(play(4).await, "Previous");
+    }
+
+    /// Review 5, B1: Pause while a song loads stops the sound at once
+    /// without a made-up player event; Play then waits for the song's own
+    /// Playing, and a pause after the song played waits for Connect.
+    #[tokio::test]
+    async fn pause_while_loading_stops_the_sound_without_a_player_event() {
+        let (playback, shared) = SpotifyPlayback::new(320, Arc::new(|| {}));
+        let track =
+            librespot_core::SpotifyUri::from_uri("spotify:track:4u7EnebtmKWzUH433cf5Qv").unwrap();
+        let run = |event: PlayerEvent| {
+            let shared = shared.clone();
+            async move {
+                let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+                sender.send(event).unwrap();
+                drop(sender);
+                SpotifyPlayback::listen(shared, receiver).await;
+            }
+        };
+        run(PlayerEvent::Loading {
+            play_request_id: 1,
+            track_id: track.clone(),
+            position_ms: 0,
+        })
+        .await;
+        shared.events.lock().unwrap().clear();
+        playback.set_paused(true);
+        playback.set_paused(false);
+        let events: Vec<_> = shared.events.lock().unwrap().drain(..).collect();
+        assert!(
+            matches!(events.as_slice(), [PcmSourceEvent::Paused(true)]),
+            "{events:?}"
+        );
+        run(PlayerEvent::Playing {
+            play_request_id: 1,
+            track_id: track,
+            position_ms: 0,
+        })
+        .await;
+        let events: Vec<_> = shared.events.lock().unwrap().drain(..).collect();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, PcmSourceEvent::Paused(false)))
+        );
+        playback.set_paused(true);
+        assert!(
+            shared.events.lock().unwrap().is_empty(),
+            "a playing song waits for Connect"
+        );
+    }
+
     #[test]
     fn resuming_a_stopped_request_opens_a_fresh_pcm_generation() {
         let (playback, shared) = SpotifyPlayback::new(320, Arc::new(|| {}));
@@ -2167,6 +2326,27 @@ mod tests {
                 play_request_id: 2,
                 track_id: uri.clone(),
             },
+        ] {
+            sender.send(event).unwrap();
+        }
+        drop(sender);
+        SpotifyPlayback::listen(shared.clone(), receiver).await;
+        assert!(shared.take_notice().is_none());
+        {
+            let events = shared.events.lock().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, PcmSourceEvent::Failed(_)))
+                    .count(),
+                1
+            );
+            assert!(events.contains(&PcmSourceEvent::Failed(
+                "spotify_playback_interrupted".to_owned()
+            )));
+        }
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        for event in [
             // Replaying exactly the same URI is a fresh, valid request.
             PlayerEvent::PlayRequestIdChanged { play_request_id: 3 },
             PlayerEvent::Loading {
@@ -2187,18 +2367,14 @@ mod tests {
         }
         drop(sender);
         SpotifyPlayback::listen(shared.clone(), receiver).await;
-        assert!(shared.take_notice().is_none());
         let events = shared.events.lock().unwrap();
-        assert_eq!(
-            events
+        // Review 5, B2: a failure the player has not taken yet no longer
+        // applies once a new song plays.
+        assert!(
+            !events
                 .iter()
-                .filter(|event| matches!(event, PcmSourceEvent::Failed(_)))
-                .count(),
-            1
+                .any(|event| matches!(event, PcmSourceEvent::Failed(_)))
         );
-        assert!(events.contains(&PcmSourceEvent::Failed(
-            "spotify_playback_interrupted".to_owned()
-        )));
         assert!(
             events.contains(&PcmSourceEvent::Paused(false)),
             "replay can resume without restarting the app"

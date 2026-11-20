@@ -246,6 +246,9 @@ enum PlayerCommand {
         track: bool,
     },
     EmitAutoPlayChangedEvent(bool),
+    /// ApricotPlayer: the last song was asked for before the whole list
+    /// loaded (review 5, B3).
+    EmitListStillLoading,
 }
 
 #[derive(Debug, Clone)]
@@ -364,6 +367,9 @@ pub enum PlayerEvent {
     AutoPlayChanged {
         auto_play: bool,
     },
+    /// ApricotPlayer: the last song of a list was asked for, but the list
+    /// did not load completely in time, so no song was chosen.
+    ListStillLoading,
     FilterExplicitContentChanged {
         filter: bool,
     },
@@ -888,6 +894,11 @@ impl Player {
 
     pub fn emit_auto_play_changed_event(&self, auto_play: bool) {
         self.command(PlayerCommand::EmitAutoPlayChangedEvent(auto_play));
+    }
+
+    /// ApricotPlayer: see [`PlayerEvent::ListStillLoading`].
+    pub fn emit_list_still_loading(&self) {
+        self.command(PlayerCommand::EmitListStillLoading);
     }
 }
 
@@ -2126,21 +2137,9 @@ impl PlayerInternal {
             }
             PlayerState::Loading {
                 ref mut start_playback,
-                ref track_id,
-                play_request_id,
                 ..
             } => {
                 *start_playback = false;
-                // ApricotPlayer patch: a song that still loads (for example
-                // waiting for Spotify's audio key limit) is paused at once,
-                // so the sound already handed on stops now, not when the
-                // song has loaded.
-                let track_id = track_id.clone();
-                self.send_event(PlayerEvent::Paused {
-                    track_id,
-                    play_request_id,
-                    position_ms: 0,
-                });
             }
             _ => error!("Player::pause called from invalid state: {:?}", self.state),
         }
@@ -2808,6 +2807,8 @@ impl PlayerInternal {
                 self.send_event(PlayerEvent::AutoPlayChanged { auto_play })
             }
 
+            PlayerCommand::EmitListStillLoading => self.send_event(PlayerEvent::ListStillLoading),
+
             PlayerCommand::EmitSessionClientChangedEvent {
                 client_id,
                 client_name,
@@ -3048,6 +3049,7 @@ impl fmt::Debug for PlayerCommand {
                 .debug_tuple("EmitAutoPlayChangedEvent")
                 .field(&auto_play)
                 .finish(),
+            PlayerCommand::EmitListStillLoading => f.debug_tuple("EmitListStillLoading").finish(),
         }
     }
 }
