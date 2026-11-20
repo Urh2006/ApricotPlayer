@@ -73,10 +73,8 @@ impl crate::Shell {
         let session = self.application.player_session();
         let item = session.current_item().cloned();
         let paused = session.is_paused();
-        let position = session.position_seconds();
-        let duration = session
-            .duration_seconds()
-            .or_else(|| item.as_ref().and_then(|item| item.duration_seconds));
+        let (position, duration) =
+            apricot_app::playback_features::system_controls_times(&self.application);
         #[cfg(any(windows, target_os = "macos"))]
         if let Some(controls) = self.integrations.media_controls.as_mut() {
             match &item {
@@ -126,12 +124,10 @@ impl crate::Shell {
                 // The position slider of the system's controls; silent, as a
                 // slider is (review 2.1).
                 Key::SetPosition(seconds) if seconds.is_finite() => {
-                    let seconds = self
-                        .application
-                        .playback_features()
-                        .ranges
-                        .constrain(seconds)
-                        .max(0.0);
+                    let seconds = apricot_app::playback_features::system_seek_target(
+                        &self.application,
+                        seconds,
+                    );
                     let _ = self.execute_player_command(
                         ui,
                         apricot_playback::PlaybackCommand::SeekAbsolute {

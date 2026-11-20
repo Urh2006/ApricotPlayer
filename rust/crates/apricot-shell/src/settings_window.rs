@@ -361,6 +361,7 @@ impl Shell {
         self.settings_window.spotify_before = Some(self.application.saved_spotify_settings());
         self.settings_window.clean_at_open = !self.application.settings_window_changed();
         self.settings_window.equalizer_before = self.application.player_equalizer_snapshot();
+        self.application.forget_settings_equalizer_baseline();
         self.load_sources_quietly(ui);
         ui.open_settings();
     }
@@ -966,7 +967,9 @@ impl Shell {
         // Recording choices not saved are dropped with the window
         // (review 4, B5).
         self.settings_window.recording_draft = crate::FormValues::default();
-        let equalizer_before = std::mem::take(&mut self.settings_window.equalizer_before);
+        let equalizer_before = self.application.settings_equalizer_baseline(std::mem::take(
+            &mut self.settings_window.equalizer_before,
+        ));
         if self.settings_window.clean_at_open && self.application.settings_window_changed() {
             self.application.cancel_settings();
             self.application.restore_player_equalizer(equalizer_before);

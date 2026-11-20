@@ -25,12 +25,19 @@ impl SourcesUi for Ui<'_> {
         self.ui.show_error(message);
     }
     fn play(&mut self, item: MediaItem) {
+        // A channel chosen in the lists: options left by a kept channel that
+        // failed to open are not its own (review 5, B15).
+        self.shell.pending_saved_iptv = None;
+        self.shell.start_media_item(self.ui, item, None);
+    }
+    fn play_kept(&mut self, item: MediaItem) {
         // A kept IPTV channel starts with the options it was asked to play
         // with (review 4, A1).
         if let Some(start) = self
             .shell
             .pending_saved_iptv
-            .take_if(|start| start.id == item.id.0)
+            .take()
+            .filter(|start| start.id == item.id.0)
         {
             self.shell.start_media_item_with_options(
                 self.ui,
@@ -63,6 +70,8 @@ impl SourcesUi for Ui<'_> {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         std::mem::discriminant(&self.shell.view).hash(&mut hasher);
+        // Leaving and coming back counts too (review 5, B15).
+        self.shell.application.screens_opened().hash(&mut hasher);
         self.shell
             .application
             .player_session()

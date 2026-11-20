@@ -59,12 +59,24 @@ impl SourcesUi for Ui {
         if std::mem::take(&mut self.showed_list) {
             unsafe { super::sources_panel::close(self.window) };
         }
+        // A channel chosen in the lists: options left by a kept channel that
+        // failed to open are not its own (review 5, B15).
+        if let Some(state) = unsafe { state_mut(self.window) } {
+            state.pending_saved_iptv = None;
+        }
+        unsafe { start_media_item(self.window, item, None) }
+    }
+    fn play_kept(&mut self, item: apricot_core::MediaItem) {
+        if std::mem::take(&mut self.showed_list) {
+            unsafe { super::sources_panel::close(self.window) };
+        }
         // A kept IPTV channel starts with the options it was asked to play
         // with (review 4, A1).
         let start = unsafe { state_mut(self.window) }.and_then(|state| {
             state
                 .pending_saved_iptv
-                .take_if(|start| start.id == item.id.0)
+                .take()
+                .filter(|start| start.id == item.id.0)
         });
         if let Some(start) = start {
             unsafe {
@@ -108,8 +120,23 @@ impl SourcesUi for Ui {
     fn ask_yes_no(&mut self, message: &str) -> bool {
         unsafe { super::ask_yes_no(self.owner(), message) }
     }
+    /// The screen, every screen opened (also leaving and coming back) and
+    /// the playing item: a late answer does not open over another screen
+    /// or replace newer playback (review 5, B15).
     fn navigation_mark(&self) -> u64 {
-        unsafe { state(self.window) }.map_or(0, |state| state.view_changes)
+        use std::hash::{Hash, Hasher};
+        let Some(state) = (unsafe { state(self.window) }) else {
+            return 0;
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        state.view_changes.hash(&mut hasher);
+        state.application.screens_opened().hash(&mut hasher);
+        state
+            .application
+            .player_session()
+            .generation()
+            .hash(&mut hasher);
+        hasher.finish()
     }
 }
 pub(super) unsafe fn environment(window: HWND) -> Option<SourcesEnvironment> {
@@ -217,6 +244,16 @@ pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
     if lent_recording_action(window, id) {
         return true;
     }
+    // Lists of a source are open and hold the controller: they close first,
+    // then the other source opens with the real controller, not an empty
+    // stand-in that would lose what it loads (review 5, B13).
+    if let Some(state) = state_mut(window)
+        && state.source_tools_out > 0
+    {
+        state.pending_source_action = Some(id.to_owned());
+        state.leave_sources = true;
+        return true;
+    }
     let Some(environment) = environment(window) else {
         return true;
     };
@@ -239,6 +276,12 @@ pub(super) unsafe fn action(window: HWND, id: &str) -> bool {
     }
     if busy {
         SetTimer(Some(window), TIMER, 50, None);
+    }
+    let next = state_mut(window)
+        .filter(|state| state.source_tools_out == 0)
+        .and_then(|state| state.pending_source_action.take());
+    if let Some(next) = next {
+        return action(window, &next);
     }
     handled
 }
@@ -356,6 +399,13 @@ pub(super) unsafe fn poll(window: HWND) {
         SetTimer(Some(window), TIMER, 50, None);
     } else {
         let _ = KillTimer(Some(window), TIMER);
+    }
+    // Another source asked for from lists this poll showed (review 5, B13).
+    let next = state_mut(window)
+        .filter(|state| state.source_tools_out == 0)
+        .and_then(|state| state.pending_source_action.take());
+    if let Some(next) = next {
+        let _ = action(window, &next);
     }
 }
 pub(super) unsafe fn metadata(window: HWND) {

@@ -49,6 +49,9 @@ pub(super) struct SourcesPanel {
     result: Option<SourceSelection>,
     done: bool,
     active: bool,
+    /// Waits for a choice that run (nested lists count each); while the
+    /// next list loads none does, and Back leaves the lists (review 5, B12).
+    waiting: u32,
     /// Where the focus returns when the list closes.
     previous: HWND,
 }
@@ -107,6 +110,7 @@ impl SourcesPanel {
             result: None,
             done: false,
             active: false,
+            waiting: 0,
             previous: HWND::default(),
         })
     }
@@ -315,10 +319,43 @@ unsafe fn selected_choice(window: HWND, action: &str) -> Option<SourceSelection>
 }
 
 unsafe fn finish(window: HWND, choice: Option<SourceSelection>) {
-    if let Some(panel) = state_mut(window).and_then(|state| state.sources_panel.as_mut()) {
-        panel.result = choice;
-        panel.done = true;
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let Some(panel) = state.sources_panel.as_mut() else {
+        return;
+    };
+    if panel.waiting == 0 {
+        // Back while the next list loads: the load is dropped and the lists
+        // close, so the focus goes to the screen below (review 5, B12).
+        if choice.is_none() && panel.active {
+            if state.source_tools_out == 0 {
+                state.source_tools.cancel_loading();
+            }
+            close(window);
+        }
+        return;
     }
+    panel.result = choice;
+    panel.done = true;
+}
+
+/// Escape on the lists while the next one loads (no choice is awaited):
+/// Back, from the main window's message loop (review 5, B12).
+pub(super) unsafe fn escape_while_loading(window: HWND, message: &MSG) -> bool {
+    let Some(panel) = state(window).and_then(|state| state.sources_panel.as_ref()) else {
+        return false;
+    };
+    if !panel.active
+        || panel.waiting > 0
+        || message.message != WM_KEYDOWN
+        || message.wParam.0 != usize::from(VK_ESCAPE.0)
+        || ![panel.list, panel.open, panel.actions, panel.back].contains(&message.hwnd)
+    {
+        return false;
+    }
+    finish(window, None);
+    true
 }
 
 unsafe fn open(window: HWND) {
@@ -430,6 +467,11 @@ unsafe fn key(window: HWND, message: &MSG) -> bool {
         finish(window, choice);
         return true;
     }
+    if let Some(chord) = crate::shortcut_win32::chord_from_message(message)
+        && state(window).is_some_and(|state| super::hidden_row_shortcut(state, chord))
+    {
+        return true;
+    }
     false
 }
 
@@ -446,6 +488,17 @@ pub(super) unsafe fn abandon(window: HWND) {
 }
 
 unsafe fn wait(window: HWND) -> Option<SourceSelection> {
+    if let Some(panel) = state_mut(window).and_then(|state| state.sources_panel.as_mut()) {
+        panel.waiting += 1;
+    }
+    let choice = wait_for_choice(window);
+    if let Some(panel) = state_mut(window).and_then(|state| state.sources_panel.as_mut()) {
+        panel.waiting = panel.waiting.saturating_sub(1);
+    }
+    choice
+}
+
+unsafe fn wait_for_choice(window: HWND) -> Option<SourceSelection> {
     let mut message = MSG::default();
     loop {
         if state(window).is_some_and(|state| state.exit_after_sources || state.leave_sources) {
@@ -485,10 +538,11 @@ unsafe fn wait(window: HWND) -> Option<SourceSelection> {
         // Everything else goes the main window's way: shortcuts, the
         // background player's keys, Enter on buttons (review 4, B2). A
         // shortcut that opened another screen closes the lists.
-        let screen = state(window).map(|state| state.view_changes);
+        let screen =
+            state(window).map(|state| (state.view_changes, state.application.screens_opened()));
         super::route_main_message(window, &message);
         if let Some(state) = state_mut(window)
-            && Some(state.view_changes) != screen
+            && Some((state.view_changes, state.application.screens_opened())) != screen
         {
             state.leave_sources = true;
         }

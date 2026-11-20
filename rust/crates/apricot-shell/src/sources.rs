@@ -66,6 +66,11 @@ pub trait SourcesUi {
     fn status(&mut self, message: &str, announce: bool);
     fn error(&mut self, message: &str);
     fn play(&mut self, item: MediaItem);
+    /// A kept channel opened again from its source: it plays with the
+    /// options its start asked for (review 5, B15).
+    fn play_kept(&mut self, item: MediaItem) {
+        self.play(item);
+    }
     fn choose_file(&mut self, title: &str) -> Option<PathBuf>;
     fn choose_folder(&mut self, title: &str) -> Option<PathBuf>;
     fn copy(&mut self, text: &str) -> bool;
@@ -167,6 +172,10 @@ pub struct SourcesController {
     /// The playing channel and its source's guide, kept apart from what is
     /// browsed, so another source's list never answers for it (review 2.1).
     playing_iptv_context: Option<(IptvChannel, EpgGuide)>,
+    /// The guide of a kept channel's own source, read in the background
+    /// after the channel started: (source id, channel id, answer)
+    /// (review 5, B16).
+    kept_guide: Option<(String, String, Receiver<EpgGuide>)>,
     /// "Now: programme", spoken after the player names the channel.
     pending_programme: Option<String>,
     /// The recording shortcut asked for a source first; record after it.
@@ -222,6 +231,7 @@ impl Default for SourcesController {
             episode_selected: 0,
             playing_iptv: None,
             playing_iptv_context: None,
+            kept_guide: None,
             pending_programme: None,
             start_after_sources: false,
             recording_since: String::new(),
@@ -459,9 +469,63 @@ impl SourcesController {
         self.pending.is_some()
     }
 
+    /// Back while the next list loads: the load is dropped, its result is
+    /// never shown (review 5, B12).
+    pub fn cancel_loading(&mut self) {
+        self.pending = None;
+        self.loading.clear();
+    }
+
+    /// Reads the guide of a kept channel's own source in the background;
+    /// the channel's programme waits for it (review 5, B16).
+    fn read_kept_guide(
+        &mut self,
+        environment: &SourcesEnvironment,
+        source: &IptvSource,
+        channel: &str,
+    ) {
+        let address = source.epg_url();
+        if address.trim().is_empty() {
+            return;
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let proxy = environment.proxy.clone();
+        std::thread::spawn(move || {
+            if let Ok(client) = IptvClient::new(Some(&proxy))
+                && let Ok(guide) = client.epg(&address)
+            {
+                let _ = sender.send(guide);
+            }
+        });
+        self.kept_guide = Some((source.id.clone(), channel.to_owned(), receiver));
+    }
+
+    /// A kept channel's guide arrived: its programme comes with the next
+    /// stream details, while the same channel still plays.
+    fn poll_kept_guide(&mut self) {
+        let Some((_, channel, receiver)) = self.kept_guide.as_ref() else {
+            return;
+        };
+        let guide = match receiver.try_recv() {
+            Ok(guide) => guide,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                self.kept_guide = None;
+                return;
+            }
+        };
+        if let Some((playing, kept)) = self.playing_iptv_context.as_mut()
+            && playing.id == *channel
+        {
+            *kept = guide;
+        }
+        self.kept_guide = None;
+    }
+
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.pending.is_some()
+        self.kept_guide.is_some()
+            || self.pending.is_some()
             || self
                 .recorder
                 .as_ref()
@@ -563,6 +627,7 @@ impl SourcesController {
     #[allow(clippy::too_many_lines)] // One arm for each kind of finished work.
     pub fn poll(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) -> bool {
         self.poll_recording(ui, environment);
+        self.poll_kept_guide();
         let Some(pending) = self.pending.as_ref() else {
             return self.is_busy();
         };
@@ -654,26 +719,40 @@ impl SourcesController {
             }) => {
                 let catalog = environment.catalog();
                 if let Some(item) = channel.media(&source) {
-                    ui.play(with_kept_entry(item, saved.as_deref()));
+                    if saved.is_some() {
+                        ui.play_kept(with_kept_entry(item, saved.as_deref()));
+                    } else {
+                        ui.play(item);
+                    }
                     // A kept channel goes back to the list it was kept in,
                     // not to the IPTV lists.
                     self.player_return = saved
                         .is_none()
                         .then(|| (SourceReturn::Iptv(self.opening_from), channel.id.clone()));
                     self.playing_iptv = Some(channel.id.clone());
-                    self.playing_iptv_context = Some((channel.clone(), self.guide.clone()));
+                    // The guide read last belongs to the source browsed last;
+                    // a kept channel of another source gets no programme from
+                    // it, even with the same guide id (review 5, B16).
+                    let guide = if self
+                        .iptv_active
+                        .as_ref()
+                        .is_some_and(|active| active.id == source.id)
+                    {
+                        self.guide.clone()
+                    } else {
+                        self.read_kept_guide(environment, &source, &channel.id);
+                        EpgGuide::default()
+                    };
+                    self.playing_iptv_context = Some((channel.clone(), guide.clone()));
                     // The player names the channel when it starts; the
                     // programme follows with its first stream details.
                     let now = chrono::Utc::now().timestamp();
                     self.pending_programme =
-                        self.guide
-                            .now_next(&channel.epg_id, now)
-                            .0
-                            .map(|programme| {
-                                catalog
-                                    .text("iptv_now_short")
-                                    .replace("{title}", &programme.title)
-                            });
+                        guide.now_next(&channel.epg_id, now).0.map(|programme| {
+                            catalog
+                                .text("iptv_now_short")
+                                .replace("{title}", &programme.title)
+                        });
                 } else {
                     ui.error(catalog.text("iptv_no_stream"));
                 }
@@ -975,8 +1054,11 @@ impl SourcesController {
                 ("radio_vote", catalog.text("radio_vote")),
             ];
             // Catalog filters do not apply to a personal list.
+            // Each scope has its own form with its own values (review 5,
+            // B17).
             if self.radio_personal.is_none() {
-                actions.push(("radio_filters", catalog.text("radio_filters")));
+                actions.push(("radio_filters", catalog.text("radio_filters_this_list")));
+                actions.push(("radio_filters_all", catalog.text("radio_filters_all_lists")));
             }
             actions.extend([
                 ("radio_refresh", catalog.text("radio_refresh")),
@@ -1043,8 +1125,8 @@ impl SourcesController {
                     self.load_radio(ui, environment, true);
                     return None;
                 }
-                "radio_filters" => {
-                    if self.radio_filters(ui, environment) {
+                "radio_filters" | "radio_filters_all" => {
+                    if self.radio_filters(ui, environment, choice.action == "radio_filters_all") {
                         self.load_radio(ui, environment, true);
                         return None;
                     }
@@ -1272,7 +1354,12 @@ impl SourcesController {
     }
 
     #[allow(clippy::too_many_lines)] // One form with all its fields.
-    fn radio_filters(&mut self, ui: &mut dyn SourcesUi, environment: &SourcesEnvironment) -> bool {
+    fn radio_filters(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        global: bool,
+    ) -> bool {
         let catalog = environment.catalog();
         let key = format!("{:?}", self.request.category);
         let local_only = self
@@ -1281,23 +1368,23 @@ impl SourcesController {
             .get(&key)
             .cloned()
             .unwrap_or_default();
-        // The form shows what filters this list: its own values, and the
-        // filters for all lists where it has none, so a filter saved for
-        // all lists can be seen and removed again (review 4, B15).
-        let local = shown_filters(&local_only, &self.radio.global_filters);
+        // This list's form shows what filters it: its own values, and the
+        // filters for all lists where it has none (review 4, B15). The form
+        // for all lists shows their own values, which this list's may
+        // override (review 5, B17).
+        let local = if global {
+            self.radio.global_filters.clone()
+        } else {
+            shown_filters(&local_only, &self.radio.global_filters)
+        };
         let form = FeatureForm::localized(
             &catalog,
-            catalog.text("radio_filters"),
+            catalog.text(if global {
+                "radio_filters_all_lists"
+            } else {
+                "radio_filters_this_list"
+            }),
             vec![
-                FormField::choice(
-                    "scope",
-                    catalog.text("radio_filter_scope"),
-                    vec![
-                        catalog.text("radio_filter_this").to_owned(),
-                        catalog.text("radio_filter_all").to_owned(),
-                    ],
-                    0,
-                ),
                 FormField::text(
                     "country",
                     catalog.text("radio_filter_country"),
@@ -1356,17 +1443,10 @@ impl SourcesController {
             only_working: checked(&values, "working"),
             https_only: checked(&values, "https"),
         };
-        // The form shows this list's filters; only the fields the user
-        // changed go to the chosen scope, so saving for all lists keeps the
-        // filters already set there (review 2.1).
-        let global = choice(&values, "scope") == 1;
+        // The form for all lists is theirs entirely; for this list only the
+        // fields the user changed become its own (review 2.1).
         let filters = if global {
-            global_filters_from_form(
-                &local_only,
-                &local,
-                &typed,
-                self.radio.global_filters.clone(),
-            )
+            typed
         } else {
             changed_filters(&local, &typed, local_only.clone())
         };
@@ -2713,30 +2793,21 @@ fn source_label(catalog: &TranslationCatalog, source: &CaptureSource) -> String 
 
 #[cfg(test)]
 mod filter_tests {
-    /// Review 4, B15: a filter saved for all lists shows in the form and
-    /// can be removed again with All lists.
+    /// Review 4, B15: a filter saved for all lists shows in this list's
+    /// form where the list has none of its own; its own value shows over it.
     #[test]
-    fn filters_for_all_lists_show_and_can_be_cleared() {
+    fn filters_for_all_lists_show_in_this_lists_form() {
         let global = super::RadioFilters {
             country: "SI".into(),
             ..super::RadioFilters::default()
         };
-        let local = super::RadioFilters::default();
-        let shown = super::shown_filters(&local, &global);
+        let shown = super::shown_filters(&super::RadioFilters::default(), &global);
         assert_eq!(shown.country, "SI");
-        let mut typed = shown.clone();
-        typed.country.clear();
-        let saved = super::global_filters_from_form(&local, &shown, &typed, global.clone());
-        assert!(saved.country.is_empty());
-        // This list's own value stays its own; the global one is kept.
         let local = super::RadioFilters {
             country: "DE".into(),
             ..super::RadioFilters::default()
         };
-        let shown = super::shown_filters(&local, &global);
-        assert_eq!(shown.country, "DE");
-        let saved = super::global_filters_from_form(&local, &shown, &shown.clone(), global);
-        assert_eq!(saved.country, "SI");
+        assert_eq!(super::shown_filters(&local, &global).country, "DE");
     }
 
     /// Review 2.1: saving one changed field for all lists keeps the others.
@@ -2779,37 +2850,6 @@ fn shown_filters(local: &RadioFilters, global: &RadioFilters) -> RadioFilters {
         https_only
     );
     shown
-}
-
-/// The filters for all lists after the form: a field this list leaves to
-/// them takes what was typed, also when it was cleared; a field of this
-/// list's own changes them only when it was changed.
-fn global_filters_from_form(
-    local: &RadioFilters,
-    shown: &RadioFilters,
-    typed: &RadioFilters,
-    mut global: RadioFilters,
-) -> RadioFilters {
-    let empty = RadioFilters::default();
-    macro_rules! take {
-        ($($field:ident),*) => {
-            $(if local.$field == empty.$field || typed.$field != shown.$field {
-                global.$field.clone_from(&typed.$field);
-            })*
-        };
-    }
-    take!(
-        country,
-        region,
-        language,
-        tags,
-        codec,
-        minimum_bitrate,
-        maximum_bitrate,
-        only_working,
-        https_only
-    );
-    global
 }
 
 /// `target` with the fields of `typed` that differ from what the form
@@ -3187,6 +3227,68 @@ mod tests {
         controller.player_return = Some((SourceReturn::Radio, "second".into()));
         controller.forget_player_return();
         assert!(!controller.resume_after_player(&mut ui, &environment, Some("second"), None));
+    }
+
+    /// Review 5, B16: a kept channel of one source gets no programme from
+    /// the guide of another source read last, even with the same guide id;
+    /// a channel of the browsed source still does.
+    #[test]
+    fn a_kept_channel_takes_no_programme_from_another_source() {
+        let environment = SourcesEnvironment {
+            directory: PathBuf::from("unused"),
+            download_directory: PathBuf::from("unused"),
+            ffmpeg: None,
+            proxy: String::new(),
+            shortcuts: BTreeMap::new(),
+            language: "en".into(),
+        };
+        let source = |id: &str| IptvSource {
+            id: id.into(),
+            name: id.into(),
+            kind: SourceKind::Playlist,
+            address: "https://example.test/list.m3u".into(),
+            protected_credentials: String::new(),
+            epg_address: String::new(),
+            protected_epg: String::new(),
+            prefer_hls: false,
+        };
+        let now = chrono::Utc::now().timestamp();
+        let mut guide = EpgGuide::default();
+        guide.programmes.insert(
+            "x".into(),
+            vec![apricot_platform::iptv::Programme {
+                channel: "x".into(),
+                title: "News at nine".into(),
+                description: String::new(),
+                start: now - 60,
+                end: now + 600,
+            }],
+        );
+        for (playing, expected) in [("two", false), ("one", true)] {
+            let mut controller = SourcesController {
+                iptv_active: Some(source("one")),
+                guide: guide.clone(),
+                ..SourcesController::default()
+            };
+            let mut news = channel("News", "", ChannelKind::Live);
+            news.epg_id = "x".into();
+            let kept = news.media(&source(playing)).expect("item");
+            let (sender, receiver) = std::sync::mpsc::channel();
+            sender
+                .send(Ok(Work::PlayIptv {
+                    source: source(playing),
+                    channel: news,
+                    saved: Some(Box::new(kept)),
+                }))
+                .unwrap();
+            controller.pending = Some(receiver);
+            controller.poll(&mut Spoken::default(), &environment);
+            assert_eq!(
+                controller.pending_programme.is_some(),
+                expected,
+                "{playing}"
+            );
+        }
     }
 
     fn channel(name: &str, group: &str, kind: ChannelKind) -> IptvChannel {

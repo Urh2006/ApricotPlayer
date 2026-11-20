@@ -80,6 +80,11 @@ pub struct Application {
     /// Python `player_return_screen` of a player that plays on in the
     /// background.
     background_return_frame: Option<RouteFrame>,
+    /// The player's equalizer when Settings last saved, the state Back
+    /// returns to (review 5, B14).
+    equalizer_at_save: Option<PlayerEqualizerSnapshot>,
+    /// Screens opened so far, also the screen already shown (review 5, B12).
+    screens_opened: u64,
     /// Python `audio_device_options_cache`: the last device probe and when it
     /// finished.
     audio_device_options: Option<(Instant, Vec<crate::SettingsChoiceOption>)>,
@@ -109,6 +114,8 @@ impl Application {
             startup_announcement: None,
             related_seen_ids: HashSet::new(),
             background_return_frame: None,
+            equalizer_at_save: None,
+            screens_opened: 0,
             audio_device_options: None,
             spotify_settings_draft: None,
             cookie_source_refresh_error: String::new(),
@@ -1167,7 +1174,15 @@ impl Application {
     }
 
     pub fn navigate_to(&mut self, frame: RouteFrame) {
+        self.screens_opened = self.screens_opened.wrapping_add(1);
         self.state.navigation.push(frame);
+    }
+
+    /// Counts screens the user opened, also one that was already shown (Main
+    /// menu from the main menu): lists shown over a screen close when it
+    /// changes (review 5, B12).
+    pub const fn screens_opened(&self) -> u64 {
+        self.screens_opened
     }
 
     pub fn navigate_back(&mut self) -> Option<RouteFrame> {
@@ -1191,6 +1206,7 @@ impl Application {
     }
 
     pub fn navigate_main_menu(&mut self) {
+        self.screens_opened = self.screens_opened.wrapping_add(1);
         self.state.navigation.reset();
         self.state.youtube_collections.clear();
     }
@@ -3242,7 +3258,23 @@ impl Application {
             }
             self.spotify_settings_draft = None;
         }
+        self.equalizer_at_save = Some(self.player_equalizer_snapshot());
         Ok(())
+    }
+
+    /// The equalizer Back from Settings returns to: the one heard when
+    /// Settings last saved, or `opened` (when it opened) without a save
+    /// since (review 5, B14). Call with the snapshot taken at opening.
+    pub fn settings_equalizer_baseline(
+        &mut self,
+        opened: PlayerEqualizerSnapshot,
+    ) -> PlayerEqualizerSnapshot {
+        self.equalizer_at_save.take().unwrap_or(opened)
+    }
+
+    /// Settings opens: an earlier save outside it is no baseline.
+    pub fn forget_settings_equalizer_baseline(&mut self) {
+        self.equalizer_at_save = None;
     }
 
     /// Python `play_audiovault_local_item`: `set_player_sequence` with the
@@ -3790,6 +3822,25 @@ mod tests {
         assert!(app.equalizer_advanced("flat").is_default());
     }
 
+    /// Review 5, B14: after Save in Settings, Back returns the player's
+    /// equalizer to what was saved, not to what it was when Settings opened.
+    #[test]
+    fn settings_back_returns_to_the_last_save() {
+        let root = tempdir().expect("temporary directory");
+        let mut app = application(root.path());
+        app.start_player_item(media_item("song"));
+        app.forget_settings_equalizer_baseline();
+        let opened = app.player_equalizer_snapshot();
+        app.playback_features_mut().equalizer_session_preset = Some("rock".into());
+        app.save_settings().expect("save");
+        app.playback_features_mut().equalizer_session_preset = Some("pop".into());
+        let baseline = app.settings_equalizer_baseline(opened.clone());
+        assert_eq!(baseline.preset.as_deref(), Some("rock"));
+        // Without a save since opening, Back returns to the opening.
+        app.forget_settings_equalizer_baseline();
+        assert_eq!(app.settings_equalizer_baseline(opened).preset, None);
+    }
+
     /// Review 2.1: a CUE track counts its own time: elapsed, length and the
     /// span that percentages, Home and End use.
     #[test]
@@ -3819,6 +3870,15 @@ mod tests {
             crate::playback_features::displayed_times(&app),
             (20.0, Some(120.0))
         );
+        // Review 5, B10: the system controls show the track's time, and
+        // their slider seeks inside the track.
+        assert_eq!(
+            crate::playback_features::system_controls_times(&app),
+            (20.0, Some(120.0))
+        );
+        assert!((crate::playback_features::system_seek_target(&app, 30.0) - 210.0).abs() < 1e-9);
+        assert!(crate::playback_features::system_seek_target(&app, 500.0) < 300.0);
+        assert!((crate::playback_features::system_seek_target(&app, -5.0) - 180.0).abs() < 1e-9);
     }
 
     /// Review 2.1: a renamed file is found again from the player and its

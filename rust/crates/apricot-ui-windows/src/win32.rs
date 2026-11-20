@@ -715,6 +715,9 @@ struct WindowState {
     segment_ended: Option<u64>,
     /// The Radio, IPTV and Recording list shown in this window.
     sources_panel: Option<sources_panel::SourcesPanel>,
+    /// Another source asked for while lists of one are open: it opens once
+    /// those lists closed and their controller is back (review 5, B13).
+    pending_source_action: Option<String>,
     /// The screen a podcast search or category was asked from.
     podcast_search_view: Option<MainView>,
     /// Counts the screens shown, so late source answers stay away from a
@@ -904,7 +907,8 @@ unsafe fn run_win32(application: Application, version: &str, start_hidden: bool)
 /// and Recording list's own loop uses it too (review 4, B2).
 pub(super) unsafe fn route_main_message(window: HWND, message: &MSG) {
     handle_controlled_repeat_release(window, message);
-    if handles_progress_dialog_message(window, message)
+    if sources_panel::escape_while_loading(window, message)
+        || handles_progress_dialog_message(window, message)
         || handle_view_tab_message(window, message)
         || handle_text_entry_enter(window, message)
         || handle_shortcut_message(window, message)
@@ -2365,6 +2369,7 @@ unsafe fn create_controls(
         sources_panel: None,
         podcast_search_view: None,
         view_changes: 0,
+        pending_source_action: None,
         defer_open_label: std::cell::Cell::new(false),
         pending_saved_iptv: None,
         deferred_open_label: std::cell::RefCell::new(None),
@@ -11001,6 +11006,16 @@ unsafe fn poll_playback_while_modal(window: HWND) {
                     let _ = cue_track_position_inner(window, update.generation, elapsed, false);
                 }
             }
+            // The pause state goes in at once too, so the A-B loop and the
+            // chapter stop decide on the true state (a media key may resume
+            // while a window is open); its announcement and the player's
+            // refresh wait for the window (review 5, B8).
+            PlaybackEvent::Paused(_) if in_order => {
+                let _ = state
+                    .application
+                    .apply_playback_event(update.generation, update.event.clone());
+                state.deferred_playback.push_back(update);
+            }
             _ => state.deferred_playback.push_back(update),
         }
     }
@@ -13647,6 +13662,23 @@ fn run_shortcut_action(
         activate_action(window, action.id.as_str());
     }
     true
+}
+
+/// A row command of the screen under the Radio, IPTV or Recording lists
+/// (Delete, rename, copy): it would act on that screen's hidden selection,
+/// so the lists keep it (review 5, B11). Global and player keys, and plain
+/// letters for first-letter search, still pass.
+fn hidden_row_shortcut(state: &WindowState, chord: apricot_core::shortcut::ShortcutChord) -> bool {
+    if matches!(chord.key, ShortcutKey::Character(_)) && !chord.control && !chord.alt {
+        return false;
+    }
+    let shortcuts = &state.application.settings().keyboard_shortcuts;
+    let (scope, accepts_text) = view_shortcut_scope(state.view);
+    let context = ShortcutContext::new(scope, accepts_text);
+    action_for_shortcut(shortcuts, chord, context).is_some_and(|action| {
+        !action.scopes.contains(&ActionScope::Global)
+            && !action.scopes.contains(&ActionScope::Player)
+    })
 }
 
 /// Python `results_list_owns_key`: plain navigation and typing keys stay
@@ -16858,11 +16890,16 @@ unsafe fn handle_media_key(window: HWND, code: usize, milliseconds: isize) {
         6 if milliseconds != 0 => seek_player(window, milliseconds as f64 / 1000.0),
         // The overlay's position slider moves the player without speech.
         #[allow(clippy::cast_precision_loss)] // Milliseconds of a position.
+        // Counted and kept as the player shows the time (review 5, B10).
         7 => {
+            let seconds = apricot_app::playback_features::system_seek_target(
+                &state.application,
+                milliseconds as f64 / 1000.0,
+            );
             let _ = execute_player_command(
                 window,
                 PlaybackCommand::SeekAbsolute {
-                    seconds: (milliseconds as f64 / 1000.0).max(0.0),
+                    seconds,
                     exact: true,
                 },
             );
@@ -16878,8 +16915,8 @@ unsafe fn update_integrations(state: &mut WindowState) {
         return;
     };
     let paused = session.is_paused();
-    let position = session.position_seconds();
-    let duration = session.duration_seconds().or(item.duration_seconds);
+    let (position, duration) =
+        apricot_app::playback_features::system_controls_times(&state.application);
     if let Some(controls) = state.media_controls.as_mut() {
         controls.now_playing(&item.title, &item.channel, duration);
         controls.playback(!paused, Some(position));
@@ -20147,6 +20184,7 @@ unsafe fn open_settings(window: HWND) {
         spotify_before = state.application.saved_spotify_settings();
         clean_at_open = !state.application.settings_window_changed();
         equalizer_before = state.application.player_equalizer_snapshot();
+        state.application.forget_settings_equalizer_baseline();
         state.settings_open = true;
         state.modal_open = true;
         crate::settings_win32::show(
@@ -20159,6 +20197,11 @@ unsafe fn open_settings(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    // Back returns to the last save of this window, not to the opening
+    // (review 5, B14).
+    let equalizer_before = state
+        .application
+        .settings_equalizer_baseline(equalizer_before);
     // Closing without Save drops what the window changed: Python applies
     // the controls only on Save (beta 8).
     if clean_at_open && state.application.settings_window_changed() {

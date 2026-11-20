@@ -594,6 +594,31 @@ pub fn displayed_times(app: &crate::Application) -> (f64, Option<f64>) {
     )
 }
 
+/// The time and length the system media controls show: those of the CUE
+/// track or audiobook chapter being heard, as the player shows them
+/// (review 5, B10).
+#[must_use]
+pub fn system_controls_times(app: &crate::Application) -> (f64, Option<f64>) {
+    let (position, duration) = displayed_times(app);
+    let duration = duration.or_else(|| {
+        app.player_session()
+            .current_item()
+            .and_then(|item| item.duration_seconds)
+    });
+    (position, duration)
+}
+
+/// Where a position chosen on the system controls' slider plays: counted
+/// from the start of the CUE track or chapter shown, kept inside the CUE
+/// track and inside an active A-B range (review 5, B10).
+#[must_use]
+pub fn system_seek_target(app: &crate::Application, seconds: f64) -> f64 {
+    let start = chapter_span(app).map_or(0.0, |(start, _)| start);
+    let target = start + seconds.max(0.0);
+    let target = segment_target(app, target).unwrap_or(target);
+    app.playback_features().ranges.constrain(target).max(0.0)
+}
+
 pub fn audiobook_navigation(app: &crate::Application, direction: i32) -> Option<f64> {
     if !app.playback_features().audiobook {
         return None;
