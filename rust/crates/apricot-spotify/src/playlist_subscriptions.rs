@@ -139,6 +139,10 @@ impl Default for SubscriptionPreferences {
 /// large library is read over several checks instead of at once.
 pub const FOLLOWED_PER_CHECK: usize = 25;
 
+/// A followed playlist that could not be read waits a day before it is
+/// tried again.
+pub const FOLLOWED_RETRY_SECONDS: u64 = 86_400;
+
 /// The revision of a new artist choice: later than every choice before,
 /// also one made in another window that read the same saved revision, so
 /// the last choice the user made is the one kept (review 5, B19).
@@ -264,6 +268,10 @@ pub struct SubscriptionDocument {
     pub ignored_followed: BTreeSet<String>,
     /// When the followed playlists were last read.
     pub followed_checked: u64,
+    /// Followed playlists that could not be read, with the time; they are
+    /// tried again after [`FOLLOWED_RETRY_SECONDS`] so the others get their
+    /// turn.
+    pub followed_failed: BTreeMap<String, u64>,
 }
 impl Default for SubscriptionDocument {
     fn default() -> Self {
@@ -276,6 +284,7 @@ impl Default for SubscriptionDocument {
             artists: ArtistReleaseOptions::default(),
             ignored_followed: BTreeSet::new(),
             followed_checked: 0,
+            followed_failed: BTreeMap::new(),
         }
     }
 }
@@ -453,29 +462,44 @@ impl SubscriptionDocument {
     }
 
     /// Ends a subscription; a followed playlist is then not subscribed again
-    /// on its own (2.1.3).
+    /// on its own, also one subscribed by hand (2.1.3). The exception is
+    /// forgotten when the playlist is no longer followed.
     pub fn unsubscribe(&mut self, uri: &str) {
-        if self
-            .entries
-            .iter()
-            .any(|entry| entry.uri == uri && entry.automatic)
-        {
+        if self.entries.iter().any(|entry| entry.uri == uri) {
             self.ignored_followed.insert(uri.to_owned());
         }
         self.entries.retain(|entry| entry.uri != uri);
     }
 
+    /// A followed playlist that could not be read is tried again later.
+    pub fn note_followed_failure(&mut self, uri: &str, now: u64) {
+        self.followed_failed.insert(uri.to_owned(), now);
+    }
+
     /// The followed playlists still to subscribe, at most
-    /// [`FOLLOWED_PER_CHECK`], and drops the automatic subscriptions of
-    /// playlists no longer followed. `followed` is the account's whole
-    /// list of followed playlists as URI and owner URI; the account's own
-    /// playlists are left out (2.1.3).
-    pub fn sync_followed(&mut self, followed: &[(String, String)], own_uri: &str) -> Vec<String> {
+    /// [`FOLLOWED_PER_CHECK`], leaving out the account's own playlists and
+    /// those that recently could not be read. `followed` are the followed
+    /// playlists as URI and owner URI; only when `complete` is it the whole
+    /// library, and only then are automatic subscriptions of playlists no
+    /// longer followed dropped (2.1.3).
+    pub fn sync_followed(
+        &mut self,
+        followed: &[(String, String)],
+        complete: bool,
+        own_uri: &str,
+        now: u64,
+    ) -> Vec<String> {
         let followed_uris: BTreeSet<&str> = followed.iter().map(|(uri, _)| uri.as_str()).collect();
-        self.entries
-            .retain(|entry| !entry.automatic || followed_uris.contains(entry.uri.as_str()));
-        self.ignored_followed
-            .retain(|uri| followed_uris.contains(uri.as_str()));
+        if complete {
+            self.entries
+                .retain(|entry| !entry.automatic || followed_uris.contains(entry.uri.as_str()));
+            self.ignored_followed
+                .retain(|uri| followed_uris.contains(uri.as_str()));
+        }
+        self.followed_failed.retain(|uri, failed| {
+            now.saturating_sub(*failed) < FOLLOWED_RETRY_SECONDS
+                && (!complete || followed_uris.contains(uri.as_str()))
+        });
         let mut seen = BTreeSet::new();
         followed
             .iter()
@@ -484,6 +508,7 @@ impl SubscriptionDocument {
                     && !owner.is_empty()
                     && owner != own_uri
                     && !self.ignored_followed.contains(uri)
+                    && !self.followed_failed.contains_key(uri)
                     && !self.entries.iter().any(|entry| entry.uri == *uri)
                     && seen.insert(uri.as_str())
             })
@@ -505,6 +530,7 @@ impl SubscriptionDocument {
         now: u64,
     ) -> Result<(), String> {
         let uri = snapshot.uri.clone();
+        self.followed_failed.remove(&uri);
         if self.ignored_followed.contains(&uri) {
             return Ok(());
         }
@@ -881,35 +907,33 @@ async fn follow_playlists(
     errors: &mut Vec<String>,
 ) {
     document.followed_checked = now;
-    let followed = match followed_playlists(api, session).await {
-        Ok(followed) => followed,
+    let (followed, complete) = match crate::catalog::library_playlists(api, session).await {
+        Ok((playlists, complete)) => (
+            playlists
+                .into_iter()
+                .map(|item| (item.uri, item.artist_uri))
+                .collect::<Vec<_>>(),
+            complete,
+        ),
         Err(error) => {
             errors.push(format!("spotify_sub_followed_failed: {error}"));
             return;
         }
     };
-    for uri in document.sync_followed(&followed, own_uri) {
+    for uri in document.sync_followed(&followed, complete, own_uri, now) {
         match snapshot(api, session, &uri).await {
             Ok(snapshot) => {
                 // Another owner than the library said is only skipped.
-                let _ = document.subscribe_followed(snapshot, own_uri, now);
+                if document.subscribe_followed(snapshot, own_uri, now).is_err() {
+                    document.note_followed_failure(&uri, now);
+                }
             }
-            Err(error) => errors.push(format!("{uri}: {error}")),
+            Err(error) => {
+                document.note_followed_failure(&uri, now);
+                errors.push(format!("{uri}: {error}"));
+            }
         }
     }
-}
-
-/// The playlists in the account's library, from all folders, as URI and
-/// owner URI.
-async fn followed_playlists(
-    api: &crate::api::Api,
-    session: &librespot_core::Session,
-) -> Result<Vec<(String, String)>, crate::api::ApiError> {
-    Ok(crate::catalog::library_playlists(api, session)
-        .await?
-        .into_iter()
-        .map(|item| (item.uri, item.artist_uri))
-        .collect())
 }
 
 /// The release feed when it is due; `true` when it was read.
@@ -1274,23 +1298,38 @@ mod tests {
             "spotify:playlist:mix",
             "spotify:album:not",
         ]);
-        let wanted = doc.sync_followed(&all, ME);
+        let wanted = doc.sync_followed(&all, true, ME, 1);
         assert_eq!(wanted, ["spotify:playlist:radar", "spotify:playlist:mix"]);
         for uri in &wanted {
             doc.subscribe_followed(snapshot(uri), ME, 1).unwrap();
         }
         assert!(doc.entries.iter().all(|entry| entry.automatic));
-        assert!(doc.sync_followed(&all, ME).is_empty());
+        assert!(doc.sync_followed(&all, true, ME, 1).is_empty());
         assert!(doc.outbox.is_empty(), "the first content is silent");
         // Unsubscribed by hand, it is not subscribed again.
         doc.unsubscribe("spotify:playlist:mix");
-        assert!(doc.sync_followed(&all, ME).is_empty());
+        assert!(doc.sync_followed(&all, true, ME, 1).is_empty());
         // Subscribed by hand, it stays after unfollowing.
         doc.subscribe(snapshot("spotify:playlist:mix"), ME, 2)
             .unwrap();
         assert!(doc.ignored_followed.is_empty());
+        // Unsubscribed again, also a subscription made by hand stays off
+        // (review of 2.1.3).
+        doc.unsubscribe("spotify:playlist:mix");
+        assert!(doc.sync_followed(&all, true, ME, 2).is_empty());
+        doc.subscribe(snapshot("spotify:playlist:mix"), ME, 2)
+            .unwrap();
+        // A library read only in part drops nothing (review of 2.1.3).
         let fewer = followed(&["spotify:playlist:other"]);
-        assert_eq!(doc.sync_followed(&fewer, ME), ["spotify:playlist:other"]);
+        assert_eq!(
+            doc.sync_followed(&fewer, false, ME, 3),
+            ["spotify:playlist:other"]
+        );
+        assert_eq!(doc.entries.len(), 2);
+        assert_eq!(
+            doc.sync_followed(&fewer, true, ME, 3),
+            ["spotify:playlist:other"]
+        );
         assert_eq!(
             doc.entries
                 .iter()
@@ -1298,7 +1337,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["spotify:playlist:mix"]
         );
-        // A large library is subscribed over several checks.
+        // A large library is subscribed over several checks, and playlists
+        // that cannot be read wait so the others get their turn (review of
+        // 2.1.3).
         let many: Vec<_> = (0..60)
             .map(|index| {
                 (
@@ -1307,7 +1348,16 @@ mod tests {
                 )
             })
             .collect();
-        assert_eq!(doc.sync_followed(&many, ME).len(), FOLLOWED_PER_CHECK);
+        let first = doc.sync_followed(&many, true, ME, 10);
+        assert_eq!(first.len(), FOLLOWED_PER_CHECK);
+        for uri in &first {
+            doc.note_followed_failure(uri, 10);
+        }
+        let second = doc.sync_followed(&many, true, ME, 20);
+        assert_eq!(second.len(), FOLLOWED_PER_CHECK);
+        assert!(second.iter().all(|uri| !first.contains(uri)));
+        let later = doc.sync_followed(&many, true, ME, 10 + FOLLOWED_RETRY_SECONDS);
+        assert_eq!(later, first);
     }
 
     /// 2.1.3: the followed playlists make a check due on their own, and an
