@@ -1089,11 +1089,18 @@ pub async fn library(
 }
 
 /// Every playlist in the library, from all folders, at most 2000; its
-/// `artist_uri` is the owner (2.1.3).
-pub async fn library_playlists(api: &Api, session: &Session) -> Result<Vec<CatalogItem>, ApiError> {
+/// `artist_uri` is the owner. `true` when that is the whole library
+/// (2.1.3).
+pub async fn library_playlists(
+    api: &Api,
+    session: &Session,
+) -> Result<(Vec<CatalogItem>, bool), ApiError> {
     let mut playlists = Vec::new();
     let mut offset = Some(0);
-    while let Some(start) = offset.filter(|start| *start < 2000) {
+    while let Some(start) = offset {
+        if start >= 2000 {
+            return Ok((playlists, false));
+        }
         let page = library_page(api, session, LibraryFilter::Playlists, None, start, true).await?;
         playlists.extend(
             page.items
@@ -1102,7 +1109,7 @@ pub async fn library_playlists(api: &Api, session: &Session) -> Result<Vec<Catal
         );
         offset = page.next_offset;
     }
-    Ok(playlists)
+    Ok((playlists, true))
 }
 
 /// Playlists the account may add tracks to, from all folders, newest first.
