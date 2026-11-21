@@ -7,6 +7,7 @@
 // ... pf <operation> '<variables json>'
 // ... sp <GET|POST> <path> ['<body json>']
 // ... grep <text>   (prints web-player code around <text>, to learn variables)
+// ... subscriptions  (what the 2.1.3 subscription check reads; saves nothing)
 
 #![allow(
     clippy::too_many_lines,
@@ -129,6 +130,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let credentials: Credentials = serde_json::from_slice(&blob)?;
     let session = Session::new(SessionConfig::default(), None);
     session.connect(credentials, false).await?;
+    // 2.1.3: what the subscription check reads, without saving anything.
+    if command == "subscriptions" {
+        let own = format!("spotify:user:{}", session.username());
+        let (playlists, complete) =
+            apricot_spotify::catalog::library_playlists(&api, &session).await?;
+        let others: Vec<_> = playlists
+            .iter()
+            .filter(|item| !item.artist_uri.is_empty() && item.artist_uri != own)
+            .collect();
+        let unknown = playlists
+            .iter()
+            .filter(|item| item.artist_uri.is_empty())
+            .count();
+        println!(
+            "library playlists: {} (complete: {complete}), of others: {}, own: {}, owner unknown: {unknown}",
+            playlists.len(),
+            others.len(),
+            playlists.len() - others.len() - unknown
+        );
+        for item in others.iter().take(10) {
+            println!("  other: {} | {} | {}", item.name, item.subtitle, item.uri);
+        }
+        let feed = apricot_spotify::playlist_subscriptions::release_feed(&api, &session).await?;
+        println!("release feed: {} releases", feed.len());
+        for release in feed.iter().take(10) {
+            let artists: Vec<_> = release
+                .artists
+                .iter()
+                .map(|(_, name)| name.as_str())
+                .collect();
+            println!(
+                "  {} | {} | {} | {} | {}",
+                release.name,
+                release.kind,
+                release.date,
+                artists.join(", "),
+                release.uri
+            );
+        }
+        if let Some(first) = others.first() {
+            let snapshot =
+                apricot_spotify::playlist_subscriptions::snapshot(&api, &session, &first.uri)
+                    .await?;
+            let current = apricot_spotify::catalog::playlist(&api, &session, &first.uri, 0).await?;
+            println!(
+                "snapshot of {}: {} tracks, owner {}, revision equal to the first page: {}",
+                snapshot.name,
+                snapshot.tracks.len(),
+                snapshot.owner_uri,
+                current.revision == snapshot.revision
+            );
+        }
+        return Ok(());
+    }
     if command == "base-readonly" {
         let root = api
             .spclient(
