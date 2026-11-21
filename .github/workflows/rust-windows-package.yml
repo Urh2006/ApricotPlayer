@@ -2,9 +2,9 @@ name: Rust Windows package
 
 # Builds the Windows installer and portable zip with
 # rust/scripts/build_stable_release.ps1, the script of the local Windows
-# releases, and keeps them as a workflow artifact. The bundled mpv, FFmpeg
-# and Node.js are the locked downloads of release.yml. It runs only when
-# started by hand and never publishes a release.
+# releases, and keeps them as a workflow artifact. libmpv is the build that
+# prepare_libmpv.ps1 pins, mpv.exe comes from the same release, and FFmpeg
+# and Node.js follow release.yml. It never publishes a release.
 on:
   # Temporary: build 2.1.2 from its branch while the workflow is not yet on
   # the default branch, where workflow_dispatch needs it. Removed before merge.
@@ -40,22 +40,24 @@ jobs:
         with:
           workspaces: rust
 
-      - name: Download locked mpv x86_64 runtime
+      - name: Download the mpv runtime of the bundled libmpv build
         shell: pwsh
         run: |
           $headers = @{
             Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept        = "application/vnd.github+json"
           }
-          $expectedMpvHash = 'FACAC536BAA73C7B925771AF5E39A3C9CB16B8D75B59A6E9800DE89799DFFCA7'
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/tags/20260610" -Headers $headers
-          $asset = $release.assets | Where-Object { $_.name -eq 'mpv-x86_64-20260610-git-304426c.7z' } | Select-Object -First 1
-          if (-not $asset) { throw "Could not find the locked mpv x86_64 release asset" }
-          Write-Host "Downloading mpv asset: $($asset.name)"
-          if ($asset.digest -ne "sha256:$($expectedMpvHash.ToLowerInvariant())") { throw "mpv release metadata digest changed" }
+          # mpv.exe comes from the same shinchiro release as the libmpv that
+          # prepare_libmpv.ps1 pins; that pinned archive proves the release.
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/tags/20260903" -Headers $headers
+          $dev = $release.assets | Where-Object { $_.name -eq 'mpv-dev-x86_64-20260903-git-69e63f425a.7z' } | Select-Object -First 1
+          if ($dev.digest -ne 'sha256:fac135c68a35b7639e39d72c0c365104edbaebdea39a0dfdd8c36e8c8e80faef') { throw "The libmpv release changed" }
+          $asset = $release.assets | Where-Object { $_.name -eq 'mpv-x86_64-20260903-git-69e63f425a.7z' } | Select-Object -First 1
+          if (-not $asset -or $asset.digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "Could not find the mpv x86_64 release asset" }
+          Write-Host "Downloading mpv asset: $($asset.name) ($($asset.digest))"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv.7z
-          $actualMpvHash = (Get-FileHash -LiteralPath mpv.7z -Algorithm SHA256).Hash
-          if ($actualMpvHash -ne $expectedMpvHash) { throw "mpv SHA-256 verification failed" }
+          $actualMpvHash = (Get-FileHash -LiteralPath mpv.7z -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ("sha256:$actualMpvHash" -ne $asset.digest) { throw "mpv SHA-256 verification failed" }
 
           Write-Host "Extracting mpv archive..."
           & "C:\Program Files\7-Zip\7z.exe" x mpv.7z -o"mpv_extracted" -y | Out-Null
@@ -80,21 +82,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download locked FFmpeg win64 GPL runtime
+      - name: Download the FFmpeg win64 GPL runtime
         shell: pwsh
         run: |
           $headers = @{
             Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept        = "application/vnd.github+json"
           }
-          $expectedFfmpegHash = '8069A62DFEC0B2F57A3F226695B94F4FACF1102AF517291E4BFD0E3DB42DF5DC'
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-07-10-13-44" -Headers $headers
-          $asset = $release.assets | Where-Object { $_.name -eq 'ffmpeg-N-125515-g35f8f4bdc0-win64-gpl.zip' } | Select-Object -First 1
-          if (-not $asset) { throw "Could not find the locked FFmpeg release asset" }
-          Write-Host "Downloading ffmpeg asset: $($asset.name)"
-          if ($asset.digest -ne "sha256:$($expectedFfmpegHash.ToLowerInvariant())") { throw "FFmpeg release metadata digest changed" }
+          # The build that release.yml locks, while BtbN still keeps it;
+          # otherwise their current GPL build, checked against its digest.
+          $expectedFfmpegHash = '8069a62dfec0b2f57a3f226695b94f4facf1102af517291e4bfd0e3db42df5dc'
+          try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-07-10-13-44" -Headers $headers
+            $asset = $release.assets | Where-Object { $_.name -eq 'ffmpeg-N-125515-g35f8f4bdc0-win64-gpl.zip' } | Select-Object -First 1
+            if ($asset.digest -ne "sha256:$expectedFfmpegHash") { throw "FFmpeg release metadata digest changed" }
+          }
+          catch {
+            Write-Host "The locked FFmpeg build is gone: $($_.Exception.Message)"
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest" -Headers $headers
+            $asset = $release.assets | Where-Object { $_.name -eq 'ffmpeg-master-latest-win64-gpl.zip' } | Select-Object -First 1
+            if (-not $asset -or $asset.digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "Could not find the FFmpeg release asset" }
+            $expectedFfmpegHash = $asset.digest.Substring(7)
+          }
+          Write-Host "Downloading ffmpeg asset: $($asset.name) (sha256:$expectedFfmpegHash)"
           Invoke-WebRequest -Uri $asset.browser_download_url -OutFile ffmpeg.zip
-          $actualFfmpegHash = (Get-FileHash -LiteralPath ffmpeg.zip -Algorithm SHA256).Hash
+          $actualFfmpegHash = (Get-FileHash -LiteralPath ffmpeg.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actualFfmpegHash -ne $expectedFfmpegHash) { throw "ffmpeg SHA-256 verification failed" }
           Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg_extracted -Force
           $ffmpegExe = Get-ChildItem -Path ffmpeg_extracted -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
