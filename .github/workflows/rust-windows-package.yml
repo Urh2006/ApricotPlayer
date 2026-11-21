@@ -40,45 +40,44 @@ jobs:
         with:
           workspaces: rust
 
-      - name: Download the mpv runtime of the bundled libmpv build
+      - name: Download mpv and libmpv
         shell: pwsh
         run: |
           $headers = @{
             Authorization = "Bearer $env:GITHUB_TOKEN"
             Accept        = "application/vnd.github+json"
           }
-          # mpv.exe comes from the same shinchiro release as the libmpv that
-          # prepare_libmpv.ps1 pins; that pinned archive proves the release.
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/tags/20260903" -Headers $headers
-          $dev = $release.assets | Where-Object { $_.name -eq 'mpv-dev-x86_64-20260903-git-69e63f425a.7z' } | Select-Object -First 1
-          if ($dev.digest -ne 'sha256:fac135c68a35b7639e39d72c0c365104edbaebdea39a0dfdd8c36e8c8e80faef') { throw "The libmpv release changed" }
-          $asset = $release.assets | Where-Object { $_.name -eq 'mpv-x86_64-20260903-git-69e63f425a.7z' } | Select-Object -First 1
-          if (-not $asset -or $asset.digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "Could not find the mpv x86_64 release asset" }
-          Write-Host "Downloading mpv asset: $($asset.name) ($($asset.digest))"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile mpv.7z
-          $actualMpvHash = (Get-FileHash -LiteralPath mpv.7z -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ("sha256:$actualMpvHash" -ne $asset.digest) { throw "mpv SHA-256 verification failed" }
-
-          Write-Host "Extracting mpv archive..."
-          & "C:\Program Files\7-Zip\7z.exe" x mpv.7z -o"mpv_extracted" -y | Out-Null
-
-          # Robustly find mpv.exe regardless of archive structure
-          # (some shinchiro builds are flat, some have a root wrapper directory)
-          $mpvExe = Get-ChildItem -Path mpv_extracted -Filter "mpv.exe" -Recurse | Select-Object -First 1
-          if (-not $mpvExe) {
-            Write-Host "Archive contents:"
-            Get-ChildItem mpv_extracted -Recurse | Select-Object FullName
-            throw "mpv.exe was not found anywhere in the extracted archive"
+          # shinchiro keeps only recent builds, so the libmpv that
+          # prepare_libmpv.ps1 pins can no longer be downloaded. mpv.exe and
+          # libmpv come from the same newest x86_64 build, checked against
+          # their release digests; the real libmpv tests below qualify it.
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest" -Headers $headers
+          $player = $release.assets | Where-Object { $_.name -match '^mpv-x86_64-\d{8}-git-[0-9a-f]+\.7z$' } | Select-Object -First 1
+          $dev = $release.assets | Where-Object { $_.name -match '^mpv-dev-x86_64-\d{8}-git-[0-9a-f]+\.7z$' } | Select-Object -First 1
+          foreach ($asset in @($player, $dev)) {
+            if (-not $asset -or $asset.digest -notmatch '^sha256:[0-9a-f]{64}$') { throw "Could not find the mpv x86_64 release assets" }
           }
-          Write-Host "Found mpv.exe at: $($mpvExe.FullName)"
-
-          # Copy mpv.exe and all sibling files (required DLLs) to vendor\mpv
-          New-Item -ItemType Directory -Force -Path vendor\mpv | Out-Null
-          Get-ChildItem -Path $mpvExe.Directory.FullName -File |
-            Copy-Item -Destination vendor\mpv\ -Force
-
-          Write-Host "mpv installed. Files in vendor\mpv:"
-          Get-ChildItem vendor\mpv -Name
+          New-Item -ItemType Directory -Force -Path vendor\mpv, rust\.cargo-local\libmpv | Out-Null
+          foreach ($pair in @(@($player, "mpv.7z", "mpv_extracted"), @($dev, "libmpv.7z", "libmpv_extracted"))) {
+            $asset, $file, $folder = $pair
+            Write-Host "Downloading $($asset.name) ($($asset.digest))"
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $file
+            $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ("sha256:$hash" -ne $asset.digest) { throw "$($asset.name) SHA-256 verification failed" }
+            & "C:\Program Files\7-Zip\7z.exe" x $file -o"$folder" -y | Out-Null
+          }
+          foreach ($name in "mpv.exe", "d3dcompiler_43.dll") {
+            $found = Get-ChildItem -Path mpv_extracted -Filter $name -Recurse | Select-Object -First 1
+            if (-not $found) { throw "$name was not found in $($player.name)" }
+            Copy-Item -LiteralPath $found.FullName -Destination vendor\mpv\ -Force
+          }
+          $dll = Get-ChildItem -Path libmpv_extracted -Filter "libmpv-2.dll" -Recurse | Select-Object -First 1
+          if (-not $dll) { throw "libmpv-2.dll was not found in $($dev.name)" }
+          Copy-Item -LiteralPath $dll.FullName -Destination rust\.cargo-local\libmpv\ -Force
+          # The real libmpv tests find libmpv next to mpv.exe.
+          New-Item -ItemType Directory -Force -Path qualify-mpv | Out-Null
+          Copy-Item -Path vendor\mpv\*, $dll.FullName -Destination qualify-mpv\ -Force
+          Get-ChildItem vendor\mpv, rust\.cargo-local\libmpv -Name
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -132,6 +131,15 @@ jobs:
           }
           & vendor\node\node.exe --version
 
+      - name: Qualify real playback
+        working-directory: rust
+        shell: pwsh
+        run: |
+          $env:APRICOT_TEST_MPV = (Resolve-Path ..\qualify-mpv\mpv.exe).Path
+          $env:APRICOT_TEST_FFMPEG = (Resolve-Path ..\vendor\ffmpeg\ffmpeg.exe).Path
+          cargo test -p apricot-playback real_libmpv --locked -- --ignored --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw "The real libmpv tests failed" }
+
       - name: Install Inno Setup 6
         run: choco install innosetup --version=6.7.1 --yes --no-progress
 
@@ -142,6 +150,20 @@ jobs:
         run: |
           $Channel = if ($env:RELEASE_CHANNEL) { $env:RELEASE_CHANNEL } else { "stable" }
           .\rust\scripts\build_stable_release.ps1 -Channel $Channel
+
+      - name: Verify the portable package
+        shell: pwsh
+        run: |
+          $Release = Get-ChildItem rust\local-dist\stable -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $Verify = Join-Path $env:RUNNER_TEMP "apricot-verify"
+          Expand-Archive -LiteralPath (Join-Path $Release.FullName "ApricotPlayer.zip") -DestinationPath $Verify -Force
+          $Exe = Join-Path $Verify "ApricotPlayer\ApricotPlayer.exe"
+          foreach ($Check in "--qualification-smoke", "--qualification-ytdlp", "--qualification-youtube-helper", "--qualification-playback") {
+            $Run = Start-Process -FilePath $Exe -ArgumentList $Check -Wait -PassThru -WindowStyle Hidden
+            if ($Run.ExitCode -ne 0) { throw "$Check failed with exit code $($Run.ExitCode)" }
+            Write-Host "$Check passed"
+          }
+          Get-Content (Join-Path $Release.FullName "SHA256SUMS.txt")
 
       - name: Keep the package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
