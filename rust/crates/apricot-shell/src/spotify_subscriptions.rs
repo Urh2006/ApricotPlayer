@@ -5,8 +5,66 @@ use apricot_app::Application;
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource, TranslationCatalog};
 use apricot_spotify::playlist_subscriptions::{
     NotificationOptions, PlaylistChanges, SubscriptionCommand, SubscriptionDocument,
-    SubscriptionReport,
+    SubscriptionPreferences, SubscriptionReport,
 };
+
+/// How the Spotify subscriptions are checked, from the settings (2.1.3).
+#[must_use]
+pub fn preferences(settings: &apricot_storage::SettingsDocument) -> SubscriptionPreferences {
+    SubscriptionPreferences {
+        automatic_checks: settings.spotify_subscription_check_enabled,
+        follow_playlists: settings.spotify_follow_playlists,
+    }
+}
+
+/// What [`publish`] stored: the IDs safe to acknowledge and the changes that
+/// became new notifications.
+#[derive(Clone, Debug, Default)]
+pub struct Published {
+    pub acknowledged: Vec<String>,
+    pub added: Vec<PlaylistChanges>,
+}
+
+/// One change as a system notification says it: "Mix: 3 songs added", or
+/// "New single from Artist: Title".
+#[must_use]
+pub fn system_message(catalog: &TranslationCatalog, change: &PlaylistChanges) -> String {
+    let summary = summary(catalog, change);
+    if change.release.is_some() && !change.name.is_empty() {
+        format!("{summary}: {}", change.name)
+    } else {
+        summary
+    }
+}
+
+/// The system notifications for new Spotify notifications: one for each,
+/// or one with their count when a check brings many at once (2.1.3).
+#[must_use]
+pub fn system_messages(catalog: &TranslationCatalog, added: &[PlaylistChanges]) -> Vec<String> {
+    if added.len() > 3 {
+        announcement(catalog, added).into_iter().collect()
+    } else {
+        added
+            .iter()
+            .map(|change| system_message(catalog, change))
+            .collect()
+    }
+}
+
+/// What the status line says about new Spotify notifications, like the
+/// count of new videos of a channel: the change itself, or how many.
+#[must_use]
+pub fn announcement(catalog: &TranslationCatalog, added: &[PlaylistChanges]) -> Option<String> {
+    match added {
+        [] => None,
+        [change] => Some(system_message(catalog, change)),
+        many => Some(
+            catalog
+                .text("spotify_sub_new_notifications")
+                .replace("{count}", &many.len().to_string()),
+        ),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum SubscriptionPanelAction {
@@ -228,7 +286,11 @@ pub fn notification_item(change: &PlaylistChanges, account: &str) -> MediaItem {
         source: MediaSource::Spotify,
         kind: MediaKind::Playlist,
         title: change.name.clone(),
-        url: None,
+        // Without a link the saved notification is read back without its
+        // item and Enter finds nothing to open (2.1.3).
+        url: apricot_core::SpotifyRef::parse(&change.uri)
+            .and_then(|reference| reference.to_url())
+            .and_then(|url| url.parse().ok()),
         stream_url: None,
         external_audio_url: None,
         local_path: None,
@@ -310,9 +372,10 @@ pub fn release_summary(
 pub fn publish(
     application: &mut Application,
     report: &SubscriptionReport,
-) -> Result<Vec<String>, String> {
+) -> Result<Published, String> {
     let catalog = apricot_app::embedded_catalog(&application.settings().language);
     let mut acknowledged = Vec::new();
+    let mut added = Vec::new();
     for change in &report.document.outbox {
         // The same change of another account is its own notification: one
         // account cannot open the other's (review 5, B21).
@@ -342,10 +405,14 @@ pub fn publish(
                     timestamp,
                 ))
                 .map_err(|error| error.to_string())?;
+            added.push(change.clone());
         }
         acknowledged.push(change.id.clone());
     }
-    Ok(acknowledged)
+    Ok(Published {
+        acknowledged,
+        added,
+    })
 }
 
 impl crate::Shell {
@@ -409,6 +476,18 @@ impl crate::Shell {
             }),
             true,
         );
+    }
+
+    /// Check now of the Spotify subscriptions, from the action list or the
+    /// Settings window (2.1.3); the report says when it finished.
+    pub fn check_spotify_subscriptions_now(&mut self, ui: &mut dyn crate::ShellUi) {
+        let Some(service) = self.spotify_service() else {
+            return;
+        };
+        service.set_subscription_preferences(preferences(self.application.settings()));
+        let stamp = self.spotify.epochs.begin();
+        service.subscription_operation(stamp, SubscriptionCommand::Check { force: true });
+        ui.set_background_polling(true);
     }
 
     pub fn show_spotify_subscriptions(&mut self, ui: &mut dyn crate::ShellUi) {
@@ -492,19 +571,39 @@ impl crate::Shell {
         report: &SubscriptionReport,
     ) {
         let catalog = self.catalog();
-        match publish(&mut self.application, report) {
-            Ok(ids) if !ids.is_empty() => {
-                if let Some(service) = self.spotify_service() {
+        let added = match publish(&mut self.application, report) {
+            Ok(published) => {
+                if !published.acknowledged.is_empty()
+                    && let Some(service) = self.spotify_service()
+                {
                     let stamp = self.spotify.epochs.begin();
-                    service.subscription_operation(stamp, SubscriptionCommand::Acknowledge(ids));
+                    service.subscription_operation(
+                        stamp,
+                        SubscriptionCommand::Acknowledge(published.acknowledged),
+                    );
                 }
+                published.added
             }
-            Err(error) => ui.show_error(&error),
-            _ => {}
-        }
+            Err(error) => {
+                ui.show_error(&error);
+                Vec::new()
+            }
+        };
         self.sync_notification_center(ui);
+        // Like new YouTube videos: a system notification for each change
+        // and one line in the status bar (2.1.3).
+        let settings = self.application.settings();
+        if settings.windows_notifications && settings.spotify_subscription_notifications {
+            for message in system_messages(&catalog, &added) {
+                ui.show_system_notification(catalog.text("spotify"), &message);
+            }
+        }
         if !report.message.is_empty() {
             ui.set_status(&report_text(&catalog, &report.message), true);
+        }
+        // After "checked", so the change itself is what is heard last.
+        if let Some(message) = announcement(&catalog, &added) {
+            ui.set_status(&message, true);
         }
         if !report.errors.is_empty() {
             let errors: Vec<_> = report
@@ -542,12 +641,116 @@ mod tests {
             uri: "spotify:album:1".into(),
             ..PlaylistChanges::default()
         });
-        assert_eq!(publish(&mut shell.application, &report).unwrap().len(), 1);
-        assert_eq!(publish(&mut shell.application, &report).unwrap().len(), 1);
+        let first = publish(&mut shell.application, &report).unwrap();
+        assert_eq!((first.acknowledged.len(), first.added.len()), (1, 1));
+        let again = publish(&mut shell.application, &report).unwrap();
+        assert_eq!((again.acknowledged.len(), again.added.len()), (1, 0));
         assert_eq!(shell.application.notifications().len(), 1);
         report.account = "b".into();
         publish(&mut shell.application, &report).unwrap();
         assert_eq!(shell.application.notifications().len(), 2);
+    }
+
+    fn playlist_change(index: usize) -> PlaylistChanges {
+        PlaylistChanges {
+            id: format!("change-{index}"),
+            uri: "spotify:playlist:37i9dQZEVXbdgXFSsiYVMw".into(),
+            name: "Release Radar".into(),
+            added: vec![
+                serde_json::from_value(serde_json::json!({"kind":"Track","uri":"spotify:track:a","name":"A","subtitle":"","album":"","album_uri":"","artist_uri":"","duration_ms":null,"playable":true,"explicit":false,"uid":null,"saved":null,"count":null,"editable":false,"format":""}))
+                    .unwrap(),
+            ],
+            ..PlaylistChanges::default()
+        }
+    }
+
+    /// 2.1.3: a stored Spotify notification is read back with its change,
+    /// so Enter in the Notification center opens it after a restart
+    /// instead of saying there are no new notifications.
+    #[test]
+    fn a_saved_notification_still_opens_its_change() {
+        let root = tempfile::tempdir().unwrap();
+        let file = apricot_storage::NotificationFile::new(root.path().join("notifications.json"));
+        let change = playlist_change(1);
+        let item = notification_item(&change, "4a94c6dc9fdcd0a7");
+        assert_eq!(
+            item.url.as_ref().map(ToString::to_string).as_deref(),
+            Some("https://open.spotify.com/playlist/37i9dQZEVXbdgXFSsiYVMw")
+        );
+        file.save(&[apricot_storage::AppNotification::new(
+            "spotify_playlist",
+            "Release Radar",
+            "Release Radar: 1 song added",
+            Some(item),
+            1.0,
+        )])
+        .unwrap();
+        let loaded = file.load().unwrap();
+        let item = loaded[0].item.as_ref().expect("the item is kept");
+        assert_eq!(item_changes(item), Some(change));
+        assert_eq!(
+            item.metadata
+                .get("spotify_subscription_account")
+                .and_then(serde_json::Value::as_str),
+            Some("4a94c6dc9fdcd0a7")
+        );
+    }
+
+    /// 2.1.3: new changes are said once in the status bar and as system
+    /// notifications; many at once become one line with their count.
+    #[test]
+    fn new_changes_are_announced_and_many_are_counted() {
+        let catalog = apricot_app::embedded_catalog("en");
+        let mut shell = crate::tests::keyboard::shell();
+        let report = SubscriptionReport {
+            account: "a".into(),
+            document: SubscriptionDocument {
+                outbox: (0..5).map(playlist_change).collect(),
+                ..SubscriptionDocument::default()
+            },
+            ..SubscriptionReport::default()
+        };
+        let published = publish(&mut shell.application, &report).unwrap();
+        assert_eq!(published.added.len(), 5);
+        assert_eq!(
+            announcement(&catalog, &published.added[..1]),
+            Some(summary(&catalog, &published.added[0]))
+        );
+        assert_eq!(
+            announcement(&catalog, &published.added).as_deref(),
+            Some("5 new Spotify notifications")
+        );
+        assert_eq!(system_messages(&catalog, &published.added[..3]).len(), 3);
+        assert_eq!(
+            system_messages(&catalog, &published.added),
+            ["5 new Spotify notifications"]
+        );
+        assert!(announcement(&catalog, &[]).is_none());
+        let release = PlaylistChanges {
+            name: "Far Away".into(),
+            release: Some(apricot_spotify::playlist_subscriptions::ReleaseInfo {
+                artists: vec!["Udex".into()],
+                kind: "SINGLE".into(),
+                date: "2026-11-19".into(),
+            }),
+            ..PlaylistChanges::default()
+        };
+        assert_eq!(
+            system_message(&catalog, &release),
+            "New single from Udex: Far Away"
+        );
+    }
+
+    /// 2.1.3: the settings decide how the service checks.
+    #[test]
+    fn the_settings_decide_how_subscriptions_are_checked() {
+        let mut settings = apricot_storage::SettingsDocument::default();
+        assert_eq!(preferences(&settings), SubscriptionPreferences::default());
+        assert!(settings.spotify_subscription_notifications);
+        settings.spotify_subscription_check_enabled = false;
+        settings.spotify_follow_playlists = false;
+        let chosen = preferences(&settings);
+        assert!(!chosen.automatic_checks && !chosen.follow_playlists);
     }
 
     #[test]

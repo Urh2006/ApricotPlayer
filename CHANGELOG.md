@@ -1,3 +1,25 @@
+# v2.1.3 - Spotify subscription notifications
+
+## Fixed
+
+- Pressing Enter on a Spotify notification in the Notification center, for example "Release Radar: 4 songs added", opens the new songs again. After ApricotPlayer was restarted, such a notification had lost what it pointed to, so Enter only said that there were no new notifications. Notifications saved by earlier versions are repaired when they are read.
+- New releases of followed Spotify artists are now announced. They were turned off for every account until an artist was chosen in the settings, so no release was ever reported. Every followed artist is now on until you choose otherwise in Settings, Spotify, Notifications for new releases of followed artists.
+- A new Spotify notification is now spoken in the status bar and shown as a system notification, like new YouTube videos. Before, Spotify changes went to the Notification center without a word. When one check brings more than three, one notification says how many there are.
+
+## Added
+
+- Playlists you follow in Spotify are subscribed automatically, so new songs in them reach the Notification center without subscribing to each one by hand. Your own playlists are left out. A followed playlist you unsubscribe from in Spotify subscriptions stays unsubscribed, and an automatic subscription ends when you stop following the playlist. A large library is subscribed in portions of 25 playlists per check.
+- Settings, Spotify has a new group, Subscriptions and notifications, with Check Spotify subscriptions automatically, Subscribe to followed playlists automatically, the choice of followed artists and Check Spotify subscriptions now. The former Library and notifications group is now called Library.
+- Settings, Notifications has Spotify subscription notifications, which turns the system notifications for Spotify off without turning off those for YouTube.
+
+## Changed
+
+- A subscribed Spotify playlist that has not changed is checked with a single request instead of being read completely.
+
+These changes apply to Windows and macOS. Existing settings and saved data are retained.
+
+Download **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, or **ApricotPlayer-macOS-arm64.dmg** for Apple silicon Macs running macOS 26 or later. The Mac ZIP is used by the in-app updater.
+
 # v2.1.2 - Clipping protection and crossfade
 
 ## Fixed

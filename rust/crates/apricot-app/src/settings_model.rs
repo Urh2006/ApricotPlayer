@@ -74,6 +74,8 @@ pub enum SettingsCommand {
     GlobalShortcuts,
     /// Spotify: the followed artists whose new releases are announced.
     SpotifyReleases,
+    /// Spotify: check the subscriptions of the active account now (2.1.3).
+    CheckSpotifySubscriptions,
 }
 
 impl SettingsCommand {
@@ -380,7 +382,7 @@ impl SettingsScreenModel {
             SettingsSection::Notifications => notification_controls(catalog, settings),
             SettingsSection::Cookies => cookie_controls(catalog, settings),
             SettingsSection::Audiovault => audiovault_controls(catalog, settings),
-            SettingsSection::Spotify => spotify_controls(catalog, spotify),
+            SettingsSection::Spotify => spotify_controls(catalog, settings, spotify),
             // `Shell::settings_screen` shows the fields of this form in
             // place; the Windows window still opens it with this button.
             SettingsSection::Recording => vec![SettingsControl::Command {
@@ -776,7 +778,7 @@ fn cookie_groups() -> GroupTable {
 }
 
 fn spotify_groups() -> GroupTable {
-    use GroupMember::{Command, Spotify};
+    use GroupMember::{Command, Setting, Spotify};
     vec![
         (
             "settings_group_spotify_playback",
@@ -789,10 +791,15 @@ fn spotify_groups() -> GroupTable {
         ),
         (
             "settings_group_spotify_library",
+            vec![Spotify("library_order"), Spotify("history")],
+        ),
+        (
+            "settings_group_spotify_subscriptions",
             vec![
-                Spotify("library_order"),
-                Spotify("history"),
+                Setting(SettingId::SpotifySubscriptionCheckEnabled),
+                Setting(SettingId::SpotifyFollowPlaylists),
                 Command(SettingsCommand::SpotifyReleases),
+                Command(SettingsCommand::CheckSpotifySubscriptions),
             ],
         ),
     ]
@@ -1819,6 +1826,12 @@ fn notification_controls(
             catalog,
         ),
         checkbox(
+            SettingId::SpotifySubscriptionNotifications,
+            "spotify_subscription_notifications",
+            settings.spotify_subscription_notifications,
+            catalog,
+        ),
+        checkbox(
             SettingId::AppUpdateNotifications,
             "app_update_notifications",
             settings.app_update_notifications,
@@ -1973,6 +1986,7 @@ fn audiovault_controls(
 /// The fields of the Spotify settings dialog, in its order.
 fn spotify_controls(
     catalog: &TranslationCatalog,
+    settings: &SettingsDocument,
     spotify: SpotifySettings,
 ) -> Vec<SettingsControl> {
     let texts = |keys: &[&str]| -> Vec<String> {
@@ -2034,9 +2048,25 @@ fn spotify_controls(
             label: catalog.text("spotify_key_cache").to_owned(),
             checked: spotify.key_cache,
         },
+        checkbox(
+            SettingId::SpotifySubscriptionCheckEnabled,
+            "spotify_subscription_check_enabled",
+            settings.spotify_subscription_check_enabled,
+            catalog,
+        ),
+        checkbox(
+            SettingId::SpotifyFollowPlaylists,
+            "spotify_follow_playlists",
+            settings.spotify_follow_playlists,
+            catalog,
+        ),
         SettingsControl::Command {
             command: SettingsCommand::SpotifyReleases,
             label: catalog.text("spotify_releases_settings").to_owned(),
+        },
+        SettingsControl::Command {
+            command: SettingsCommand::CheckSpotifySubscriptions,
+            label: catalog.text("spotify_subscriptions_check_now").to_owned(),
         },
     ]
 }
@@ -2588,10 +2618,12 @@ mod tests {
             (SettingsSection::Downloads, 26),
             (SettingsSection::Library, 7),
             (SettingsSection::Podcasts, 10),
-            (SettingsSection::Notifications, 5),
+            // 2.1.3 adds Spotify subscription notifications.
+            (SettingsSection::Notifications, 6),
             (SettingsSection::Cookies, 13),
             (SettingsSection::Audiovault, 5),
-            (SettingsSection::Spotify, 8),
+            // 2.1.3 adds two subscription checkboxes and Check now.
+            (SettingsSection::Spotify, 11),
             // Recording has no reset button yet.
             (SettingsSection::Recording, 1),
             // Search, categories, filter, list, capture, four commands, reset.

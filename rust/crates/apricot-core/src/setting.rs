@@ -127,6 +127,9 @@ define_setting_ids! {
     WindowsNotifications => "windows_notifications",
     DownloadNotifications => "download_notifications",
     SubscriptionNotifications => "subscription_notifications",
+    SpotifySubscriptionCheckEnabled => "spotify_subscription_check_enabled",
+    SpotifyFollowPlaylists => "spotify_follow_playlists",
+    SpotifySubscriptionNotifications => "spotify_subscription_notifications",
     LastSubscriptionCheck => "last_subscription_check",
     EnableTrending => "enable_trending",
     EnableHistory => "enable_history",
@@ -153,9 +156,9 @@ mod tests {
     use super::SettingId;
 
     #[test]
-    fn baseline_contains_124_unique_settings() {
+    fn baseline_contains_127_unique_settings() {
         let keys: HashSet<_> = SettingId::ALL.iter().map(|id| id.key()).collect();
-        assert_eq!(SettingId::ALL.len(), 124);
+        assert_eq!(SettingId::ALL.len(), 127);
         assert_eq!(keys.len(), SettingId::ALL.len());
     }
 }

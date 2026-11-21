@@ -187,6 +187,7 @@ pub struct SpotifyService {
     subscriptions_lock: Arc<tokio::sync::Mutex<()>>,
     subscriptions_last_poll: Mutex<Option<Instant>>,
     subscriptions_check_running: Arc<AtomicBool>,
+    subscription_preferences: Mutex<crate::playlist_subscriptions::SubscriptionPreferences>,
     runtime: OnceLock<tokio::runtime::Runtime>,
     sender: Sender<SpotifyEvent>,
     notify: Notify,
@@ -418,6 +419,9 @@ impl SpotifyService {
                 subscriptions_lock: Arc::new(tokio::sync::Mutex::new(())),
                 subscriptions_last_poll: Mutex::new(None),
                 subscriptions_check_running: Arc::new(AtomicBool::new(false)),
+                subscription_preferences: Mutex::new(
+                    crate::playlist_subscriptions::SubscriptionPreferences::default(),
+                ),
                 titles: Arc::default(),
                 api: Arc::new(crate::api::Api::new(Some(
                     app_data.join("spotify").join("pathfinder.json"),
@@ -459,6 +463,24 @@ impl SpotifyService {
         crate::playlist_subscriptions::load(&self.store, &key)
     }
 
+    /// How subscriptions are checked, from the application settings; the
+    /// interface passes them before each poll and each Check now (2.1.3).
+    pub fn set_subscription_preferences(
+        &self,
+        preferences: crate::playlist_subscriptions::SubscriptionPreferences,
+    ) {
+        if let Ok(mut current) = self.subscription_preferences.lock() {
+            *current = preferences;
+        }
+    }
+
+    fn subscription_preferences(&self) -> crate::playlist_subscriptions::SubscriptionPreferences {
+        self.subscription_preferences
+            .lock()
+            .map(|preferences| *preferences)
+            .unwrap_or_default()
+    }
+
     /// All network work stays on the catalog worker; it never owns the transport.
     pub fn subscription_operation(
         &self,
@@ -485,14 +507,22 @@ impl SpotifyService {
         let lock = self.subscriptions_lock.clone();
         let sender = self.sender.clone();
         let notify = self.notify.clone();
+        let preferences = self.subscription_preferences();
         self.runtime().spawn(async move {
             let result = async {
                 let session = session.ok_or(SpotifyError::NoCredentials)?;
                 let account = account.ok_or(SpotifyError::NoCredentials)?;
                 let _guard = lock.lock().await;
-                crate::playlist_subscriptions::execute(&store, &account, &api, &session, command)
-                    .await
-                    .map_err(SpotifyError::Service)
+                crate::playlist_subscriptions::execute(
+                    &store,
+                    &account,
+                    &api,
+                    &session,
+                    command,
+                    preferences,
+                )
+                .await
+                .map_err(SpotifyError::Service)
             }
             .await;
             if checking {
@@ -509,6 +539,7 @@ impl SpotifyService {
     /// Cheap timer hook. Only the connected, selected account is read and no
     /// empty library or not-yet-due playlist causes network work.
     pub fn poll_playlist_subscriptions(&self, stamp: SpotifyStamp) {
+        let preferences = self.subscription_preferences();
         let Some(account) = self.connected_account() else {
             return;
         };
@@ -526,7 +557,11 @@ impl SpotifyService {
         let Ok(document) = crate::playlist_subscriptions::load(&self.store, &account) else {
             return;
         };
-        if !document.check_due(crate::playlist_subscriptions::now()) && document.outbox.is_empty() {
+        // Without automatic checks only waiting notifications are handed
+        // over (2.1.3).
+        let due = preferences.automatic_checks
+            && document.check_due(crate::playlist_subscriptions::now(), preferences);
+        if !due && document.outbox.is_empty() {
             return;
         }
         self.subscription_operation(

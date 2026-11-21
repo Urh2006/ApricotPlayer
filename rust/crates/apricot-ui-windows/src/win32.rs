@@ -1407,6 +1407,9 @@ unsafe extern "system" fn window_proc(
             if let Some(service) = spotify::service(window)
                 && let Some(state) = state_mut(window)
             {
+                service.set_subscription_preferences(
+                    apricot_shell::spotify_subscriptions::preferences(state.application.settings()),
+                );
                 let stamp = state.spotify.epochs_begin();
                 service.poll_playlist_subscriptions(stamp);
             }
@@ -14286,19 +14289,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "playlist_save_current" => playlist_tools::save_current(window),
         "spotify_subscribe_playlist" => spotify_browse::subscribe_selected(window, true),
         "spotify_unsubscribe_playlist" => spotify_browse::subscribe_selected(window, false),
-        "spotify_check_subscriptions" => {
-            if let Some(service) = spotify::service(window)
-                && let Some(state) = state_mut(window)
-            {
-                let stamp = state.spotify.epochs_begin();
-                service.subscription_operation(
-                    stamp,
-                    apricot_spotify::playlist_subscriptions::SubscriptionCommand::Check {
-                        force: true,
-                    },
-                );
-            }
-        }
+        "spotify_check_subscriptions" => check_spotify_subscriptions(window),
         "spotify_toggle_saved" => spotify_browse::toggle_saved(window),
         "spotify_dislike" => spotify_browse::toggle_hidden(window),
         "spotify_daily_mixes" => spotify::show_daily_mixes(window),
@@ -14416,6 +14407,31 @@ unsafe fn finish_current_item(window: HWND) {
 /// announced, over `parent` (2.1, RC 4).
 pub(crate) unsafe fn open_spotify_releases(window: HWND, parent: HWND) {
     spotify::open_releases(window, parent);
+}
+
+/// Check now of the Spotify subscriptions, from the action list or the
+/// Settings window (2.1.3); the report says when it finished.
+pub(crate) unsafe fn check_spotify_subscriptions(window: HWND) {
+    let Some(service) = spotify::service(window) else {
+        if let Some(state) = state(window) {
+            set_status(
+                state,
+                &catalog_text(&state.application, "spotify_not_connected"),
+                true,
+            );
+        }
+        return;
+    };
+    if let Some(state) = state_mut(window) {
+        service.set_subscription_preferences(apricot_shell::spotify_subscriptions::preferences(
+            state.application.settings(),
+        ));
+        let stamp = state.spotify.epochs_begin();
+        service.subscription_operation(
+            stamp,
+            apricot_spotify::playlist_subscriptions::SubscriptionCommand::Check { force: true },
+        );
+    }
 }
 
 pub(crate) unsafe fn navigate_player_to_index(window: HWND, index: usize) {

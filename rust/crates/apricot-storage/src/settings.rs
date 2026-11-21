@@ -151,6 +151,13 @@ pub struct SettingsDocument {
     pub windows_notifications: bool,
     pub download_notifications: bool,
     pub subscription_notifications: bool,
+    /// 2.1.3: Spotify subscriptions are checked on their own.
+    pub spotify_subscription_check_enabled: bool,
+    /// 2.1.3: playlists the Spotify account follows are subscribed.
+    pub spotify_follow_playlists: bool,
+    /// 2.1.3: a system notification for Spotify playlist changes and new
+    /// releases.
+    pub spotify_subscription_notifications: bool,
     pub last_subscription_check: f64,
     pub enable_trending: bool,
     pub enable_history: bool,
@@ -283,6 +290,9 @@ impl Default for SettingsDocument {
             windows_notifications: true,
             download_notifications: true,
             subscription_notifications: true,
+            spotify_subscription_check_enabled: true,
+            spotify_follow_playlists: true,
+            spotify_subscription_notifications: true,
             last_subscription_check: 0.0,
             enable_trending: false,
             enable_history: true,

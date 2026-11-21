@@ -36,6 +36,10 @@ pub struct PlaylistSubscription {
     pub last_checked: u64,
     #[serde(default)]
     pub local_changes: Vec<LocalPlaylistChange>,
+    /// Subscribed because the account follows the playlist, not by hand;
+    /// it is dropped again when the playlist is no longer followed (2.1.3).
+    #[serde(default)]
+    pub automatic: bool,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalPlaylistChange {
@@ -77,8 +81,9 @@ pub struct ReleaseInfo {
 }
 
 /// Which followed artists announce their new releases, like playlist
-/// subscriptions announce changes (2.1, RC 4).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// subscriptions announce changes (2.1, RC 4). Every followed artist
+/// announces until the user chooses otherwise (2.1.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ArtistReleaseOptions {
     /// Every followed artist announces, also one followed later, except the
@@ -97,6 +102,43 @@ pub struct ArtistReleaseOptions {
     pub last_checked: u64,
 }
 
+impl Default for ArtistReleaseOptions {
+    fn default() -> Self {
+        Self {
+            all: true,
+            included: BTreeSet::new(),
+            excluded: BTreeSet::new(),
+            revision: 0,
+            seen: Vec::new(),
+            seeded: false,
+            last_checked: 0,
+        }
+    }
+}
+
+/// How the background check works, from the application settings
+/// (2.1.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SubscriptionPreferences {
+    /// Subscriptions are checked on their own; Check now always works.
+    pub automatic_checks: bool,
+    /// Playlists the account follows are subscribed on their own.
+    pub follow_playlists: bool,
+}
+
+impl Default for SubscriptionPreferences {
+    fn default() -> Self {
+        Self {
+            automatic_checks: true,
+            follow_playlists: true,
+        }
+    }
+}
+
+/// At most this many followed playlists are subscribed in one check, so a
+/// large library is read over several checks instead of at once.
+pub const FOLLOWED_PER_CHECK: usize = 25;
+
 /// The revision of a new artist choice: later than every choice before,
 /// also one made in another window that read the same saved revision, so
 /// the last choice the user made is the one kept (review 5, B19).
@@ -111,6 +153,16 @@ pub fn next_artist_revision(current: u64) -> u64 {
 }
 
 impl ArtistReleaseOptions {
+    /// 2.1.0 to 2.1.2 saved releases as off for every account, also one
+    /// that never chose; such an account now hears every followed artist
+    /// like a new one, until it chooses otherwise (2.1.3).
+    pub fn default_to_all(&mut self) {
+        if self.revision == 0 && !self.any_enabled() {
+            self.all = true;
+            self.seeded = false;
+        }
+    }
+
     /// A choice from the window; an older one than the kept choice is
     /// ignored (review 5, B19).
     pub fn apply_choice(
@@ -207,6 +259,11 @@ pub struct SubscriptionDocument {
     pub outbox: Vec<PlaylistChanges>,
     /// New releases of followed artists (2.1, RC 4).
     pub artists: ArtistReleaseOptions,
+    /// Followed playlists the user unsubscribed by hand; they are not
+    /// subscribed again on their own (2.1.3).
+    pub ignored_followed: BTreeSet<String>,
+    /// When the followed playlists were last read.
+    pub followed_checked: u64,
 }
 impl Default for SubscriptionDocument {
     fn default() -> Self {
@@ -217,6 +274,8 @@ impl Default for SubscriptionDocument {
             history: Vec::new(),
             outbox: Vec::new(),
             artists: ArtistReleaseOptions::default(),
+            ignored_followed: BTreeSet::new(),
+            followed_checked: 0,
         }
     }
 }
@@ -265,7 +324,7 @@ pub fn load(store: &AccountStore, key: &str) -> Result<SubscriptionDocument, Str
     if !path.exists() {
         return Ok(SubscriptionDocument::default());
     }
-    let document: SubscriptionDocument =
+    let mut document: SubscriptionDocument =
         apricot_storage::read_json(&path).map_err(|e| e.to_string())?;
     if document.version != 1 {
         return Err("spotify_sub_data_version".into());
@@ -277,6 +336,7 @@ pub fn load(store: &AccountStore, key: &str) -> Result<SubscriptionDocument, Str
     {
         return Err("spotify_sub_data_invalid".into());
     }
+    document.artists.default_to_all();
     Ok(document)
 }
 
@@ -370,7 +430,14 @@ impl SubscriptionDocument {
         if snapshot.owner_uri == own_uri {
             return Err("spotify_sub_own_playlist".into());
         }
-        if self.entries.iter().any(|entry| entry.uri == snapshot.uri) {
+        self.ignored_followed.remove(&snapshot.uri);
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.uri == snapshot.uri)
+        {
+            // Subscribed by hand, it stays when the playlist is unfollowed.
+            entry.automatic = false;
             return Ok(false);
         }
         self.entries.push(PlaylistSubscription {
@@ -380,8 +447,89 @@ impl SubscriptionDocument {
             baseline: snapshot,
             last_checked: now,
             local_changes: Vec::new(),
+            automatic: false,
         });
         Ok(true)
+    }
+
+    /// Ends a subscription; a followed playlist is then not subscribed again
+    /// on its own (2.1.3).
+    pub fn unsubscribe(&mut self, uri: &str) {
+        if self
+            .entries
+            .iter()
+            .any(|entry| entry.uri == uri && entry.automatic)
+        {
+            self.ignored_followed.insert(uri.to_owned());
+        }
+        self.entries.retain(|entry| entry.uri != uri);
+    }
+
+    /// The followed playlists still to subscribe, at most
+    /// [`FOLLOWED_PER_CHECK`], and drops the automatic subscriptions of
+    /// playlists no longer followed. `followed` is the account's whole
+    /// list of followed playlists as URI and owner URI; the account's own
+    /// playlists are left out (2.1.3).
+    pub fn sync_followed(&mut self, followed: &[(String, String)], own_uri: &str) -> Vec<String> {
+        let followed_uris: BTreeSet<&str> = followed.iter().map(|(uri, _)| uri.as_str()).collect();
+        self.entries
+            .retain(|entry| !entry.automatic || followed_uris.contains(entry.uri.as_str()));
+        self.ignored_followed
+            .retain(|uri| followed_uris.contains(uri.as_str()));
+        let mut seen = BTreeSet::new();
+        followed
+            .iter()
+            .filter(|(uri, owner)| {
+                uri.starts_with("spotify:playlist:")
+                    && !owner.is_empty()
+                    && owner != own_uri
+                    && !self.ignored_followed.contains(uri)
+                    && !self.entries.iter().any(|entry| entry.uri == *uri)
+                    && seen.insert(uri.as_str())
+            })
+            .take(FOLLOWED_PER_CHECK)
+            .map(|(uri, _)| uri.clone())
+            .collect()
+    }
+
+    /// Subscribes a followed playlist on its own, with its current content
+    /// as the silent starting point.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message key for an unknown owner or the account's own list.
+    pub fn subscribe_followed(
+        &mut self,
+        snapshot: PlaylistSnapshot,
+        own_uri: &str,
+        now: u64,
+    ) -> Result<(), String> {
+        let uri = snapshot.uri.clone();
+        if self.ignored_followed.contains(&uri) {
+            return Ok(());
+        }
+        if self.subscribe(snapshot, own_uri, now)?
+            && let Some(entry) = self.entries.iter_mut().find(|entry| entry.uri == uri)
+        {
+            entry.automatic = true;
+        }
+        Ok(())
+    }
+
+    /// A due playlist whose revision did not change was checked without
+    /// reading all of it (2.1.3).
+    pub fn note_unchanged(&mut self, uri: &str, revision: &str, now: u64) -> bool {
+        match self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.uri == uri && entry.baseline.revision == revision)
+        {
+            Some(entry) => {
+                entry.last_checked = now;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Compares a fresh snapshot with the saved one and keeps the changes
@@ -538,11 +686,20 @@ impl SubscriptionDocument {
         found
     }
 
-    /// Whether a scheduled check has work: a due playlist or the release
-    /// feed.
+    /// Whether a scheduled check has work: a due playlist, the release
+    /// feed or, when they are followed on their own, the followed
+    /// playlists.
     #[must_use]
-    pub fn check_due(&self, now: u64) -> bool {
-        !self.due(now, false).is_empty() || self.artists.due(now, self.interval_seconds, false)
+    pub fn check_due(&self, now: u64, preferences: SubscriptionPreferences) -> bool {
+        !self.due(now, false).is_empty()
+            || self.artists.due(now, self.interval_seconds, false)
+            || (preferences.follow_playlists && self.followed_due(now))
+    }
+
+    /// The followed playlists are read again after the check interval.
+    #[must_use]
+    pub fn followed_due(&self, now: u64) -> bool {
+        now.saturating_sub(self.followed_checked) >= self.interval_seconds.clamp(60, 604_800)
     }
 
     pub fn due(&self, now: u64, force: bool) -> Vec<String> {
@@ -605,6 +762,7 @@ pub async fn execute(
     api: &crate::api::Api,
     session: &librespot_core::Session,
     command: SubscriptionCommand,
+    preferences: SubscriptionPreferences,
 ) -> Result<SubscriptionReport, String> {
     let mut document = load(store, account)?;
     let own_uri = format!("spotify:user:{}", session.username());
@@ -624,7 +782,7 @@ pub async fn execute(
             }
         }
         SubscriptionCommand::Unsubscribe(uri) => {
-            document.entries.retain(|entry| entry.uri != uri);
+            document.unsubscribe(&uri);
             "spotify_sub_unsubscribed"
         }
         SubscriptionCommand::Options { uri, options } => {
@@ -656,23 +814,39 @@ pub async fn execute(
             ""
         }
         SubscriptionCommand::Check { force } => {
-            for uri in document.due(now, force) {
-                match snapshot(api, session, &uri).await {
-                    Ok(snapshot) => match document.apply_snapshot(snapshot, &own_uri, now, false) {
-                        Ok(_) => checked += 1,
+            // With automatic checks off a scheduled check only hands over
+            // waiting notifications (2.1.3).
+            if force || preferences.automatic_checks {
+                if preferences.follow_playlists && (force || document.followed_due(now)) {
+                    follow_playlists(&mut document, api, session, &own_uri, now, &mut errors).await;
+                }
+                for uri in document.due(now, force) {
+                    // An unchanged revision needs no full read (2.1.3).
+                    if let Ok(current) = crate::catalog::playlist(api, session, &uri, 0).await
+                        && document.note_unchanged(&uri, &current.revision, now)
+                    {
+                        checked += 1;
+                        continue;
+                    }
+                    match snapshot(api, session, &uri).await {
+                        Ok(snapshot) => {
+                            match document.apply_snapshot(snapshot, &own_uri, now, false) {
+                                Ok(_) => checked += 1,
+                                Err(error) => {
+                                    document.note_failed_check(&uri, now);
+                                    errors.push(error);
+                                }
+                            }
+                        }
                         Err(error) => {
                             document.note_failed_check(&uri, now);
-                            errors.push(error);
+                            errors.push(format!("{uri}: {error}"));
                         }
-                    },
-                    Err(error) => {
-                        document.note_failed_check(&uri, now);
-                        errors.push(format!("{uri}: {error}"));
                     }
                 }
-            }
-            if check_releases(&mut document, api, session, now, force, &mut errors).await {
-                checked += 1;
+                if check_releases(&mut document, api, session, now, force, &mut errors).await {
+                    checked += 1;
+                }
             }
             // A scheduled check works in the background and says nothing;
             // Check now reports that it finished.
@@ -693,6 +867,49 @@ pub async fn execute(
         checked,
         background,
     })
+}
+
+/// Subscribes the playlists the account follows and drops the automatic
+/// subscriptions of playlists no longer followed (2.1.3). A library that
+/// cannot be read changes nothing.
+async fn follow_playlists(
+    document: &mut SubscriptionDocument,
+    api: &crate::api::Api,
+    session: &librespot_core::Session,
+    own_uri: &str,
+    now: u64,
+    errors: &mut Vec<String>,
+) {
+    document.followed_checked = now;
+    let followed = match followed_playlists(api, session).await {
+        Ok(followed) => followed,
+        Err(error) => {
+            errors.push(format!("spotify_sub_followed_failed: {error}"));
+            return;
+        }
+    };
+    for uri in document.sync_followed(&followed, own_uri) {
+        match snapshot(api, session, &uri).await {
+            Ok(snapshot) => {
+                // Another owner than the library said is only skipped.
+                let _ = document.subscribe_followed(snapshot, own_uri, now);
+            }
+            Err(error) => errors.push(format!("{uri}: {error}")),
+        }
+    }
+}
+
+/// The playlists in the account's library, from all folders, as URI and
+/// owner URI.
+async fn followed_playlists(
+    api: &crate::api::Api,
+    session: &librespot_core::Session,
+) -> Result<Vec<(String, String)>, crate::api::ApiError> {
+    Ok(crate::catalog::library_playlists(api, session)
+        .await?
+        .into_iter()
+        .map(|item| (item.uri, item.artist_uri))
+        .collect())
 }
 
 /// The release feed when it is due; `true` when it was read.
@@ -960,6 +1177,7 @@ mod tests {
     fn new_releases_of_turned_on_artists_are_announced_once() {
         const T: u64 = 1_800_000_000;
         let mut doc = SubscriptionDocument::default();
+        doc.artists.set_all(false);
         doc.artists.set("a", true);
         assert!(doc.artists.due(T, doc.interval_seconds, false));
         assert!(
@@ -992,6 +1210,131 @@ mod tests {
                 .is_empty()
         );
         assert!(!doc.artists.due(T + 9001, doc.interval_seconds, false));
+    }
+
+    /// 2.1.3: an account that never chose hears every followed artist, also
+    /// one saved as off by 2.1.2; a choice of off is kept.
+    #[test]
+    fn releases_of_all_followed_artists_are_on_until_turned_off() {
+        let root = tempfile::tempdir().unwrap();
+        let store = AccountStore::new(root.path());
+        let key = crate::accounts::account_key("a");
+        let path = store.account_dir(&key).join("playlist_subscriptions.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // The shape 2.1.2 saved for an account that never chose.
+        std::fs::write(
+            &path,
+            br#"{"version":1,"interval_seconds":3600,"entries":[],"history":[],"outbox":[],
+            "artists":{"all":false,"included":[],"excluded":[],"revision":0,"seen":[],"seeded":false,"last_checked":0}}"#,
+        )
+        .unwrap();
+        let mut document = load(&store, &key).unwrap();
+        assert!(document.artists.all && !document.artists.seeded);
+        assert!(document.artists.due(1_800_000_000, 3600, false));
+        assert!(document.ignored_followed.is_empty());
+        // Turned off in the settings, it stays off.
+        let revision = next_artist_revision(document.artists.revision);
+        document
+            .artists
+            .apply_choice(revision, false, BTreeSet::new(), BTreeSet::new());
+        save(&store, &key, &document).unwrap();
+        assert!(!load(&store, &key).unwrap().artists.any_enabled());
+        assert!(SubscriptionDocument::default().artists.all);
+    }
+
+    /// 2.1.3: followed playlists of others are subscribed on their own, in
+    /// portions; one unsubscribed by hand stays unsubscribed, and an
+    /// automatic one goes when the playlist is unfollowed.
+    #[test]
+    fn followed_playlists_are_subscribed_on_their_own() {
+        const ME: &str = "spotify:user:me";
+        let followed = |uris: &[&str]| -> Vec<(String, String)> {
+            uris.iter()
+                .map(|uri| {
+                    let owner = if uri.ends_with("mine") {
+                        ME
+                    } else {
+                        "spotify:user:spotify"
+                    };
+                    ((*uri).to_owned(), owner.to_owned())
+                })
+                .collect()
+        };
+        let snapshot = |uri: &str| PlaylistSnapshot {
+            uri: uri.into(),
+            name: uri.into(),
+            owner_uri: "spotify:user:spotify".into(),
+            revision: "1".into(),
+            tracks: vec![item("a")],
+        };
+        let mut doc = SubscriptionDocument::default();
+        let all = followed(&[
+            "spotify:playlist:radar",
+            "spotify:playlist:mine",
+            "spotify:playlist:mix",
+            "spotify:album:not",
+        ]);
+        let wanted = doc.sync_followed(&all, ME);
+        assert_eq!(wanted, ["spotify:playlist:radar", "spotify:playlist:mix"]);
+        for uri in &wanted {
+            doc.subscribe_followed(snapshot(uri), ME, 1).unwrap();
+        }
+        assert!(doc.entries.iter().all(|entry| entry.automatic));
+        assert!(doc.sync_followed(&all, ME).is_empty());
+        assert!(doc.outbox.is_empty(), "the first content is silent");
+        // Unsubscribed by hand, it is not subscribed again.
+        doc.unsubscribe("spotify:playlist:mix");
+        assert!(doc.sync_followed(&all, ME).is_empty());
+        // Subscribed by hand, it stays after unfollowing.
+        doc.subscribe(snapshot("spotify:playlist:mix"), ME, 2)
+            .unwrap();
+        assert!(doc.ignored_followed.is_empty());
+        let fewer = followed(&["spotify:playlist:other"]);
+        assert_eq!(doc.sync_followed(&fewer, ME), ["spotify:playlist:other"]);
+        assert_eq!(
+            doc.entries
+                .iter()
+                .map(|entry| entry.uri.as_str())
+                .collect::<Vec<_>>(),
+            ["spotify:playlist:mix"]
+        );
+        // A large library is subscribed over several checks.
+        let many: Vec<_> = (0..60)
+            .map(|index| {
+                (
+                    format!("spotify:playlist:{index}"),
+                    "spotify:user:x".to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(doc.sync_followed(&many, ME).len(), FOLLOWED_PER_CHECK);
+    }
+
+    /// 2.1.3: the followed playlists make a check due on their own, and an
+    /// unchanged revision counts as checked.
+    #[test]
+    fn followed_playlists_make_a_check_due() {
+        const T: u64 = 1_800_000_000;
+        let mut doc = SubscriptionDocument::default();
+        doc.artists.set_all(false);
+        let on = SubscriptionPreferences::default();
+        let off = SubscriptionPreferences {
+            follow_playlists: false,
+            ..on
+        };
+        assert!(doc.check_due(T, on));
+        assert!(!doc.check_due(T, off));
+        doc.followed_checked = T;
+        assert!(!doc.check_due(T + 10, on));
+        doc.subscribe(
+            list("spotify:user:other", &["a"], "r1"),
+            "spotify:user:me",
+            T,
+        )
+        .unwrap();
+        assert!(!doc.note_unchanged("spotify:playlist:list", "r2", T + 4000));
+        assert!(doc.note_unchanged("spotify:playlist:list", "r1", T + 4000));
+        assert!(doc.due(T + 4001, false).is_empty());
     }
 
     /// Review 5, B20: with all on and A turned off, A's release with B,
@@ -1038,6 +1381,8 @@ mod tests {
     #[test]
     fn artist_options_follow_all_and_exceptions() {
         let mut options = ArtistReleaseOptions::default();
+        assert!(options.any_enabled());
+        options.set_all(false);
         assert!(!options.any_enabled());
         options.set_all(true);
         assert!(options.is_enabled("anyone"));

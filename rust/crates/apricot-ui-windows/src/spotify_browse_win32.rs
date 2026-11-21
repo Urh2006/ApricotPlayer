@@ -3465,23 +3465,26 @@ pub(super) unsafe fn subscription_report(
             return;
         }
     };
-    let ids = if let Some(state) = state_mut(window) {
+    let published = if let Some(state) = state_mut(window) {
         match apricot_shell::spotify_subscriptions::publish(&mut state.application, &report) {
-            Ok(ids) => ids,
+            Ok(published) => published,
             Err(error) => {
                 show_error_message(window, &error);
-                Vec::new()
+                apricot_shell::spotify_subscriptions::Published::default()
             }
         }
     } else {
-        Vec::new()
+        apricot_shell::spotify_subscriptions::Published::default()
     };
-    if !ids.is_empty()
+    if !published.acknowledged.is_empty()
         && let Some(service) = super::spotify::service(window)
         && let Some(state) = state_mut(window)
     {
         let stamp = state.spotify.epochs_begin();
-        service.subscription_operation(stamp, SubscriptionCommand::Acknowledge(ids));
+        service.subscription_operation(
+            stamp,
+            SubscriptionCommand::Acknowledge(published.acknowledged),
+        );
     }
     if let Some(state) = state_mut(window) {
         super::sync_notification_center(state);
@@ -3489,11 +3492,30 @@ pub(super) unsafe fn subscription_report(
     let Some(catalog) = state(window).map(super::spotify::catalog) else {
         return;
     };
+    // Like new YouTube videos: a system notification for each change and
+    // one line in the status bar (2.1.3).
+    let system = state(window).is_some_and(|state| {
+        let settings = state.application.settings();
+        settings.windows_notifications && settings.spotify_subscription_notifications
+    });
+    if system {
+        for message in
+            apricot_shell::spotify_subscriptions::system_messages(&catalog, &published.added)
+        {
+            super::show_tray_notification(window, catalog.text("spotify"), &message);
+        }
+    }
     if !report.message.is_empty() {
         super::spotify::announce(
             window,
             &apricot_shell::spotify_subscriptions::report_text(&catalog, &report.message),
         );
+    }
+    // After "checked", so the change itself is what is heard last.
+    if let Some(message) =
+        apricot_shell::spotify_subscriptions::announcement(&catalog, &published.added)
+    {
+        super::spotify::announce(window, &message);
     }
     if !report.errors.is_empty() {
         let errors: Vec<_> = report
