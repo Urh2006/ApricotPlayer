@@ -1604,6 +1604,13 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
                 crate::win32::open_spotify_releases(owner, window);
             }
         }
+        // Like Check subscriptions now: the saved settings, the main window
+        // checks and says when it finished (2.1.3).
+        SettingsCommand::CheckSpotifySubscriptions => {
+            if let Some(owner) = state(window).map(|state| state.owner) {
+                crate::win32::check_spotify_subscriptions(owner);
+            }
+        }
         SettingsCommand::BrowseDownloadFolder => browse_download_folder(window),
         SettingsCommand::SetDefaultPlayer => set_default_player(window),
         // Shown only on macOS.

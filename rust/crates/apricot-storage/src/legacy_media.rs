@@ -6,7 +6,10 @@ use serde_json::{Map, Value};
 pub fn media_item_from_python_value(value: &Value) -> Option<MediaItem> {
     let object = value.as_object()?;
     let kind_text = text(object, "kind").to_ascii_lowercase();
-    let location = first_text(object, &["url", "webpage_url", "local_path", "path"]);
+    let mut location = first_text(object, &["url", "webpage_url", "local_path", "path"]);
+    if location.is_empty() {
+        location = spotify_change_link(object).unwrap_or_default();
+    }
     let local_path = local_path(object, &kind_text, &location);
     let source = media_source(object, &kind_text, local_path.as_deref(), &location);
     let url = if local_path.is_some() {
@@ -127,6 +130,17 @@ pub(crate) fn holds_private_address(value: &Value) -> bool {
         ]
         .iter()
         .any(|key| object.contains_key(*key))
+}
+
+/// A Spotify playlist change or new release saved by 2.1.0 to 2.1.2 has no
+/// link, so it was read back without its item and could not be opened;
+/// its link comes from the change it describes (2.1.3).
+fn spotify_change_link(object: &Map<String, Value>) -> Option<String> {
+    let uri = object
+        .get("spotify_subscription_change")?
+        .get("uri")?
+        .as_str()?;
+    apricot_core::SpotifyRef::parse(uri)?.to_url()
 }
 
 fn text(object: &Map<String, Value>, key: &str) -> String {
@@ -269,6 +283,49 @@ mod tests {
 
     use super::{media_item_from_python_value, media_item_to_python_value};
     use apricot_core::{MediaKind, MediaSource};
+
+    /// 2.1.3: a Spotify playlist change saved by 2.1.2 without a link is
+    /// read back with its item, so Enter in the Notification center opens
+    /// it instead of saying there are no notifications.
+    #[test]
+    fn a_saved_spotify_change_without_a_link_keeps_its_item() {
+        let saved = json!({
+            "spotify_subscription_account": "4a94c6dc9fdcd0a7",
+            "spotify_subscription_change": {
+                "id": "spotify:playlist:37i9dQZEVXbdgXFSsiYVMw:r:1",
+                "uri": "spotify:playlist:37i9dQZEVXbdgXFSsiYVMw",
+                "name": "Release Radar",
+                "timestamp": 1,
+                "added": [],
+                "removed": [],
+                "reordered": false
+            },
+            "title": "Release Radar",
+            "channel": "",
+            "kind": "playlist"
+        });
+        let item = media_item_from_python_value(&saved).expect("item");
+        assert_eq!(item.source, MediaSource::Spotify);
+        assert_eq!(item.kind, MediaKind::Playlist);
+        assert_eq!(
+            item.url.as_ref().map(ToString::to_string).as_deref(),
+            Some("https://open.spotify.com/playlist/37i9dQZEVXbdgXFSsiYVMw")
+        );
+        assert_eq!(
+            item.metadata["spotify_subscription_change"]["name"],
+            "Release Radar"
+        );
+        // Written again, the link is kept and the change is unchanged.
+        let written = media_item_to_python_value(&item);
+        assert_eq!(
+            written["url"],
+            "https://open.spotify.com/playlist/37i9dQZEVXbdgXFSsiYVMw"
+        );
+        assert_eq!(
+            written["spotify_subscription_change"],
+            saved["spotify_subscription_change"]
+        );
+    }
 
     /// Review 4, A1: a private IPTV channel kept in favorites, a playlist
     /// or the queue is written without its address, login or portal

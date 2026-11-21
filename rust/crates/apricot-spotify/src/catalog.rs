@@ -1088,6 +1088,23 @@ pub async fn library(
     library_page(api, session, filter, folder, offset, false).await
 }
 
+/// Every playlist in the library, from all folders, at most 2000; its
+/// `artist_uri` is the owner (2.1.3).
+pub async fn library_playlists(api: &Api, session: &Session) -> Result<Vec<CatalogItem>, ApiError> {
+    let mut playlists = Vec::new();
+    let mut offset = Some(0);
+    while let Some(start) = offset.filter(|start| *start < 2000) {
+        let page = library_page(api, session, LibraryFilter::Playlists, None, start, true).await?;
+        playlists.extend(
+            page.items
+                .into_iter()
+                .filter(|item| item.kind == ItemKind::Playlist),
+        );
+        offset = page.next_offset;
+    }
+    Ok(playlists)
+}
+
 /// Playlists the account may add tracks to, from all folders, newest first.
 pub async fn editable_playlists(
     api: &Api,

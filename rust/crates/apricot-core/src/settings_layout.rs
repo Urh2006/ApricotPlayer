@@ -188,7 +188,13 @@ const NOTIFICATIONS: &[SettingId] = &[
     SettingId::WindowsNotifications,
     SettingId::DownloadNotifications,
     SettingId::SubscriptionNotifications,
+    SettingId::SpotifySubscriptionNotifications,
     SettingId::AppUpdateNotifications,
+];
+
+const SPOTIFY: &[SettingId] = &[
+    SettingId::SpotifySubscriptionCheckEnabled,
+    SettingId::SpotifyFollowPlaylists,
 ];
 
 const COOKIES: &[SettingId] = &[
@@ -267,7 +273,7 @@ pub const SETTINGS_SECTIONS: &[SettingsSectionDefinition] = &[
     SettingsSectionDefinition {
         section: SettingsSection::Spotify,
         label_key: "spotify",
-        reset_fields: &[],
+        reset_fields: SPOTIFY,
     },
     SettingsSectionDefinition {
         section: SettingsSection::Recording,
@@ -306,8 +312,8 @@ mod tests {
                 .iter()
                 .flat_map(|section| section.reset_fields)
                 .count(),
-            // 112 Python placements and eight 2.1 settings.
-            120
+            // 112 Python placements, eight 2.1 settings and three of 2.1.3.
+            123
         );
         assert!(
             SETTINGS_SECTIONS
@@ -326,7 +332,7 @@ mod tests {
         {
             *placement_counts.entry(*id).or_default() += 1;
         }
-        assert_eq!(placement_counts.len(), 119);
+        assert_eq!(placement_counts.len(), 122);
         assert_eq!(
             placement_counts.get(&SettingId::AppUpdateNotifications),
             Some(&2)

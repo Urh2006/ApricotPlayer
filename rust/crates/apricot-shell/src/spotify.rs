@@ -625,6 +625,9 @@ impl Shell {
         }
         self.spotify_browse_refresh_tick();
         if let Some(service) = self.spotify.service.clone() {
+            service.set_subscription_preferences(crate::spotify_subscriptions::preferences(
+                self.application.settings(),
+            ));
             let stamp = self.spotify.epochs.begin();
             service.poll_playlist_subscriptions(stamp);
         }
@@ -856,16 +859,7 @@ impl Shell {
                 return true;
             }
             "spotify_check_subscriptions" => {
-                if let Some(service) = self.spotify_service() {
-                    let stamp = self.spotify.epochs.begin();
-                    service.subscription_operation(
-                        stamp,
-                        apricot_spotify::playlist_subscriptions::SubscriptionCommand::Check {
-                            force: true,
-                        },
-                    );
-                    ui.set_background_polling(true);
-                }
+                self.check_spotify_subscriptions_now(ui);
                 return true;
             }
             "open_spotify" => {

@@ -2,7 +2,7 @@
 
 ApricotPlayer is an accessible media player and downloader for Windows and macOS. Search YouTube and SoundCloud, listen to Spotify, follow podcasts, watch videos, play your own files, and keep everything within reach of the keyboard.
 
-The current stable release is **2.1.2**, written in Rust with native Windows and Mac interfaces. It adds a 15-band equalizer with advanced settings, audio processing, crossfade, a sleep timer, A-B repeat and saved excerpts, subtitles read aloud, an audiobook mode, a playlist editor, file management, Radio, IPTV, recording, converter options, YouTube search suggestions, media keys, global shortcuts, Spotify playlist subscriptions, notifications for new releases of followed Spotify artists, a categorized shortcut editor and settings and bookmark backups to the Spotify and macOS support of 2.0. Its release notes describe every new command and its keys. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
+The current stable release is **2.1.3**, written in Rust with native Windows and Mac interfaces. It adds a 15-band equalizer with advanced settings, audio processing, crossfade, a sleep timer, A-B repeat and saved excerpts, subtitles read aloud, an audiobook mode, a playlist editor, file management, Radio, IPTV, recording, converter options, YouTube search suggestions, media keys, global shortcuts, Spotify playlist subscriptions, notifications for new releases of followed Spotify artists, a categorized shortcut editor and settings and bookmark backups to the Spotify and macOS support of 2.0. Its release notes describe every new command and its keys. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
 
 ## Contents
 
@@ -25,7 +25,7 @@ The current stable release is **2.1.2**, written in Rust with native Windows and
 
 ## Download and install
 
-Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose **2.1.2 or a newer stable release** for everyday use. Releases marked **Pre-release** are optional test versions, offered through the Beta update channel. Read the release notes before installing.
+Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose **2.1.3 or a newer stable release** for everyday use. Releases marked **Pre-release** are optional test versions, offered through the Beta update channel. Read the release notes before installing.
 
 The files under **Source code** are for development. To run ApricotPlayer, download one of the packages below. The packages include the media tools they need; you do not need to install Python, Rust, mpv, or FFmpeg separately.
 
@@ -40,7 +40,7 @@ Windows releases contain the 64-bit build. Settings also provides media-player r
 
 ### macOS
 
-The current Mac package requires an **Apple silicon Mac running macOS 27 or later**. There is no Intel Mac package in the current releases.
+The current Mac package requires an **Apple silicon Mac running macOS 26 or later**. There is no Intel Mac package in the current releases.
 
 1. Download **ApricotPlayer-macOS-arm64.dmg**.
 2. Open the disk image and copy **ApricotPlayer** to **Applications**.
@@ -88,7 +88,7 @@ These are the main-menu entries. Some appear only when there is something to sho
 - **Bookmarks:** return to named positions you saved within media. **Ctrl+Alt+K / Command+Option+K**.
 - **Playlists:** create and use ApricotPlayer playlists, separate from Spotify playlists. **Ctrl+Alt+P / Command+Option+P**.
 - **Subscriptions:** manage subscribed YouTube channels and check for new videos. **Ctrl+Alt+B / Command+Option+B**.
-- **Notification center:** read saved notices about new subscription videos and podcast episodes. **Ctrl+Shift+V / Command+Shift+V**.
+- **Notification center:** read saved notices about new subscription videos, podcast episodes, changes in subscribed Spotify playlists and new releases of followed Spotify artists. **Ctrl+Shift+V / Command+Shift+V**.
 - **History:** revisit played and downloaded items when history is enabled. **Ctrl+Alt+H / Command+Option+H**.
 - **Podcasts / RSS:** search for podcasts, add feeds, and browse episodes. **Ctrl+Alt+R / Command+Option+R**.
 - **File converter:** convert one local audio or video file. There is no dedicated default shortcut.
@@ -190,6 +190,8 @@ Choose Normal, High, or Very High streaming quality, volume normalization, autop
 **Listening-history reporting is experimental and off by default.** Enabling it asks for confirmation and explains the additional account risk. Spotify controls whether submitted records affect recommendations, On Repeat, or statistics. Browsing Spotify history does not require enabling ApricotPlayer's experimental reporting.
 
 **Remember keys of played Spotify songs** is also off by default. It keeps song keys encrypted for your user account so previously played songs can start again without requesting a new key after restarting the app. Turning it off deletes the saved keys. This is not offline music downloading.
+
+**Spotify subscriptions** report changes in playlists and new releases of artists you follow to the Notification center, with a spoken status message and a system notification. Playlists you follow that someone else made are subscribed automatically, and every followed artist is on until you choose otherwise. Subscribe to any other playlist from its context menu, and change a subscription's notifications, its check interval, or unsubscribe in Spotify subscriptions. Settings, Spotify, Subscriptions and notifications turn automatic checks and automatic playlist subscriptions on or off, choose artists, and check now; Settings, Notifications turns off only the Spotify system notifications.
 
 Spotify can temporarily limit how quickly an account starts new songs, especially while skipping rapidly. ApricotPlayer announces the limit, waits, and starts the selected song when allowed. Catalog results, mixes, previews, lyrics, Smart Shuffle, and audiobook access depend on Spotify, your account, and your region.
 

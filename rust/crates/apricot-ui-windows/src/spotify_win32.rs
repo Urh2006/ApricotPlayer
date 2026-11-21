@@ -797,6 +797,9 @@ pub(super) unsafe fn poll(window: HWND) {
     if let Some(state) = state_mut(window)
         && let Some(service) = state.spotify.service.clone()
     {
+        service.set_subscription_preferences(apricot_shell::spotify_subscriptions::preferences(
+            state.application.settings(),
+        ));
         let stamp = state.spotify.epochs_begin();
         service.poll_playlist_subscriptions(stamp);
     }

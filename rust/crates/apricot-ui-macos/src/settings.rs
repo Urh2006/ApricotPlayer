@@ -1482,6 +1482,9 @@ impl SettingsWindow {
             SettingsCommand::SpotifyReleases => {
                 self.with_shell(|shell, ui| shell.settings_spotify_releases(ui));
             }
+            SettingsCommand::CheckSpotifySubscriptions => {
+                self.with_shell(|shell, ui| shell.check_spotify_subscriptions_now(ui));
+            }
             SettingsCommand::BrowseDownloadFolder => self.browse_download_folder(),
             SettingsCommand::ResetEqualizerPreset => self.reset_equalizer_preset(),
             SettingsCommand::AddEqualizerProfile => {
