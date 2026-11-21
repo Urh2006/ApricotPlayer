@@ -143,6 +143,19 @@ pub const FOLLOWED_PER_CHECK: usize = 25;
 /// tried again.
 pub const FOLLOWED_RETRY_SECONDS: u64 = 86_400;
 
+/// Spotify's own personal mixes (daylist, Daily Mix, On Repeat and the
+/// genre or artist mixes) share this id prefix. Their whole content is
+/// replaced every day or every few hours, so following them on their own
+/// would only bring a stream of notifications. They can still be
+/// subscribed by hand.
+const PERSONAL_MIX_PREFIX: &str = "spotify:playlist:37i9dQZF1E";
+
+/// Whether a followed playlist is one of Spotify's rotating personal mixes.
+#[must_use]
+pub fn is_personal_mix(uri: &str, owner_uri: &str) -> bool {
+    owner_uri == "spotify:user:spotify" && uri.starts_with(PERSONAL_MIX_PREFIX)
+}
+
 /// The revision of a new artist choice: later than every choice before,
 /// also one made in another window that read the same saved revision, so
 /// the last choice the user made is the one kept (review 5, B19).
@@ -507,6 +520,7 @@ impl SubscriptionDocument {
                 uri.starts_with("spotify:playlist:")
                     && !owner.is_empty()
                     && owner != own_uri
+                    && !is_personal_mix(uri, owner)
                     && !self.ignored_followed.contains(uri)
                     && !self.followed_failed.contains_key(uri)
                     && !self.entries.iter().any(|entry| entry.uri == *uri)
@@ -1270,6 +1284,33 @@ mod tests {
     /// portions; one unsubscribed by hand stays unsubscribed, and an
     /// automatic one goes when the playlist is unfollowed.
     #[test]
+    fn rotating_personal_mixes_are_not_followed_on_their_own() {
+        const SPOTIFY: &str = "spotify:user:spotify";
+        assert!(is_personal_mix(
+            "spotify:playlist:37i9dQZF1EP6YuccBxUcC1",
+            SPOTIFY
+        ));
+        assert!(is_personal_mix(
+            "spotify:playlist:37i9dQZF1E37jO8SiMT0yN",
+            SPOTIFY
+        ));
+        // Release Radar, Discover Weekly and editorial lists stay.
+        assert!(!is_personal_mix(
+            "spotify:playlist:37i9dQZEVXbsy1ZPDpQqSC",
+            SPOTIFY
+        ));
+        assert!(!is_personal_mix(
+            "spotify:playlist:37i9dQZF1DX0pH2SQMRXnC",
+            SPOTIFY
+        ));
+        // A user's list with a lookalike id is not Spotify's mix.
+        assert!(!is_personal_mix(
+            "spotify:playlist:37i9dQZF1Eabc",
+            "spotify:user:x"
+        ));
+    }
+
+    #[test]
     fn followed_playlists_are_subscribed_on_their_own() {
         const ME: &str = "spotify:user:me";
         let followed = |uris: &[&str]| -> Vec<(String, String)> {
@@ -1297,6 +1338,7 @@ mod tests {
             "spotify:playlist:mine",
             "spotify:playlist:mix",
             "spotify:album:not",
+            "spotify:playlist:37i9dQZF1EP6YuccBxUcC1",
         ]);
         let wanted = doc.sync_followed(&all, true, ME, 1);
         assert_eq!(wanted, ["spotify:playlist:radar", "spotify:playlist:mix"]);

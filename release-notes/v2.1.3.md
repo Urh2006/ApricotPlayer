@@ -8,7 +8,7 @@
 
 ## Added
 
-- Playlists you follow in Spotify are subscribed automatically, so new songs in them reach the Notification center without subscribing to each one by hand. Your own playlists are left out. A followed playlist you unsubscribe from in Spotify subscriptions stays unsubscribed, and an automatic subscription ends when you stop following the playlist. A large library is subscribed in portions of 25 playlists per check.
+- Playlists you follow in Spotify are subscribed automatically, so new songs in them reach the Notification center without subscribing to each one by hand. Your own playlists and Spotify's personal mixes, such as daylist, Daily Mix and On Repeat, are left out, because their content changes every day; you can still subscribe to them by hand. A followed playlist you unsubscribe from in Spotify subscriptions stays unsubscribed, and an automatic subscription ends when you stop following the playlist. A large library is subscribed in portions of 25 playlists per check.
 - Settings, Spotify has a new group, Subscriptions and notifications, with Check Spotify subscriptions automatically, Subscribe to followed playlists automatically, the choice of followed artists and Check Spotify subscriptions now. The former Library and notifications group is now called Library.
 - Settings, Notifications has Spotify subscription notifications, which turns the system notifications for Spotify off without turning off those for YouTube.
 
