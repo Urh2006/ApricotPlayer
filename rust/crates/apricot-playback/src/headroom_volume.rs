@@ -25,6 +25,9 @@ pub struct HeadroomVolume {
     headroom: [Option<f64>; 2],
     /// The volume the worker asked for, before protection.
     requested: f64,
+    /// The share of it a running fade lets through (1 without a fade). It
+    /// applies after the protection, so a fade at a high volume still fades.
+    fade: f64,
 }
 
 impl HeadroomVolume {
@@ -35,6 +38,7 @@ impl HeadroomVolume {
             inner,
             headroom: [None, None],
             requested: options.initial_volume,
+            fade: 1.0,
         };
         engine.headroom = chain_headroom(options.initial_audio_filter.as_deref());
         if (engine.mpv_volume() - engine.requested).abs() > f64::EPSILON {
@@ -51,7 +55,7 @@ impl HeadroomVolume {
     }
 
     fn volume_for(&self, headroom: [Option<f64>; 2]) -> f64 {
-        protected_volume(self.requested, Self::largest_headroom(headroom))
+        protected_volume(self.requested, Self::largest_headroom(headroom)) * self.fade
     }
 
     fn mpv_volume(&self) -> f64 {
@@ -90,8 +94,16 @@ fn chain_headroom(chain: Option<&str>) -> [Option<f64>; 2] {
 
 impl PlaybackEngine for HeadroomVolume {
     fn execute(&mut self, command: PlaybackCommand) -> Result<(), PlaybackError> {
-        if let PlaybackCommand::SetVolume(volume) = command {
+        let fade = match command {
+            PlaybackCommand::SetVolume(volume) => Some((volume, 1.0)),
+            PlaybackCommand::SetFadedVolume { volume, factor } => {
+                Some((volume, factor.clamp(0.0, 1.0)))
+            }
+            _ => None,
+        };
+        if let Some((volume, factor)) = fade {
             self.requested = volume;
+            self.fade = factor;
             return self
                 .inner
                 .execute(PlaybackCommand::SetVolume(self.mpv_volume()));
@@ -277,6 +289,41 @@ mod tests {
             take(&commands),
             [
                 PlaybackCommand::SetVolume(50.0),
+                PlaybackCommand::SetAudioFilter(None)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fade_at_full_volume_still_fades_under_protection() {
+        let (mut engine, commands) = wrapped(Some(protected(EQUALIZER_FILTER_LABEL, 6.0)), 100.0);
+        assert!(take(&commands).is_empty(), "full volume needs no change");
+        // The middle of an equal-power crossfade at 100 % (review of 2.1.2):
+        // protection must not lift both items back to full scale.
+        let factor = std::f64::consts::FRAC_1_SQRT_2.cbrt();
+        engine
+            .execute(PlaybackCommand::SetFadedVolume {
+                volume: 100.0,
+                factor,
+            })
+            .expect("fade");
+        assert!((volume_of(&take(&commands)[0]) - 100.0 * factor).abs() < 1e-9);
+        // At a lower volume the fade scales the protected volume.
+        engine
+            .execute(PlaybackCommand::SetFadedVolume {
+                volume: 50.0,
+                factor: 0.5,
+            })
+            .expect("fade");
+        assert!((volume_of(&take(&commands)[0]) - 25.0 * 10_f64.powf(0.1)).abs() < 1e-9);
+        // An equalizer change during the fade keeps the fade's share.
+        engine
+            .execute(PlaybackCommand::SetAudioFilter(None))
+            .expect("chain");
+        assert_eq!(
+            take(&commands),
+            [
+                PlaybackCommand::SetVolume(25.0),
                 PlaybackCommand::SetAudioFilter(None)
             ]
         );

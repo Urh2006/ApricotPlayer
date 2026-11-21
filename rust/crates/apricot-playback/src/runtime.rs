@@ -112,12 +112,31 @@ fn combined_seek(pending: &PlaybackCommand, next: &PlaybackCommand) -> Option<Pl
 }
 
 /// Volume over the last `seconds` of a file: full until then, silent at the end.
-fn end_fade_volume(target: f64, elapsed: f64, duration: f64, seconds: f64) -> Option<f64> {
+fn end_fade_factor(elapsed: f64, duration: f64, seconds: f64) -> Option<f64> {
     if seconds <= 0.0 || !duration.is_finite() || duration <= seconds * 2.0 {
         return None;
     }
     let remaining = duration - elapsed;
-    (remaining < seconds).then(|| target * (remaining / seconds).clamp(0.0, 1.0))
+    (remaining < seconds).then(|| (remaining / seconds).clamp(0.0, 1.0))
+}
+
+/// The volume command for a fade between `from` and `to`. A fade to or from
+/// silence keeps the chosen volume and its share apart
+/// ([`PlaybackCommand::SetFadedVolume`]).
+fn fade_step(from: f64, to: f64, progress: f64) -> PlaybackCommand {
+    if from <= 0.0 {
+        PlaybackCommand::SetFadedVolume {
+            volume: to,
+            factor: progress,
+        }
+    } else if to <= 0.0 {
+        PlaybackCommand::SetFadedVolume {
+            volume: from,
+            factor: 1.0 - progress,
+        }
+    } else {
+        PlaybackCommand::SetVolume(from + (to - from) * progress)
+    }
 }
 
 #[allow(clippy::too_many_lines)] // Crossfade, end fade and volume fades in one tick.
@@ -145,12 +164,14 @@ fn tick_transitions(
             let progress = (now.saturating_duration_since(started).as_secs_f64() / old.seconds)
                 .clamp(0.0, 1.0);
             let (outgoing_gain, incoming_gain) = crossfade_gains(progress, old.equal_power);
-            let _ = old.engine.execute(PlaybackCommand::SetVolume(
-                old.target_volume * crossfade_volume_factor(outgoing_gain),
-            ));
-            let _ = engine.execute(PlaybackCommand::SetVolume(
-                old.target_volume * crossfade_volume_factor(incoming_gain),
-            ));
+            let _ = old.engine.execute(PlaybackCommand::SetFadedVolume {
+                volume: old.target_volume,
+                factor: crossfade_volume_factor(outgoing_gain),
+            });
+            let _ = engine.execute(PlaybackCommand::SetFadedVolume {
+                volume: old.target_volume,
+                factor: crossfade_volume_factor(incoming_gain),
+            });
             if progress >= 1.0 {
                 *outgoing = None;
             }
@@ -160,20 +181,21 @@ fn tick_transitions(
         }
     }
     if outgoing.is_none() && fade.is_none() {
-        let volume =
-            position
-                .read(*generation)
-                .zip(end_fade.duration)
-                .and_then(|(elapsed, duration)| {
-                    end_fade_volume(end_fade.target, elapsed, duration, end_fade.seconds)
-                });
+        let volume = position
+            .read(*generation)
+            .zip(end_fade.duration)
+            .and_then(|(elapsed, duration)| end_fade_factor(elapsed, duration, end_fade.seconds));
         match volume {
-            Some(volume) => {
+            Some(factor) => {
+                let volume = end_fade.target * factor;
                 if end_fade
                     .applied
                     .is_none_or(|last| (last - volume).abs() >= 0.5)
                 {
-                    let _ = engine.execute(PlaybackCommand::SetVolume(volume));
+                    let _ = engine.execute(PlaybackCommand::SetFadedVolume {
+                        volume: end_fade.target,
+                        factor,
+                    });
                     end_fade.applied = Some(volume);
                 }
             }
@@ -200,9 +222,7 @@ fn tick_transitions(
         .as_secs_f64()
         / task.seconds)
         .clamp(0.0, 1.0);
-    let _ = engine.execute(PlaybackCommand::SetVolume(
-        task.from + (task.to - task.from) * progress,
-    ));
+    let _ = engine.execute(fade_step(task.from, task.to, progress));
     if progress < 1.0 {
         return;
     }
@@ -1700,19 +1720,34 @@ mod tests {
 
 #[cfg(test)]
 mod end_fade_tests {
-    use super::end_fade_volume;
+    use super::{PlaybackCommand, end_fade_factor, fade_step};
 
     #[test]
     fn end_fade_lowers_only_the_last_seconds_of_long_files() {
-        assert_eq!(end_fade_volume(80.0, 50.0, 60.0, 2.0), None);
-        let volume = end_fade_volume(80.0, 59.0, 60.0, 2.0).expect("fading");
-        assert!((volume - 40.0).abs() < 1e-9);
-        assert_eq!(end_fade_volume(80.0, 60.5, 60.0, 2.0), Some(0.0));
+        assert_eq!(end_fade_factor(50.0, 60.0, 2.0), None);
+        let factor = end_fade_factor(59.0, 60.0, 2.0).expect("fading");
+        assert!((factor - 0.5).abs() < 1e-9);
+        assert_eq!(end_fade_factor(60.5, 60.0, 2.0), Some(0.0));
+        assert_eq!(end_fade_factor(3.0, 3.5, 2.0), None, "too short to fade");
+        assert_eq!(end_fade_factor(59.0, 60.0, 0.0), None, "off");
+    }
+
+    #[test]
+    fn fades_to_and_from_silence_keep_the_chosen_volume_apart() {
         assert_eq!(
-            end_fade_volume(80.0, 3.0, 3.5, 2.0),
-            None,
-            "too short to fade"
+            fade_step(0.0, 80.0, 0.25),
+            PlaybackCommand::SetFadedVolume {
+                volume: 80.0,
+                factor: 0.25
+            }
         );
-        assert_eq!(end_fade_volume(80.0, 59.0, 60.0, 0.0), None, "off");
+        assert_eq!(
+            fade_step(80.0, 0.0, 0.25),
+            PlaybackCommand::SetFadedVolume {
+                volume: 80.0,
+                factor: 0.75
+            }
+        );
+        assert_eq!(fade_step(40.0, 80.0, 0.5), PlaybackCommand::SetVolume(60.0));
     }
 }

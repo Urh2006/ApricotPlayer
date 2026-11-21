@@ -237,6 +237,13 @@ impl PlaybackEngine for MpvProcessEngine {
             PlaybackCommand::SetVolume(volume) => {
                 json!(["set_property", "volume", volume.max(0.0)])
             }
+            PlaybackCommand::SetFadedVolume { volume, factor } => {
+                json!([
+                    "set_property",
+                    "volume",
+                    (volume * factor.clamp(0.0, 1.0)).max(0.0)
+                ])
+            }
             PlaybackCommand::SetVolumeMax(volume_max) => {
                 json!(["set_property", "volume-max", volume_max.clamp(1, 300)])
             }

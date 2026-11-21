@@ -1547,6 +1547,7 @@ const fn changes_sound(command: &PlaybackCommand) -> bool {
     matches!(
         command,
         PlaybackCommand::SetVolume(_)
+            | PlaybackCommand::SetFadedVolume { .. }
             | PlaybackCommand::SetVolumeMax(_)
             | PlaybackCommand::SetSpeed(_)
             | PlaybackCommand::SetPitch(_)
@@ -1577,6 +1578,14 @@ fn live_stream_options(item: &apricot_core::MediaItem) -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+fn set_volume_arguments(volume: f64) -> Vec<String> {
+    vec![
+        "set".to_owned(),
+        "volume".to_owned(),
+        volume.max(0.0).to_string(),
+    ]
 }
 
 fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackError> {
@@ -1624,11 +1633,10 @@ fn command_arguments(command: PlaybackCommand) -> Result<Vec<String>, PlaybackEr
             seconds.max(0.0).to_string(),
             if exact { "absolute+exact" } else { "absolute" }.to_owned(),
         ],
-        PlaybackCommand::SetVolume(volume) => vec![
-            "set".to_owned(),
-            "volume".to_owned(),
-            volume.max(0.0).to_string(),
-        ],
+        PlaybackCommand::SetVolume(volume) => set_volume_arguments(volume),
+        PlaybackCommand::SetFadedVolume { volume, factor } => {
+            set_volume_arguments(volume * factor.clamp(0.0, 1.0))
+        }
         PlaybackCommand::SetVolumeMax(volume_max) => vec![
             "set".to_owned(),
             "volume-max".to_owned(),

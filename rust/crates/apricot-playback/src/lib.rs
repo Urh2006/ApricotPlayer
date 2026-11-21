@@ -55,6 +55,14 @@ pub enum PlaybackCommand {
         exact: bool,
     },
     SetVolume(f64),
+    /// One step of a fade or crossfade: `volume` is the volume the person
+    /// chose and `factor` (0 to 1) the share of it the fade lets through.
+    /// mpv hears `volume * factor`; clipping protection raises `volume`
+    /// before the factor, so its cap at full scale never flattens a fade.
+    SetFadedVolume {
+        volume: f64,
+        factor: f64,
+    },
     SetVolumeMax(u16),
     SetSpeed(f64),
     SetPitch(f64),
