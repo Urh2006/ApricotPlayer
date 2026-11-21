@@ -6,10 +6,6 @@ name: Rust Windows package
 # prepare_libmpv.ps1 pins, mpv.exe comes from the same release, and FFmpeg
 # and Node.js follow release.yml. It never publishes a release.
 on:
-  # Temporary: build 2.1.2 from its branch while the workflow is not yet on
-  # the default branch, where workflow_dispatch needs it. Removed before merge.
-  push:
-    branches: [claude/project-thread-3fnm1s]
   workflow_dispatch:
     inputs:
       release_channel:
