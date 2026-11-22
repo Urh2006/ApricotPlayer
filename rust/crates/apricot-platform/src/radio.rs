@@ -13,6 +13,8 @@ const MAX_BYTES: u64 = 8 * 1024 * 1024;
 pub const PAGE_SIZE: usize = 100;
 /// Random stations one Surprise me reads; one of them plays.
 const SURPRISE_POOL: usize = 50;
+/// Samples one Surprise me reads at most when its checks leave none.
+const SURPRISE_DRAWS: usize = 3;
 
 /// Why a catalog request failed; the interface words each case.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -254,6 +256,34 @@ pub struct DirectoryEntry {
     pub country: String,
 }
 
+/// Narrows the catalog query to the list's category. Server-side
+/// narrowing is safe only where no global constraint would be replaced;
+/// the final intersection is always checked locally. Tags add up: the
+/// catalog keeps stations with every tag of the list, so a genre chosen
+/// next to a genre filter for all lists is asked for together (review of
+/// 2.1.4, a random sample would otherwise rarely hold both).
+fn narrow_query(query: &mut Vec<(String, String)>, category: &RadioFilters, global: &RadioFilters) {
+    for (key, value, global) in [
+        ("countrycode", &category.country, &global.country),
+        ("state", &category.region, &global.region),
+        ("language", &category.language, &global.language),
+        ("tagList", &category.tags, &global.tags),
+        ("codec", &category.codec, &global.codec),
+    ] {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if global.trim().is_empty() {
+            query.retain(|(name, _)| name != key);
+            query.push((key.into(), value.to_owned()));
+        } else if key == "tagList" {
+            query.retain(|(name, _)| name != key);
+            query.push((key.into(), format!("{},{value}", global.trim())));
+        }
+    }
+}
+
 /// Countries by name, as a screen reader user finds them by the first
 /// letter: "The Netherlands" is listed as "Netherlands" under N.
 fn sorted_countries(mut entries: Vec<DirectoryEntry>) -> Vec<DirectoryEntry> {
@@ -342,20 +372,28 @@ impl RadioClient {
         avoid: Option<&str>,
     ) -> Result<Option<Station>, RadioError> {
         use rand::seq::IndexedRandom;
-        let page = self.search(request, true)?;
-        let others: Vec<_> = page
-            .stations
-            .iter()
-            .filter(|station| Some(station.stationuuid.as_str()) != avoid)
-            .collect();
-        let pool = if others.is_empty() {
-            page.stations.iter().collect()
-        } else {
-            others
-        };
-        Ok(pool
-            .choose(&mut rand::rng())
-            .map(|station| (*station).clone()))
+        for _ in 0..SURPRISE_DRAWS {
+            let page = self.search(request, true)?;
+            let others: Vec<_> = page
+                .stations
+                .iter()
+                .filter(|station| Some(station.stationuuid.as_str()) != avoid)
+                .collect();
+            let pool = if others.is_empty() {
+                page.stations.iter().collect()
+            } else {
+                others
+            };
+            if let Some(station) = pool.choose(&mut rand::rng()) {
+                return Ok(Some((*station).clone()));
+            }
+            // The catalog had none: another draw would not either. A sample
+            // the local check emptied is drawn again, a few times.
+            if page.next_offset == 0 {
+                break;
+            }
+        }
+        Ok(None)
     }
 
     #[allow(clippy::too_many_lines)] // One query, its filters and the local check.
@@ -427,40 +465,7 @@ impl RadioClient {
             "reverse".into(),
             (order != "name" && order != "random").to_string(),
         ));
-        // Server-side narrowing is safe only where no global constraint would
-        // be replaced; the final intersection is always checked locally.
-        for (key, value, global) in [
-            (
-                "countrycode",
-                &category_filters.country,
-                &request.global_filters.country,
-            ),
-            (
-                "state",
-                &category_filters.region,
-                &request.global_filters.region,
-            ),
-            (
-                "language",
-                &category_filters.language,
-                &request.global_filters.language,
-            ),
-            (
-                "tagList",
-                &category_filters.tags,
-                &request.global_filters.tags,
-            ),
-            (
-                "codec",
-                &category_filters.codec,
-                &request.global_filters.codec,
-            ),
-        ] {
-            if !value.is_empty() && global.is_empty() {
-                query.retain(|(name, _)| name != key);
-                query.push((key.into(), value.clone()));
-            }
-        }
+        narrow_query(&mut query, &category_filters, &request.global_filters);
         let raw: Vec<Station> =
             serde_json::from_value(self.read("json/stations/search", &query, false)?)
                 .map_err(|_| RadioError::InvalidData)?;
@@ -842,5 +847,36 @@ mod tests {
             "{}",
             station.tags
         );
+    }
+
+    /// Review of 2.1.4: a genre chosen next to a genre filter for all
+    /// lists is asked for together; other fields of a filter for all lists
+    /// are never replaced.
+    #[test]
+    fn list_tags_join_the_tag_filter_for_all_lists() {
+        let mut query = Vec::new();
+        let global = super::RadioFilters {
+            tags: "rock".into(),
+            country: "SI".into(),
+            ..super::RadioFilters::default()
+        };
+        global.append_query(&mut query);
+        let category = super::RadioFilters {
+            tags: "jazz".into(),
+            country: "DE".into(),
+            language: "slovenian".into(),
+            ..super::RadioFilters::default()
+        };
+        super::narrow_query(&mut query, &category, &global);
+        let value = |key: &str| {
+            query
+                .iter()
+                .filter(|(name, _)| name == key)
+                .map(|(_, value)| value.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(value("tagList"), ["rock,jazz"]);
+        assert_eq!(value("countrycode"), ["SI"]);
+        assert_eq!(value("language"), ["slovenian"]);
     }
 }
