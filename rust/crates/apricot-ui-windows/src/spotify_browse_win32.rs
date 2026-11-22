@@ -2477,6 +2477,10 @@ pub(super) fn row_menu(state: &WindowState) -> Option<apricot_app::context_menu:
             .and_then(|uri| state.spotify_browse.artist_states.get(&uri).copied()),
         playlist_profile: item.kind == ItemKind::Playlist,
         playlist_published: state.spotify_browse.profile_states.get(&item.uri).copied(),
+        // One Subscribe or Unsubscribe item that follows the state (2.1.4).
+        playlist_subscribed: (item.kind == ItemKind::Playlist)
+            .then(|| state.spotify.service_ref()?.playlist_subscribed(&item.uri))
+            .flatten(),
     })
 }
 

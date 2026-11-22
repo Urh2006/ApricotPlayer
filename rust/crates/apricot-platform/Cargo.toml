@@ -13,6 +13,7 @@ chrono.workspace = true
 encoding_rs.workspace = true
 reqwest = { workspace = true, features = ["cookies"] }
 flate2 = "1.1.10"
+rand.workspace = true
 regex = "1"
 serde_json.workspace = true
 serde.workspace = true

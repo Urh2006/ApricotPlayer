@@ -70,7 +70,7 @@ Pri UI, fokusu ali tipkovnični navigaciji dodaj pravi wxPython smoke test. Pri 
 ## Verzije in objave
 
 - Predizdaje se pripravljajo na veji `beta`; stabilne izdaje se pripravljajo na `main`.
-- Navadna analiza, dokumentacija ali lokalni popravek se ne objavi samodejno. Commit, push, tag, GitHub release ali lokalno namestitev naredi samo, ko uporabnik zahteva objavo oziroma novo verzijo.
+- Ko uporabnik zahteva delo (funkcijo, popravek, dokumentacijo), agent spremembe sam commita, pusha na svojo delovno vejo in odpre PR, brez dodatnega vprašanja. Združitev v `main` ali `beta`, tag, GitHub release in lokalno namestitev naredi, ko uporabnik zahteva objavo oziroma novo verzijo.
 - Pri novi verziji uskladi `apricot/__init__.py`, verzijske konstante, README, `CHANGELOG.md` in `release-notes/v{verzija}.md`.
 - Beta izdaja mora biti GitHub prerelease in mora biti zgrajena iz pravega beta commita oziroma taga.
 - Vsak release mora vsebovati točno `ApricotPlayerSetup.exe` in `ApricotPlayer.zip`.

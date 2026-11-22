@@ -1907,6 +1907,7 @@ impl Shell {
             },
             playlist_profile: item.kind == ItemKind::Playlist,
             playlist_published: self.spotify.browse.profile_states.get(&item.uri).copied(),
+            playlist_subscribed: self.spotify_playlist_subscribed(item),
             main_menu_pin: self.spotify_pin_for_item(item).map(|pin| {
                 self.spotify
                     .hub_pins
@@ -1945,6 +1946,15 @@ impl Shell {
         ))
     }
 
+    /// Whether the playlist row's changes are subscribed, for the one
+    /// Subscribe or Unsubscribe item of its context menu (2.1.4).
+    fn spotify_playlist_subscribed(&self, item: &CatalogItem) -> Option<bool> {
+        if item.kind != ItemKind::Playlist {
+            return None;
+        }
+        self.spotify_service_ref()?.playlist_subscribed(&item.uri)
+    }
+
     fn spotify_hub_pin_context_entries(
         &self,
         ui: &dyn ShellUi,
@@ -1964,6 +1974,7 @@ impl Shell {
                 main_menu_pin: Some(true),
                 playlist_profile: item.kind == ItemKind::Playlist,
                 playlist_published: self.spotify.browse.profile_states.get(&item.uri).copied(),
+                playlist_subscribed: self.spotify_playlist_subscribed(item),
                 radio: item.playable,
                 owner: item.kind == ItemKind::Playlist
                     && item.artist_uri.starts_with("spotify:user:"),
