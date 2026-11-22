@@ -177,6 +177,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "objc2-foundation",
+ "rand 0.9.5",
  "regex",
  "reqwest 0.13.4",
  "roxmltree",

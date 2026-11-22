@@ -109,7 +109,12 @@ enum Work {
         kind: DirectoryKind,
         entries: Vec<DirectoryEntry>,
         offset: usize,
+        /// The list was opened from Surprise me: a choice plays a random
+        /// station of it (2.1.4).
+        surprise: bool,
     },
+    /// A random station for Surprise me, `None` when none matched.
+    Surprise(Option<Station>),
     Iptv {
         source: IptvSource,
         channels: Vec<IptvChannel>,
@@ -162,6 +167,10 @@ pub struct SourcesController {
     /// The localized "Loading" announcement of the current language.
     loading: String,
     hub_selected: usize,
+    /// The row of the Surprise me list, kept for the next surprise.
+    surprise_selected: usize,
+    /// The station Surprise me played last, so the next one differs.
+    surprise_last: Option<String>,
     iptv_selected: usize,
     /// The episodes of `episode_series`, kept apart from the channel list.
     episodes: Vec<IptvChannel>,
@@ -225,6 +234,8 @@ impl Default for SourcesController {
             pending_mark: 0,
             loading: String::new(),
             hub_selected: 0,
+            surprise_selected: 0,
+            surprise_last: None,
             iptv_selected: 0,
             episodes: Vec::new(),
             episode_series: None,
@@ -687,7 +698,23 @@ impl SourcesController {
                 kind,
                 entries,
                 offset,
-            }) => self.radio_directory_list(ui, environment, kind, &entries, offset),
+                surprise,
+            }) => self.radio_directory_list(ui, environment, kind, &entries, offset, surprise),
+            Ok(Work::Surprise(station)) => {
+                let played = station.is_some_and(|station| {
+                    let id = station.stationuuid.clone();
+                    let played =
+                        self.play_station(ui, environment, station, SourceReturn::Surprise);
+                    if played {
+                        self.surprise_last = Some(id);
+                    }
+                    played
+                });
+                if !played {
+                    ui.status(environment.catalog().text("radio_no_stations"), true);
+                    self.radio_navigate(ui, environment, RadioScreen::Surprise);
+                }
+            }
             Ok(Work::Iptv {
                 source,
                 channels,
@@ -783,6 +810,10 @@ impl SourcesController {
         match target {
             SourceReturn::Radio if station == Some(id.as_str()) => {
                 self.radio_navigate(ui, environment, RadioScreen::Stations);
+            }
+            // Back from a surprise: Enter gives the next one (2.1.4).
+            SourceReturn::Surprise if station == Some(id.as_str()) => {
+                self.radio_navigate(ui, environment, RadioScreen::Surprise);
             }
             SourceReturn::Iptv(screen) if channel == Some(id.as_str()) => {
                 self.iptv_navigate(ui, environment, screen);
@@ -898,6 +929,7 @@ impl SourcesController {
                 RadioScreen::Menu => self.radio_hub(ui, environment),
                 RadioScreen::Search => self.search_radio(ui, environment),
                 RadioScreen::Stations => self.radio_list(ui, environment),
+                RadioScreen::Surprise => self.radio_surprise(ui, environment),
                 RadioScreen::Settings => {
                     self.radio_settings(ui, environment);
                     Some(RadioScreen::Menu)
@@ -928,16 +960,15 @@ impl SourcesController {
             &[("open", catalog.text("open"))],
         ))?;
         self.hub_selected = choice.index;
-        match choice.index {
-            0 => return Some(RadioScreen::Search),
-            1 => {
-                self.request.category = RadioCategory::All;
-                self.request.search.clear();
-                self.load_radio(ui, environment, true);
-            }
-            2 | 3 => {
-                self.radio_personal = Some(choice.index == 2);
-                self.station_rows = if choice.index == 2 {
+        let key = RADIO_HUB.get(choice.index).copied().unwrap_or_default();
+        let listed = match key {
+            "radio_search_stations" => return Some(RadioScreen::Search),
+            "radio_surprise" => return Some(RadioScreen::Surprise),
+            "radio_settings" => return Some(RadioScreen::Settings),
+            "favorites" | "radio_recent" => {
+                let favorites = key == "favorites";
+                self.radio_personal = Some(favorites);
+                self.station_rows = if favorites {
                     self.radio.favorites.clone()
                 } else {
                     self.radio.recent.clone()
@@ -950,34 +981,108 @@ impl SourcesController {
                 }
                 return Some(RadioScreen::Stations);
             }
-            index @ 4..=8 => {
-                self.request.category = [
-                    RadioCategory::MostPlayed,
-                    RadioCategory::Trending,
-                    RadioCategory::MostVoted,
-                    RadioCategory::RecentClicks,
-                    RadioCategory::Updated,
-                ][index - 4]
-                    .clone();
-                self.request.search.clear();
-                self.load_radio(ui, environment, true);
+            "radio_all" => RadioCategory::All,
+            "radio_most_played" => RadioCategory::MostPlayed,
+            "radio_trending" => RadioCategory::Trending,
+            "radio_most_voted" => RadioCategory::MostVoted,
+            "radio_recent_clicks" => RadioCategory::RecentClicks,
+            "radio_updated" => RadioCategory::Updated,
+            _ => {
+                if let Some(kind) = directory_kind(key) {
+                    self.load_radio_directory(ui, environment, kind, 0, false);
+                }
+                return None;
             }
-            index @ 9..=13 => self.load_radio_directory(
-                ui,
-                environment,
-                [
-                    DirectoryKind::Countries,
-                    DirectoryKind::Regions,
-                    DirectoryKind::Languages,
-                    DirectoryKind::Tags,
-                    DirectoryKind::Codecs,
-                ][index - 9],
-                0,
-            ),
-            14 => return Some(RadioScreen::Settings),
-            _ => {}
+        };
+        self.request.category = listed;
+        self.request.search.clear();
+        self.load_radio(ui, environment, true);
+        None
+    }
+
+    /// Surprise me (Urh, 22. 11. 2026): a random station from the whole
+    /// catalog, or from a country, region or genre chosen next.
+    fn radio_surprise(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<RadioScreen> {
+        let catalog = environment.catalog();
+        let rows = SURPRISE_ROWS
+            .iter()
+            .map(|(key, _)| catalog.text(key).to_owned())
+            .collect();
+        let choice = ui.browse(&Self::browser(
+            environment,
+            catalog.text("radio_surprise"),
+            rows,
+            self.surprise_selected,
+            &[("open", catalog.text("open"))],
+        ));
+        let Some(choice) = choice else {
+            return Some(RadioScreen::Menu);
+        };
+        self.surprise_selected = choice.index;
+        match SURPRISE_ROWS.get(choice.index).and_then(|(_, kind)| *kind) {
+            Some(kind) => self.load_radio_directory(ui, environment, kind, 0, true),
+            None => self.surprise(ui, environment, RadioCategory::All),
         }
         None
+    }
+
+    /// Reads a random station of the category; it plays when it comes.
+    fn surprise(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        category: RadioCategory,
+    ) {
+        let request = RadioRequest {
+            category,
+            search: String::new(),
+            global_filters: self.radio.global_filters.clone(),
+            local_filters: RadioFilters::default(),
+            offset: 0,
+        };
+        let avoid = self.surprise_last.clone();
+        let proxy = environment.proxy.clone();
+        let catalog = environment.catalog();
+        self.spawn(ui, move || {
+            RadioClient::new(Some(&proxy))
+                .and_then(|client| client.random_station(&request, avoid.as_deref()))
+                .map(Work::Surprise)
+                .map_err(|error| radio_error(&catalog, &error))
+        });
+    }
+
+    /// Plays a station, keeps it in the recently played and tells the
+    /// catalog; `false` when it has no stream.
+    fn play_station(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        station: Station,
+        back: SourceReturn,
+    ) -> bool {
+        let Some(item) = station.media() else {
+            ui.error(environment.catalog().text("radio_no_stream"));
+            return false;
+        };
+        let previous = self.radio.clone();
+        self.radio.played(&station);
+        if let Err(error) = self.save_radio(environment) {
+            self.radio = previous;
+            ui.error(&error);
+        }
+        ui.play(item);
+        self.player_return = Some((back, station.stationuuid.clone()));
+        // The catalog counts plays; nothing waits for the answer.
+        let proxy = environment.proxy.clone();
+        let id = station.stationuuid;
+        std::thread::spawn(move || {
+            let _ = RadioClient::new(Some(&proxy)).and_then(|client| client.clicked(&id));
+        });
+        true
     }
 
     fn search_radio(
@@ -1162,26 +1267,9 @@ impl SourcesController {
             };
             match choice.action.as_str() {
                 "play" | "open" => {
-                    let Some(item) = station.media() else {
-                        ui.error(catalog.text("radio_no_stream"));
-                        continue;
-                    };
-                    let previous = self.radio.clone();
-                    self.radio.played(&station);
-                    if let Err(error) = self.save_radio(environment) {
-                        self.radio = previous;
-                        ui.error(&error);
+                    if self.play_station(ui, environment, station, SourceReturn::Radio) {
+                        return None;
                     }
-                    ui.play(item);
-                    self.player_return = Some((SourceReturn::Radio, station.stationuuid.clone()));
-                    // The catalog counts plays; nothing waits for the answer.
-                    let proxy = environment.proxy.clone();
-                    let id = station.stationuuid;
-                    std::thread::spawn(move || {
-                        let _ =
-                            RadioClient::new(Some(&proxy)).and_then(|client| client.clicked(&id));
-                    });
-                    return None;
                 }
                 "radio_details" => {
                     let mut form = FeatureForm::localized(
@@ -1257,6 +1345,7 @@ impl SourcesController {
         environment: &SourcesEnvironment,
         kind: DirectoryKind,
         offset: usize,
+        surprise: bool,
     ) {
         let proxy = environment.proxy.clone();
         let catalog = environment.catalog();
@@ -1267,6 +1356,7 @@ impl SourcesController {
                     kind,
                     entries,
                     offset,
+                    surprise,
                 })
                 .map_err(|error| radio_error(&catalog, &error))
         });
@@ -1279,6 +1369,7 @@ impl SourcesController {
         kind: DirectoryKind,
         entries: &[DirectoryEntry],
         offset: usize,
+        surprise: bool,
     ) {
         let catalog = environment.catalog();
         // Countries come as one whole list; the others in pages.
@@ -1306,19 +1397,24 @@ impl SourcesController {
                 }
             })
             .collect();
-        let title = catalog.text(RADIO_HUB[9 + directory_index(kind)]);
+        let title = catalog.text(directory_title(kind));
         let Some(choice) = ui.browse(&Self::browser(environment, title, rows, 0, &actions)) else {
-            self.radio_navigate(ui, environment, RadioScreen::Menu);
+            let back = if surprise {
+                RadioScreen::Surprise
+            } else {
+                RadioScreen::Menu
+            };
+            self.radio_navigate(ui, environment, back);
             return;
         };
         if choice.action == "more" {
-            self.load_radio_directory(ui, environment, kind, offset + entries.len());
+            self.load_radio_directory(ui, environment, kind, offset + entries.len(), surprise);
             return;
         }
         let Some(entry) = entries.get(choice.index) else {
             return;
         };
-        self.request.category = match kind {
+        let category = match kind {
             DirectoryKind::Countries => RadioCategory::Country(entry.iso_3166_1.clone()),
             DirectoryKind::Regions => RadioCategory::Region {
                 country: entry.country.clone(),
@@ -1328,6 +1424,11 @@ impl SourcesController {
             DirectoryKind::Tags => RadioCategory::Tag(entry.name.clone()),
             DirectoryKind::Codecs => RadioCategory::Codec(entry.name.clone()),
         };
+        if surprise {
+            self.surprise(ui, environment, category);
+            return;
+        }
+        self.request.category = category;
         self.request.search.clear();
         self.load_radio(ui, environment, true);
     }
@@ -2677,6 +2778,7 @@ enum RadioScreen {
     Menu,
     Search,
     Stations,
+    Surprise,
     Settings,
 }
 
@@ -2687,6 +2789,8 @@ const RECORDING_RATES: [u32; 11] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceReturn {
     Radio,
+    /// A station Surprise me played (2.1.4).
+    Surprise,
     Iptv(IptvScreen),
 }
 
@@ -2922,9 +3026,10 @@ fn recording_error(catalog: &TranslationCatalog, error: &RecordingError) -> Stri
 }
 
 /// The rows of the Radio menu, in order.
-const RADIO_HUB: [&str; 15] = [
+const RADIO_HUB: [&str; 16] = [
     "radio_search_stations",
     "radio_all",
+    "radio_surprise",
     "favorites",
     "radio_recent",
     "radio_most_played",
@@ -2940,15 +3045,38 @@ const RADIO_HUB: [&str; 15] = [
     "radio_settings",
 ];
 
-const fn directory_index(kind: DirectoryKind) -> usize {
-    match kind {
-        DirectoryKind::Countries => 0,
-        DirectoryKind::Regions => 1,
-        DirectoryKind::Languages => 2,
-        DirectoryKind::Tags => 3,
-        DirectoryKind::Codecs => 4,
-    }
+/// The radio menu row that opens a list of countries, regions, languages,
+/// tags or codecs.
+const RADIO_DIRECTORIES: [(&str, DirectoryKind); 5] = [
+    ("radio_countries", DirectoryKind::Countries),
+    ("radio_regions", DirectoryKind::Regions),
+    ("radio_languages", DirectoryKind::Languages),
+    ("radio_tags", DirectoryKind::Tags),
+    ("radio_codecs", DirectoryKind::Codecs),
+];
+
+fn directory_kind(key: &str) -> Option<DirectoryKind> {
+    RADIO_DIRECTORIES
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map(|(_, kind)| *kind)
 }
+
+fn directory_title(kind: DirectoryKind) -> &'static str {
+    RADIO_DIRECTORIES
+        .iter()
+        .find(|(_, listed)| *listed == kind)
+        .map_or("radio_title", |(name, _)| name)
+}
+
+/// Surprise me's rows: the whole catalog, or a random station of the
+/// country, region or genre chosen next (2.1.4).
+const SURPRISE_ROWS: [(&str, Option<DirectoryKind>); 4] = [
+    ("radio_surprise_all", None),
+    ("radio_surprise_country", Some(DirectoryKind::Countries)),
+    ("radio_surprise_region", Some(DirectoryKind::Regions)),
+    ("radio_surprise_tag", Some(DirectoryKind::Tags)),
+];
 
 /// Station actions answer to the shortcuts of the same command elsewhere in
 /// Apricot, so Ctrl+F, Ctrl+L and F7 keep their meaning.
@@ -3175,6 +3303,135 @@ mod tests {
         fn ask_yes_no(&mut self, _message: &str) -> bool {
             false
         }
+    }
+
+    fn unused_environment() -> SourcesEnvironment {
+        SourcesEnvironment {
+            directory: PathBuf::from("unused"),
+            download_directory: PathBuf::from("unused"),
+            ffmpeg: None,
+            proxy: String::new(),
+            shortcuts: BTreeMap::new(),
+            language: "en".into(),
+        }
+    }
+
+    /// 2.1.4: Surprise me follows All stations in the radio menu and lists
+    /// its four choices; Back walks up one list at a time.
+    #[test]
+    fn surprise_me_lists_its_choices_and_back_walks_up() {
+        let environment = unused_environment();
+        let catalog = apricot_app::embedded_catalog("en");
+        let mut controller = SourcesController::default();
+        let mut ui = Browsing::default();
+        ui.answers.extend([Some((2, "open")), None, None]);
+        controller.radio_navigate(&mut ui, &environment, RadioScreen::Menu);
+        assert_eq!(
+            ui.titles,
+            [
+                catalog.text("radio_title"),
+                catalog.text("radio_surprise"),
+                catalog.text("radio_title")
+            ]
+        );
+        assert_eq!(ui.rows[0][1..3], ["All stations", "Surprise me"]);
+        assert_eq!(
+            ui.rows[1],
+            [
+                "Randomize from all stations",
+                "Randomize from a country",
+                "Randomize from a region",
+                "Randomize from a genre or tag"
+            ]
+        );
+        // The hub keeps every list after the new row.
+        assert_eq!(ui.rows[0].len(), RADIO_HUB.len());
+        assert_eq!(
+            directory_kind("radio_tags").map(directory_title),
+            Some("radio_tags")
+        );
+
+        // A country, region or genre list opened from Surprise me goes
+        // back to it.
+        let mut ui = Browsing::default();
+        ui.answers.extend([None, None, None]);
+        let entries = [DirectoryEntry {
+            name: "Slovenia".into(),
+            stationcount: 10,
+            iso_3166_1: "SI".into(),
+            country: String::new(),
+        }];
+        controller.radio_directory_list(
+            &mut ui,
+            &environment,
+            DirectoryKind::Countries,
+            &entries,
+            0,
+            true,
+        );
+        assert_eq!(
+            ui.titles,
+            [
+                catalog.text("radio_countries"),
+                catalog.text("radio_surprise"),
+                catalog.text("radio_title")
+            ]
+        );
+    }
+
+    /// 2.1.4: a surprise plays, is kept as the one to avoid next time, and
+    /// leaving the player returns to Surprise me on the same row; when no
+    /// station matched, Surprise me opens again.
+    #[test]
+    fn a_surprise_plays_and_back_returns_to_surprise_me() {
+        let folder = tempfile::tempdir().unwrap();
+        let environment = SourcesEnvironment {
+            directory: folder.path().to_owned(),
+            ..unused_environment()
+        };
+        let catalog = apricot_app::embedded_catalog("en");
+        let mut controller = SourcesController {
+            surprise_selected: 3,
+            ..SourcesController::default()
+        };
+        let (send, receive) = mpsc::channel();
+        send.send(Ok(Work::Surprise(Some(Station {
+            name: "Random".into(),
+            stationuuid: "random".into(),
+            url: "https://example.test/stream".into(),
+            ..Station::default()
+        }))))
+        .unwrap();
+        controller.pending = Some(receive);
+        let mut ui = Browsing::default();
+        controller.poll(&mut ui, &environment);
+        assert!(ui.titles.is_empty());
+        assert_eq!(controller.surprise_last.as_deref(), Some("random"));
+        // It is kept with the recently played, where it can be found again.
+        assert_eq!(controller.radio.recent[0].stationuuid, "random");
+        assert_eq!(
+            controller.player_return,
+            Some((SourceReturn::Surprise, "random".into()))
+        );
+        ui.answers.extend([None, None]);
+        assert!(controller.resume_after_player(&mut ui, &environment, Some("random"), None));
+        assert_eq!(
+            ui.titles,
+            [catalog.text("radio_surprise"), catalog.text("radio_title")]
+        );
+        assert_eq!(controller.surprise_selected, 3);
+
+        let (send, receive) = mpsc::channel();
+        send.send(Ok(Work::Surprise(None))).unwrap();
+        controller.pending = Some(receive);
+        let mut ui = Browsing::default();
+        ui.answers.extend([None, None]);
+        controller.poll(&mut ui, &environment);
+        assert_eq!(
+            ui.titles,
+            [catalog.text("radio_surprise"), catalog.text("radio_title")]
+        );
+        assert_eq!(controller.surprise_last.as_deref(), Some("random"));
     }
 
     #[test]

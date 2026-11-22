@@ -11,6 +11,8 @@ use url::Url;
 
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 pub const PAGE_SIZE: usize = 100;
+/// Random stations one Surprise me reads; one of them plays.
+const SURPRISE_POOL: usize = 50;
 
 /// Why a catalog request failed; the interface words each case.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -322,13 +324,61 @@ impl RadioClient {
     /// # Errors
     ///
     /// Returns an error when the catalog cannot be read.
-    #[allow(clippy::too_many_lines)] // One query, its filters and the local check.
     pub fn stations(&self, request: &RadioRequest) -> Result<RadioPage, RadioError> {
+        self.search(request, false)
+    }
+
+    /// A random working station of the request's category, for Surprise me
+    /// (2.1.4); `None` when no station matches. The catalog shuffles the
+    /// stations (`order=random`) and one of its answers is drawn here. The
+    /// station `avoid` names plays again only when nothing else matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the catalog cannot be read.
+    pub fn random_station(
+        &self,
+        request: &RadioRequest,
+        avoid: Option<&str>,
+    ) -> Result<Option<Station>, RadioError> {
+        use rand::seq::IndexedRandom;
+        let page = self.search(request, true)?;
+        let others: Vec<_> = page
+            .stations
+            .iter()
+            .filter(|station| Some(station.stationuuid.as_str()) != avoid)
+            .collect();
+        let pool = if others.is_empty() {
+            page.stations.iter().collect()
+        } else {
+            others
+        };
+        Ok(pool
+            .choose(&mut rand::rng())
+            .map(|station| (*station).clone()))
+    }
+
+    #[allow(clippy::too_many_lines)] // One query, its filters and the local check.
+    fn search(&self, request: &RadioRequest, random: bool) -> Result<RadioPage, RadioError> {
         let mut query = vec![
-            ("limit".into(), PAGE_SIZE.to_string()),
-            ("offset".into(), request.offset.to_string()),
+            (
+                "limit".into(),
+                if random { SURPRISE_POOL } else { PAGE_SIZE }.to_string(),
+            ),
+            (
+                "offset".into(),
+                if random { 0 } else { request.offset }.to_string(),
+            ),
         ];
         request.global_filters.append_query(&mut query);
+        // A surprise is a station that works. The catalog keeps answers in
+        // a cache for a while, the random order too: a value it ignores
+        // makes each request its own (checked on de1 and de2, 22. 11. 2026).
+        if random {
+            query.retain(|(name, _)| name != "hidebroken");
+            query.push(("hidebroken".into(), "true".into()));
+            query.push(("draw".into(), rand::random::<u32>().to_string()));
+        }
         if !request.search.trim().is_empty() {
             query.push(("name".into(), request.search.trim().into()));
         }
@@ -371,8 +421,12 @@ impl RadioClient {
                 "name"
             }
         };
+        let order = if random { "random" } else { order };
         query.push(("order".into(), order.into()));
-        query.push(("reverse".into(), (order != "name").to_string()));
+        query.push((
+            "reverse".into(),
+            (order != "name" && order != "random").to_string(),
+        ));
         // Server-side narrowing is safe only where no global constraint would
         // be replaced; the final intersection is always checked locally.
         for (key, value, global) in [
@@ -755,5 +809,38 @@ mod tests {
         library.played(&station);
         library.played(&station);
         assert_eq!(library.recent.len(), 1);
+    }
+
+    /// 2.1.4: Surprise me reads the live catalog; two draws of a country
+    /// are working stations of it and rarely the same.
+    #[test]
+    #[ignore = "reads the live Radio Browser catalog"]
+    fn surprise_draws_working_stations_of_the_category() {
+        let client = RadioClient::new(None).unwrap();
+        let request = RadioRequest {
+            category: RadioCategory::Country("SI".into()),
+            search: String::new(),
+            global_filters: RadioFilters::default(),
+            local_filters: RadioFilters::default(),
+            offset: 0,
+        };
+        let mut names = std::collections::BTreeSet::new();
+        for _ in 0..4 {
+            let station = client.random_station(&request, None).unwrap().unwrap();
+            assert!(station.countrycode.eq_ignore_ascii_case("SI"));
+            assert_eq!(station.lastcheckok, 1);
+            names.insert(station.name);
+        }
+        assert!(names.len() > 1, "{names:?}");
+        let tag = RadioRequest {
+            category: RadioCategory::Tag("jazz".into()),
+            ..request
+        };
+        let station = client.random_station(&tag, None).unwrap().unwrap();
+        assert!(
+            station.tags.to_lowercase().contains("jazz"),
+            "{}",
+            station.tags
+        );
     }
 }

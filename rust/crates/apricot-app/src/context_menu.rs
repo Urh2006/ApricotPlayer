@@ -402,6 +402,8 @@ pub fn spotify_accounts_context_menu(
 pub struct SpotifyRowMenu {
     pub playlist_profile: bool,
     pub playlist_published: Option<bool>,
+    /// The playlist's change notifications are subscribed, when known.
+    pub playlist_subscribed: Option<bool>,
     /// A track or episode that can play.
     pub playable_item: bool,
     /// An album, playlist, artist, show, folder or Liked Songs.
@@ -488,14 +490,16 @@ pub fn spotify_browse_context_menu(
         ));
     }
     if menu.playlist_profile {
-        entries.push(context.command(
-            "spotify_subscribe_playlist",
-            C::PlayerAction("spotify_subscribe_playlist"),
-        ));
-        entries.push(context.command(
-            "spotify_unsubscribe_playlist",
-            C::PlayerAction("spotify_unsubscribe_playlist"),
-        ));
+        // One item that names what it does now (Urh, 22. 11. 2026); both
+        // stay only while the subscription state cannot be read.
+        let subscription = match menu.playlist_subscribed {
+            Some(true) => &["spotify_unsubscribe_playlist"][..],
+            Some(false) => &["spotify_subscribe_playlist"][..],
+            None => &["spotify_subscribe_playlist", "spotify_unsubscribe_playlist"][..],
+        };
+        for &action in subscription {
+            entries.push(context.command(action, C::PlayerAction(action)));
+        }
         if let Some(published) = menu.playlist_published {
             entries.push(context.command(
                 if published {
@@ -1172,6 +1176,39 @@ mod tests {
                 assert!(!menu.contains(&"Save to your library".to_owned()));
                 assert!(!menu.contains(&"Remove from your library".to_owned()));
             }
+        }
+    }
+
+    /// 2.1.4: a playlist offers one subscription item that follows its
+    /// state; both remain only while the state cannot be read.
+    #[test]
+    fn playlist_subscription_is_one_item_that_follows_its_state() {
+        let fixture = Fixture::new();
+        let subscribe = "Subscribe to playlist changes".to_owned();
+        let unsubscribe = "Unsubscribe from playlist changes".to_owned();
+        for (subscribed, expected) in [
+            (Some(true), vec![unsubscribe.clone()]),
+            (Some(false), vec![subscribe.clone()]),
+            (None, vec![subscribe.clone(), unsubscribe.clone()]),
+        ] {
+            let menu = fixture.with(|context| {
+                labels(&spotify_browse_context_menu(
+                    context,
+                    SpotifyRowMenu {
+                        collection: true,
+                        collection_plays: true,
+                        playlist_profile: true,
+                        playlist_subscribed: subscribed,
+                        ..SpotifyRowMenu::default()
+                    },
+                ))
+            });
+            let found: Vec<_> = menu
+                .iter()
+                .filter(|label| **label == subscribe || **label == unsubscribe)
+                .cloned()
+                .collect();
+            assert_eq!(found, expected, "{menu:?}");
         }
     }
 

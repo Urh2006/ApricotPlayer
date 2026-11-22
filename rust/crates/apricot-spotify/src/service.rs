@@ -181,6 +181,7 @@ struct SessionAttempt {
 }
 
 type Notify = Arc<dyn Fn() + Send + Sync>;
+type SubscribedPlaylists = Arc<Mutex<Option<(String, std::collections::BTreeSet<String>)>>>;
 
 pub struct SpotifyService {
     store: AccountStore,
@@ -188,6 +189,10 @@ pub struct SpotifyService {
     subscriptions_last_poll: Mutex<Option<Instant>>,
     subscriptions_check_running: Arc<AtomicBool>,
     subscription_preferences: Mutex<crate::playlist_subscriptions::SubscriptionPreferences>,
+    /// The subscribed playlists of one account, from its last read or
+    /// change, so a context menu names Subscribe or Unsubscribe without
+    /// reading the file each time (2.1.4).
+    subscribed_playlists: SubscribedPlaylists,
     runtime: OnceLock<tokio::runtime::Runtime>,
     sender: Sender<SpotifyEvent>,
     notify: Notify,
@@ -422,6 +427,7 @@ impl SpotifyService {
                 subscription_preferences: Mutex::new(
                     crate::playlist_subscriptions::SubscriptionPreferences::default(),
                 ),
+                subscribed_playlists: Arc::default(),
                 titles: Arc::default(),
                 api: Arc::new(crate::api::Api::new(Some(
                     app_data.join("spotify").join("pathfinder.json"),
@@ -461,6 +467,15 @@ impl SpotifyService {
             .active
             .ok_or("No selected Spotify account")?;
         crate::playlist_subscriptions::load(&self.store, &key)
+    }
+
+    /// Whether the active account is subscribed to the playlist's changes;
+    /// `None` when no account is active or its file cannot be read.
+    pub fn playlist_subscribed(&self, uri: &str) -> Option<bool> {
+        let key = self
+            .connected_account()
+            .or_else(|| self.accounts().active)?;
+        cached_subscription(&self.subscribed_playlists, &self.store, &key, uri)
     }
 
     /// How subscriptions are checked, from the application settings; the
@@ -508,6 +523,7 @@ impl SpotifyService {
         let sender = self.sender.clone();
         let notify = self.notify.clone();
         let preferences = self.subscription_preferences();
+        let subscribed = self.subscribed_playlists.clone();
         self.runtime().spawn(async move {
             let result = async {
                 let session = session.ok_or(SpotifyError::NoCredentials)?;
@@ -527,6 +543,11 @@ impl SpotifyService {
             .await;
             if checking {
                 running.store(false, Ordering::Release);
+            }
+            if let Ok(report) = &result
+                && let Ok(mut cache) = subscribed.lock()
+            {
+                *cache = Some((report.account.clone(), subscribed_uris(&report.document)));
             }
             Self::emit(
                 &sender,
@@ -1373,6 +1394,32 @@ impl SpotifyService {
 
 /// rustls needs one process-wide crypto provider; the dependency graph
 /// enables two (ring and aws-lc-rs), so rustls cannot choose by itself.
+/// Reads the account's subscriptions once; later answers come from the
+/// copy each subscription change refreshes.
+fn cached_subscription(
+    cache: &SubscribedPlaylists,
+    store: &AccountStore,
+    key: &str,
+    uri: &str,
+) -> Option<bool> {
+    let mut cache = cache.lock().ok()?;
+    if cache.as_ref().is_none_or(|(account, _)| account != key) {
+        let document = crate::playlist_subscriptions::load(store, key).ok()?;
+        *cache = Some((key.to_owned(), subscribed_uris(&document)));
+    }
+    cache.as_ref().map(|(_, uris)| uris.contains(uri))
+}
+
+fn subscribed_uris(
+    document: &crate::playlist_subscriptions::SubscriptionDocument,
+) -> std::collections::BTreeSet<String> {
+    document
+        .entries
+        .iter()
+        .map(|entry| entry.uri.clone())
+        .collect()
+}
+
 fn install_tls_provider() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
@@ -1773,5 +1820,80 @@ mod live_tests {
             },
         ));
         eprintln!("open_session: {:?}", result.err());
+    }
+}
+
+#[cfg(test)]
+mod subscription_state_tests {
+    use crate::playlist_subscriptions::{
+        PlaylistSnapshot, PlaylistSubscription, SubscriptionDocument,
+    };
+
+    fn entry(uri: &str) -> PlaylistSubscription {
+        PlaylistSubscription {
+            uri: uri.into(),
+            name: "List".into(),
+            options: crate::playlist_subscriptions::NotificationOptions::default(),
+            baseline: PlaylistSnapshot {
+                uri: uri.into(),
+                name: "List".into(),
+                owner_uri: "spotify:user:other".into(),
+                revision: String::new(),
+                tracks: Vec::new(),
+            },
+            last_checked: 0,
+            local_changes: Vec::new(),
+            automatic: false,
+        }
+    }
+
+    /// 2.1.4: the context menu asks per playlist; the file is read once per
+    /// account and a subscription change refreshes the copy.
+    #[test]
+    fn subscription_state_is_read_once_per_account() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = super::AccountStore::new(temp.path());
+        let subscribed = "spotify:playlist:subscribed";
+        let document = SubscriptionDocument {
+            entries: vec![entry(subscribed)],
+            ..SubscriptionDocument::default()
+        };
+        crate::playlist_subscriptions::save(&store, "aaaaaaaaaaaaaaaa", &document).unwrap();
+        let cache = super::SubscribedPlaylists::default();
+        assert_eq!(
+            super::cached_subscription(&cache, &store, "aaaaaaaaaaaaaaaa", subscribed),
+            Some(true)
+        );
+        assert_eq!(
+            super::cached_subscription(
+                &cache,
+                &store,
+                "aaaaaaaaaaaaaaaa",
+                "spotify:playlist:other"
+            ),
+            Some(false)
+        );
+        // Without a change the copy answers, not the file.
+        crate::playlist_subscriptions::save(
+            &store,
+            "aaaaaaaaaaaaaaaa",
+            &SubscriptionDocument::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            super::cached_subscription(&cache, &store, "aaaaaaaaaaaaaaaa", subscribed),
+            Some(true)
+        );
+        // Another account reads its own file.
+        assert_eq!(
+            super::cached_subscription(&cache, &store, "bbbbbbbbbbbbbbbb", subscribed),
+            Some(false)
+        );
+        *cache.lock().unwrap() =
+            Some(("aaaaaaaaaaaaaaaa".into(), super::subscribed_uris(&document)));
+        assert_eq!(
+            super::cached_subscription(&cache, &store, "aaaaaaaaaaaaaaaa", subscribed),
+            Some(true)
+        );
     }
 }
