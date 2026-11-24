@@ -937,12 +937,7 @@ impl Shell {
             item: item.clone(),
             mode,
         });
-        if item.is_catalog_stream()
-            || !matches!(
-                item.source,
-                MediaSource::Youtube | MediaSource::Soundcloud | MediaSource::Direct
-            )
-        {
+        if !item.starts_through_resolver() {
             self.start_player_at(ui, item, session_shuffle, start_position_seconds);
             return;
         }

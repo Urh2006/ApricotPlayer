@@ -1513,7 +1513,7 @@ unsafe extern "system" fn window_proc(
                 drop(state);
                 SetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0), 0);
             }
-            apricot_platform::stop_playback_resolver();
+            apricot_platform::stop_warm_processes();
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -4644,14 +4644,7 @@ unsafe fn start_media_item_with_options(
         item: item.clone(),
         mode,
     });
-    if item.is_catalog_stream()
-        || !matches!(
-            item.source,
-            apricot_core::MediaSource::Youtube
-                | apricot_core::MediaSource::Soundcloud
-                | apricot_core::MediaSource::Direct
-        )
-    {
+    if !item.starts_through_resolver() {
         let background = std::mem::take(&mut state.background_start);
         start_player_at(
             window,
@@ -5538,6 +5531,7 @@ unsafe fn show_search(window: HWND) {
     set_status(state, &catalog_text(&state.application, "ready"), false);
     layout_controls_state(window, state);
     let _ = SetFocus(Some(state.search_edit));
+    prewarm_search(state);
 }
 
 unsafe fn show_trending(window: HWND) {
@@ -5730,6 +5724,27 @@ fn prewarm_playback_resolver(state: &mut WindowState) {
     });
 }
 
+/// A saved list that plays through yt-dlp starts it as the list opens, so
+/// the first Enter does not wait for yt-dlp to start (2.1.6).
+fn prewarm_for_saved_list(state: &mut WindowState, list: apricot_app::SavedList) {
+    if state.application.saved_list_plays_through_resolver(list) {
+        prewarm_playback_resolver(state);
+    }
+}
+
+/// The search screen starts yt-dlp for the search being typed (2.1.6).
+fn prewarm_search(state: &mut WindowState) {
+    let Some(components) = application_directory().map(|path| path.join("components")) else {
+        return;
+    };
+    let executable = apricot_platform::app_update::preferred_ytdlp_executable(&components);
+    let config = youtube_session_config(state);
+    let requested = state.application.search_results_requested();
+    std::thread::spawn(move || {
+        apricot_platform::ytdlp_youtube::prewarm_search(&executable, config, requested);
+    });
+}
+
 unsafe fn show_media_collection(window: HWND, view: MainView) {
     remember_menu_item(
         window,
@@ -5764,6 +5779,14 @@ unsafe fn show_media_collection(window: HWND, view: MainView) {
     state.view = view;
     refresh_media_collection(state, true);
     layout_controls_state(window, state);
+    prewarm_for_saved_list(
+        state,
+        if view == MainView::History {
+            apricot_app::SavedList::History
+        } else {
+            apricot_app::SavedList::Favorites
+        },
+    );
 }
 
 unsafe fn show_notification_center(window: HWND) {
@@ -5785,6 +5808,7 @@ unsafe fn show_notification_center(window: HWND) {
     // Python `show_notification_center` only moves focus to the list.
     refresh_notification_center(state, true, false, None);
     layout_controls_state(window, state);
+    prewarm_for_saved_list(state, apricot_app::SavedList::Notifications);
 }
 
 unsafe fn show_subscriptions(window: HWND) {
@@ -5816,6 +5840,7 @@ unsafe fn show_subscriptions(window: HWND) {
     set_control_text(state, state.subscription_set_category, "set_category");
     refresh_subscriptions(state, true, None);
     layout_controls_state(window, state);
+    prewarm_for_saved_list(state, apricot_app::SavedList::Subscriptions);
 }
 
 unsafe fn show_rss_feeds(window: HWND) {
@@ -8152,6 +8177,7 @@ unsafe fn show_user_playlists(window: HWND) {
     state.view = MainView::UserPlaylists;
     refresh_user_playlists(state, true);
     layout_controls_state(window, state);
+    prewarm_for_saved_list(state, apricot_app::SavedList::UserPlaylists);
 }
 
 unsafe fn open_selected_user_playlist(window: HWND) {
@@ -8194,6 +8220,7 @@ unsafe fn show_user_playlist_items(window: HWND, playlist_index: usize, push_rou
     state.view = MainView::UserPlaylistItems;
     refresh_user_playlist_items(state, true, false);
     layout_controls_state(window, state);
+    prewarm_for_saved_list(state, apricot_app::SavedList::UserPlaylist(playlist_index));
     playlist_tools::start_resolution(window, playlist_index);
 }
 

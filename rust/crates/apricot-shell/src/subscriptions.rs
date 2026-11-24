@@ -150,6 +150,7 @@ impl Shell {
         }
         self.view = View::Subscriptions;
         self.refresh_subscriptions(ui, true, None);
+        self.prewarm_for_saved_list(apricot_app::SavedList::Subscriptions);
     }
 
     /// Python `refresh_subscriptions`: keeps the selected subscription, or
@@ -236,6 +237,7 @@ impl Shell {
         self.view = View::NotificationCenter;
         // Python `show_notification_center` only moves focus to the list.
         self.refresh_notification_center(ui, true, false, None);
+        self.prewarm_for_saved_list(apricot_app::SavedList::Notifications);
     }
 
     /// Windows `refresh_notification_center` with the Python Tab order:

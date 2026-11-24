@@ -1627,3 +1627,33 @@ Urhove zahteve z dne 2. 10. 2026:
   dejanj in napake se izgovorijo. Preizkus z nadomestnim NVDA odjemalcem: iskanje in nalaganje
   več rezultatov ne izgovorita ničesar, Enter na rezultatu samo "Playing: naslov". Možnost
   zgovornosti v nastavitvah sledi v beta.2 (Urh).
+
+### Pohitritve iskanja in začetka predvajanja, 2.1.6 (24. 11. 2026)
+
+- **O-23.** Iskanje tipa All in Video ne zažene več vzporednega iskanja Shorts (Python
+  `youtube_search_results_with_shorts`). Izmerjeno 24. 11. 2026: Shorts iskanje traja 7 do 9 s,
+  glavno 1 do 2,5 s, zato Shorts niso bili nikoli vmešani (tudi v Pythonu ne, ki jih vmeša samo,
+  ko so pred glavnimi rezultati), glavno iskanje pa je upočasnil za okoli 0,3 s in tekel še
+  sekunde po njem. Videi kanala še vedno vmešajo Shorts kanala. Tip Video išče z naslovom
+  `results?search_query=...&sp=EgIQAfABAQ==`, kar je ista zahteva kot Pythonov
+  `ytsearch{n}:` (yt-dlp `YoutubeSearchIE._SEARCH_PARAMS`), le da je poizvedba v ASCII in jo
+  zato lahko sprejme ogret yt-dlp. Urh je 24. 11. 2026 naročil ta nabor pohitritev.
+- Ogret yt-dlp za iskanje (`--flat-playlist ... --batch-file -`) se zažene ob odprtju zaslona
+  Search in po vsakem iskanju; vzame ga tudi playlist ali kanal z enakim številom elementov.
+  Ogret resolver se zažene še ob odprtju Favorites, History, Playlists, Subscriptions in
+  Notification center, kadar seznam vsebuje element, ki gre skozi yt-dlp
+  (`MediaItem::starts_through_resolver`), na Windows in Mac. Oba se ustavita ob izhodu
+  (`stop_warm_processes`). Vrstica batch datoteke mora biti ASCII brez " #", ker yt-dlp
+  standardni vhod bere s kodno stranjo sistema in reže komentarje; drugače gre zahteva po
+  hladni poti.
+- Vsak klic z `--dump-single-json` vrne rezultat takoj, ko je prva vrstica en cel JSON;
+  izhod yt-dlp (okoli 0,4 s) počaka nit v ozadju in ga po 10 s ustavi. `YoutubeSearchService`
+  ne pošlje znova enake konfiguracije, ki jo je runtime že potrdil.
+- Meritve z istim yt-dlp 2026.11.23 skozi `YoutubeSearchService`: iskanje 2,6 do 3,7 s pred,
+  1,1 do 2,0 s po (ogreto); predvajanje z ogretim resolverjem 2,8 do 3,2 s pred, 2,4 do 2,6 s
+  po; prvo predvajanje iz Favorites prej hladno 4,4 do 4,5 s, zdaj ogreto 2,4 do 2,6 s. V
+  aplikaciji na ločenem namizju: iskanje 1,26 s in 1,46 s (tudi z "čevapčiči recept"),
+  Favorites zažene ogret resolver brez dodatnega govora, po izhodu ni ostal noben yt-dlp.
+- Ni spremenjeno: izbira HLS formatov (dolgi testi so pokazali, da je DASH slabši), lastno
+  InnerTube iskanje (odločitev: YouTube vedno prek yt-dlp), Spotify, radio in Direct link
+  povezave na druge strani (te pred yt-dlp naredijo en HTTP preizkus za radijski tok).

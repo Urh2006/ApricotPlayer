@@ -1388,7 +1388,7 @@ impl Shell {
         if let Some(message) = self.sources.finish_recording(&catalog) {
             save_recording_notice(&mut self.application, &message);
         }
-        apricot_platform::stop_playback_resolver();
+        apricot_platform::stop_warm_processes();
     }
 }
 

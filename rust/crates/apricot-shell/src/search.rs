@@ -198,6 +198,7 @@ impl Shell {
         ui.show_list_screen(&screen);
         ui.set_status(&self.text("ready"), false);
         ui.focus_screen_control("search_query");
+        self.prewarm_search();
     }
 
     /// Windows `search_provider_changed`: the type list follows the

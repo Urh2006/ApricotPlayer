@@ -121,6 +121,18 @@ impl MediaItem {
             || self.metadata.contains_key("iptv_channel_id")
     }
 
+    /// Playing it first asks yt-dlp for the stream (`YouTube`, `SoundCloud`
+    /// and web links), so a list of such items may start yt-dlp ahead of
+    /// Enter (2.1.6).
+    #[must_use]
+    pub fn starts_through_resolver(&self) -> bool {
+        matches!(
+            self.source,
+            MediaSource::Youtube | MediaSource::Soundcloud | MediaSource::Direct
+        ) && !self.is_catalog_stream()
+            && !self.is_saved_iptv_reference()
+    }
+
     /// The address carries a login, so the item is not kept in history or
     /// resume positions.
     /// Points a local item at its renamed file: the path, an id that was the
@@ -458,6 +470,36 @@ mod tests {
             duration_seconds: None,
             metadata: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn only_youtube_soundcloud_and_web_links_start_through_yt_dlp() {
+        let video = item(MediaKind::Video);
+        assert!(video.starts_through_resolver());
+        let mut soundcloud = video.clone();
+        soundcloud.source = MediaSource::Soundcloud;
+        assert!(soundcloud.starts_through_resolver());
+        for source in [
+            MediaSource::Local,
+            MediaSource::Podcast,
+            MediaSource::Audiovault,
+            MediaSource::Spotify,
+        ] {
+            let mut other = video.clone();
+            other.source = source;
+            assert!(!other.starts_through_resolver(), "{source:?}");
+        }
+        let mut station = video.clone();
+        station.source = MediaSource::Direct;
+        assert!(station.starts_through_resolver());
+        station
+            .metadata
+            .insert("radio_station_id".to_owned(), "station".into());
+        assert!(!station.starts_through_resolver());
+        let mut saved_iptv = video;
+        saved_iptv.source = MediaSource::Direct;
+        saved_iptv.url = Some("apricot-iptv://saved/source/channel".parse().expect("URL"));
+        assert!(!saved_iptv.starts_through_resolver());
     }
 
     #[test]

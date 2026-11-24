@@ -64,6 +64,7 @@ impl Shell {
         }
         self.view = View::UserPlaylists;
         self.refresh_user_playlists(ui, true);
+        self.prewarm_for_saved_list(apricot_app::SavedList::UserPlaylists);
     }
 
     /// Windows `refresh_user_playlists` with the Windows Tab order: Back,
@@ -144,6 +145,7 @@ impl Shell {
         self.view = View::UserPlaylistItems;
         self.start_playlist_resolution(ui, playlist_index);
         self.refresh_user_playlist_items(ui, true, false);
+        self.prewarm_for_saved_list(apricot_app::SavedList::UserPlaylist(playlist_index));
     }
 
     /// Windows `refresh_user_playlist_items` with the Windows Tab order:

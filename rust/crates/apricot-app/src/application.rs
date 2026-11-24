@@ -53,6 +53,17 @@ pub enum PlayerNavigationOutcome {
     Unavailable,
 }
 
+/// A saved list that may start yt-dlp ahead of Enter when it opens (2.1.6).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SavedList {
+    Favorites,
+    History,
+    UserPlaylists,
+    UserPlaylist(usize),
+    Notifications,
+    Subscriptions,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LastSessionResume {
     pub item: MediaItem,
@@ -1286,6 +1297,39 @@ impl Application {
             Value::String(category_code.to_owned()),
         );
         self.state.navigation.replace(frame);
+    }
+
+    /// How many results the next search asks for, as
+    /// [`Self::begin_youtube_search`] does.
+    #[must_use]
+    pub fn search_results_requested(&self) -> u32 {
+        SearchSession::initial_limit(self.settings.current().results_limit)
+    }
+
+    /// The list holds something that plays through yt-dlp, so opening it
+    /// may start yt-dlp for the next Enter (2.1.6). Subscriptions open a
+    /// channel's videos, which play through yt-dlp.
+    #[must_use]
+    pub fn saved_list_plays_through_resolver(&self, list: SavedList) -> bool {
+        let any = |items: &[MediaItem]| items.iter().any(MediaItem::starts_through_resolver);
+        match list {
+            SavedList::Favorites => any(self.favorites()),
+            SavedList::History => self.settings.current().enable_history && any(self.history()),
+            SavedList::UserPlaylists => self
+                .user_playlists()
+                .iter()
+                .any(|playlist| any(&playlist.items)),
+            SavedList::UserPlaylist(index) => self
+                .user_playlists()
+                .get(index)
+                .is_some_and(|playlist| any(&playlist.items)),
+            SavedList::Notifications => self
+                .notifications()
+                .iter()
+                .filter_map(|notification| notification.item.as_ref())
+                .any(MediaItem::starts_through_resolver),
+            SavedList::Subscriptions => !self.subscriptions().is_empty(),
+        }
     }
 
     /// Starts a `YouTube` search using the current result-limit setting.
