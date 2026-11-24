@@ -71,6 +71,8 @@ mod spotify_releases_win32;
 #[cfg(windows)]
 mod spotify_settings_win32;
 #[cfg(windows)]
+mod type_ahead_win32;
+#[cfg(windows)]
 mod update_win32;
 #[cfg(windows)]
 mod win32;

@@ -115,6 +115,9 @@ enum Work {
     },
     /// A random station for Surprise me, `None` when none matched.
     Surprise(Option<Station>),
+    /// A station of My stations whose playlist was read: the station with
+    /// the stream it named, or why it cannot play (2.1.5).
+    MyStation(Result<Station, String>),
     Iptv {
         source: IptvSource,
         channels: Vec<IptvChannel>,
@@ -171,6 +174,8 @@ pub struct SourcesController {
     surprise_selected: usize,
     /// The station Surprise me played last, so the next one differs.
     surprise_last: Option<String>,
+    /// The row of My stations.
+    my_station_selected: usize,
     iptv_selected: usize,
     /// The episodes of `episode_series`, kept apart from the channel list.
     episodes: Vec<IptvChannel>,
@@ -236,6 +241,7 @@ impl Default for SourcesController {
             hub_selected: 0,
             surprise_selected: 0,
             surprise_last: None,
+            my_station_selected: 0,
             iptv_selected: 0,
             episodes: Vec::new(),
             episode_series: None,
@@ -700,6 +706,20 @@ impl SourcesController {
                 offset,
                 surprise,
             }) => self.radio_directory_list(ui, environment, kind, &entries, offset, surprise),
+            Ok(Work::MyStation(station)) => {
+                let played = match station {
+                    Ok(station) => {
+                        self.play_station(ui, environment, station, SourceReturn::MyStations)
+                    }
+                    Err(error) => {
+                        ui.error(&error);
+                        false
+                    }
+                };
+                if !played {
+                    self.radio_navigate(ui, environment, RadioScreen::MyStations);
+                }
+            }
             Ok(Work::Surprise(station)) => {
                 let played = station.is_some_and(|station| {
                     let id = station.stationuuid.clone();
@@ -814,6 +834,9 @@ impl SourcesController {
             // Back from a surprise: Enter gives the next one (2.1.4).
             SourceReturn::Surprise if station == Some(id.as_str()) => {
                 self.radio_navigate(ui, environment, RadioScreen::Surprise);
+            }
+            SourceReturn::MyStations if station == Some(id.as_str()) => {
+                self.radio_navigate(ui, environment, RadioScreen::MyStations);
             }
             SourceReturn::Iptv(screen) if channel == Some(id.as_str()) => {
                 self.iptv_navigate(ui, environment, screen);
@@ -930,6 +953,7 @@ impl SourcesController {
                 RadioScreen::Search => self.search_radio(ui, environment),
                 RadioScreen::Stations => self.radio_list(ui, environment),
                 RadioScreen::Surprise => self.radio_surprise(ui, environment),
+                RadioScreen::MyStations => self.my_stations(ui, environment),
                 RadioScreen::Settings => {
                     self.radio_settings(ui, environment);
                     Some(RadioScreen::Menu)
@@ -964,6 +988,7 @@ impl SourcesController {
         let listed = match key {
             "radio_search_stations" => return Some(RadioScreen::Search),
             "radio_surprise" => return Some(RadioScreen::Surprise),
+            "radio_my_stations" => return Some(RadioScreen::MyStations),
             "radio_settings" => return Some(RadioScreen::Settings),
             "favorites" | "radio_recent" => {
                 let favorites = key == "favorites";
@@ -1076,6 +1101,9 @@ impl SourcesController {
         }
         ui.play(item);
         self.player_return = Some((back, station.stationuuid.clone()));
+        if station.is_my_station() {
+            return true;
+        }
         // The catalog counts plays; nothing waits for the answer.
         let proxy = environment.proxy.clone();
         let id = station.stationuuid;
@@ -1182,26 +1210,7 @@ impl SourcesController {
                 &actions,
             );
             catalog.text("radio_title").clone_into(&mut browser.title);
-            // The menu says what the command does to the selected station.
-            if let Some(favorite) = browser
-                .actions
-                .iter_mut()
-                .find(|action| action.id == "radio_favorite")
-            {
-                favorite.row_labels = self
-                    .station_rows
-                    .iter()
-                    .map(|station| {
-                        catalog
-                            .text(if self.radio.is_favorite(station) {
-                                "radio_favorite_remove"
-                            } else {
-                                "radio_favorite_add"
-                            })
-                            .to_owned()
-                    })
-                    .collect();
-            }
+            self.label_favorite_rows(&mut browser, &catalog, &self.station_rows);
             let Some(choice) = ui.browse(&browser) else {
                 // Back returns to the radio menu.
                 return Some(RadioScreen::Menu);
@@ -1284,31 +1293,8 @@ impl SourcesController {
                     catalog.text("ok").clone_into(&mut form.submit);
                     let _ = ui.form(&form);
                 }
-                "radio_favorite" => {
-                    let previous = self.radio.clone();
-                    let added = self.radio.toggle_favorite(&station);
-                    match self.save_radio(environment) {
-                        Ok(()) => ui.status(
-                            catalog.text(if added {
-                                "radio_favorite_added"
-                            } else {
-                                "radio_favorite_removed"
-                            }),
-                            true,
-                        ),
-                        Err(error) => {
-                            self.radio = previous;
-                            ui.error(&error);
-                        }
-                    }
-                }
-                "radio_copy_url" => {
-                    if let Some(url) = station.stream_url()
-                        && ui.copy(url.as_str())
-                    {
-                        ui.status(catalog.text("url_copied"), true);
-                    }
-                }
+                "radio_favorite" => self.toggle_station_favorite(ui, environment, &station),
+                "radio_copy_url" => copy_station_url(ui, &catalog, &station),
                 "radio_copy_name" => {
                     if ui.copy(&station.name) {
                         ui.status(catalog.text("radio_name_copied"), true);
@@ -1336,6 +1322,252 @@ impl SourcesController {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// The menu says what the favorite command does to each station.
+    fn label_favorite_rows(
+        &self,
+        browser: &mut SourceBrowser,
+        catalog: &TranslationCatalog,
+        stations: &[Station],
+    ) {
+        if let Some(favorite) = browser
+            .actions
+            .iter_mut()
+            .find(|action| action.id == "radio_favorite")
+        {
+            favorite.row_labels = stations
+                .iter()
+                .map(|station| {
+                    catalog
+                        .text(if self.radio.is_favorite(station) {
+                            "radio_favorite_remove"
+                        } else {
+                            "radio_favorite_add"
+                        })
+                        .to_owned()
+                })
+                .collect();
+        }
+    }
+
+    fn toggle_station_favorite(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        station: &Station,
+    ) {
+        let catalog = environment.catalog();
+        let previous = self.radio.clone();
+        let added = self.radio.toggle_favorite(station);
+        match self.save_radio(environment) {
+            Ok(()) => ui.status(
+                catalog.text(if added {
+                    "radio_favorite_added"
+                } else {
+                    "radio_favorite_removed"
+                }),
+                true,
+            ),
+            Err(error) => {
+                self.radio = previous;
+                ui.error(&error);
+            }
+        }
+    }
+
+    /// My stations (2.1.5): stations the user added by name and stream
+    /// address, to play, edit and delete. With none yet, the form that adds
+    /// one opens at once, as the IPTV sources do.
+    fn my_stations(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+    ) -> Option<RadioScreen> {
+        let catalog = environment.catalog();
+        if self.radio.my_stations.is_empty() {
+            ui.status(catalog.text("radio_my_stations_empty"), true);
+            if !self.edit_my_station(ui, environment, None) {
+                return Some(RadioScreen::Menu);
+            }
+        }
+        loop {
+            let stations = self.radio.my_stations.clone();
+            let mut browser = Self::browser(
+                environment,
+                catalog.text("radio_my_stations"),
+                Station::list_rows(&stations),
+                self.my_station_selected
+                    .min(stations.len().saturating_sub(1)),
+                &[
+                    ("play", catalog.text("play")),
+                    ("add", catalog.text("radio_add_station")),
+                    ("radio_station_edit", catalog.text("radio_edit_station")),
+                    ("radio_station_delete", catalog.text("radio_delete_station")),
+                    ("radio_favorite", catalog.text("radio_favorite")),
+                    ("radio_copy_url", catalog.text("radio_copy_url")),
+                ],
+            );
+            catalog.text("radio_title").clone_into(&mut browser.title);
+            self.label_favorite_rows(&mut browser, &catalog, &stations);
+            let Some(choice) = ui.browse(&browser) else {
+                return Some(RadioScreen::Menu);
+            };
+            self.my_station_selected = choice.index;
+            if choice.action == "add" {
+                if self.edit_my_station(ui, environment, None) {
+                    self.my_station_selected = self.radio.my_stations.len().saturating_sub(1);
+                }
+                continue;
+            }
+            let Some(station) = stations.get(choice.index).cloned() else {
+                continue;
+            };
+            match choice.action.as_str() {
+                "radio_station_edit" => {
+                    self.edit_my_station(ui, environment, Some(choice.index));
+                }
+                "radio_station_delete" => {
+                    if !ui.ask_yes_no(
+                        &catalog
+                            .text("radio_delete_station_confirm")
+                            .replace("{name}", &station.display_name()),
+                    ) {
+                        continue;
+                    }
+                    let previous = self.radio.clone();
+                    self.radio.my_stations.remove(choice.index);
+                    match self.save_radio(environment) {
+                        Ok(()) => {
+                            ui.status(catalog.text("radio_station_deleted"), true);
+                            if self.radio.my_stations.is_empty() {
+                                return Some(RadioScreen::Menu);
+                            }
+                        }
+                        Err(error) => {
+                            self.radio = previous;
+                            ui.error(&error);
+                        }
+                    }
+                }
+                "radio_favorite" => self.toggle_station_favorite(ui, environment, &station),
+                "radio_copy_url" => copy_station_url(ui, &catalog, &station),
+                _ => {
+                    // A .pls or .m3u address is read first; the station
+                    // plays when its stream is known.
+                    if station.names_playlist() {
+                        let proxy = environment.proxy.clone();
+                        let unreadable = catalog.text("radio_station_unreadable").to_owned();
+                        self.spawn(ui, move || {
+                            let stream =
+                                apricot_platform::radio::probe_stream(&station.url, Some(&proxy));
+                            Ok(Work::MyStation(stream.map_or(Err(unreadable), |stream| {
+                                Ok(Station {
+                                    url: stream.url,
+                                    ..station
+                                })
+                            })))
+                        });
+                        return None;
+                    }
+                    if self.play_station(ui, environment, station, SourceReturn::MyStations) {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Adds a station to My stations or edits one; `true` when it was
+    /// saved. An edited station is renamed in the favorites and the
+    /// recently played too.
+    fn edit_my_station(
+        &mut self,
+        ui: &mut dyn SourcesUi,
+        environment: &SourcesEnvironment,
+        index: Option<usize>,
+    ) -> bool {
+        let catalog = environment.catalog();
+        let old = index.and_then(|index| self.radio.my_stations.get(index).cloned());
+        let mut form = FeatureForm::localized(
+            &catalog,
+            catalog.text(if old.is_some() {
+                "radio_edit_station"
+            } else {
+                "radio_add_station"
+            }),
+            vec![
+                FormField::text(
+                    "name",
+                    catalog.text("radio_station_name"),
+                    old.as_ref().map_or("", |station| &station.name),
+                ),
+                FormField::text(
+                    "address",
+                    catalog.text("radio_station_address"),
+                    old.as_ref().map_or("", |station| &station.url),
+                ),
+            ],
+        );
+        loop {
+            let Some(values) = ui.form(&form) else {
+                return false;
+            };
+            // A rejected form comes back with what was typed.
+            for field in &mut form.fields {
+                if let (crate::FormFieldKind::Text { value, .. }, Some(FormValue::Text(typed))) =
+                    (&mut field.kind, values.get(&field.id))
+                {
+                    typed.clone_into(value);
+                }
+            }
+            let name = text(&values, "name").trim().to_owned();
+            let address = text(&values, "address").trim().to_owned();
+            if name.is_empty() || address.is_empty() {
+                ui.error(catalog.text("radio_station_incomplete"));
+                continue;
+            }
+            if apricot_platform::radio::http_url(&address).is_none() {
+                ui.error(catalog.text("radio_station_bad_address"));
+                continue;
+            }
+            let id = old.as_ref().map_or_else(my_station_id, |station| {
+                station
+                    .stationuuid
+                    .trim_start_matches(apricot_platform::radio::MY_STATION_PREFIX)
+                    .to_owned()
+            });
+            let station = apricot_platform::radio::my_station(&id, &name, &address);
+            let previous = self.radio.clone();
+            match index {
+                Some(index) => {
+                    if let Some(current) = self.radio.my_stations.get_mut(index) {
+                        *current = station.clone();
+                    }
+                    for kept in self
+                        .radio
+                        .favorites
+                        .iter_mut()
+                        .chain(self.radio.recent.iter_mut())
+                        .filter(|kept| kept.stationuuid == station.stationuuid)
+                    {
+                        *kept = station.clone();
+                    }
+                }
+                None => self.radio.my_stations.push(station),
+            }
+            return match self.save_radio(environment) {
+                Ok(()) => {
+                    ui.status(catalog.text("radio_station_saved"), true);
+                    true
+                }
+                Err(error) => {
+                    self.radio = previous;
+                    ui.error(&error);
+                    false
+                }
+            };
         }
     }
 
@@ -2766,6 +2998,22 @@ fn choice(values: &FormValues, key: &str) -> usize {
         .and_then(FormValue::choice)
         .unwrap_or_default()
 }
+/// Copies the stream address of a station.
+fn copy_station_url(ui: &mut dyn SourcesUi, catalog: &TranslationCatalog, station: &Station) {
+    if let Some(url) = station.stream_url()
+        && ui.copy(url.as_str())
+    {
+        ui.status(catalog.text("url_copied"), true);
+    }
+}
+
+/// A new id for a station of My stations.
+fn my_station_id() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or_else(|_| "0".into(), |duration| duration.as_nanos().to_string())
+}
+
 fn unique_id() -> String {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(
         |_| "iptv".into(),
@@ -2779,6 +3027,8 @@ enum RadioScreen {
     Search,
     Stations,
     Surprise,
+    /// Stations the user added (2.1.5).
+    MyStations,
     Settings,
 }
 
@@ -2791,6 +3041,8 @@ enum SourceReturn {
     Radio,
     /// A station Surprise me played (2.1.4).
     Surprise,
+    /// A station of My stations (2.1.5).
+    MyStations,
     Iptv(IptvScreen),
 }
 
@@ -3026,10 +3278,11 @@ fn recording_error(catalog: &TranslationCatalog, error: &RecordingError) -> Stri
 }
 
 /// The rows of the Radio menu, in order.
-const RADIO_HUB: [&str; 16] = [
+/// The radio menu (2.1.5: My stations and Surprise me just above Radio
+/// settings).
+const RADIO_HUB: [&str; 17] = [
     "radio_search_stations",
     "radio_all",
-    "radio_surprise",
     "favorites",
     "radio_recent",
     "radio_most_played",
@@ -3042,6 +3295,8 @@ const RADIO_HUB: [&str; 16] = [
     "radio_languages",
     "radio_tags",
     "radio_codecs",
+    "radio_my_stations",
+    "radio_surprise",
     "radio_settings",
 ];
 
@@ -3085,6 +3340,9 @@ fn shortcut_action(id: &str) -> &str {
         "radio_favorite" => "add_favorite",
         "radio_copy_url" => "copy_link",
         "radio_details" => "player_details",
+        // My stations: Shift+F2 edits and Delete deletes, as for files.
+        "radio_station_edit" => "rename_file",
+        "radio_station_delete" => "remove_selected",
         _ => id,
     }
 }
@@ -3316,15 +3574,17 @@ mod tests {
         }
     }
 
-    /// 2.1.4: Surprise me follows All stations in the radio menu and lists
-    /// its four choices; Back walks up one list at a time.
+    /// 2.1.4: Surprise me lists its four choices; Back walks up one list
+    /// at a time. 2.1.5: My stations and Surprise me come just above Radio
+    /// settings.
     #[test]
     fn surprise_me_lists_its_choices_and_back_walks_up() {
         let environment = unused_environment();
         let catalog = apricot_app::embedded_catalog("en");
         let mut controller = SourcesController::default();
         let mut ui = Browsing::default();
-        ui.answers.extend([Some((2, "open")), None, None]);
+        ui.answers
+            .extend([Some((RADIO_HUB.len() - 2, "open")), None, None]);
         controller.radio_navigate(&mut ui, &environment, RadioScreen::Menu);
         assert_eq!(
             ui.titles,
@@ -3334,7 +3594,11 @@ mod tests {
                 catalog.text("radio_title")
             ]
         );
-        assert_eq!(ui.rows[0][1..3], ["All stations", "Surprise me"]);
+        assert_eq!(ui.rows[0][1..3], ["All stations", "Favorites"]);
+        assert_eq!(
+            ui.rows[0][RADIO_HUB.len() - 3..],
+            ["My stations", "Surprise me", "Radio settings"]
+        );
         assert_eq!(
             ui.rows[1],
             [
@@ -3432,6 +3696,134 @@ mod tests {
             [catalog.text("radio_surprise"), catalog.text("radio_title")]
         );
         assert_eq!(controller.surprise_last.as_deref(), Some("random"));
+    }
+
+    /// What My stations asked and did, with the answers it gets.
+    #[derive(Default)]
+    struct MyStationsUi {
+        browses: std::collections::VecDeque<Option<(usize, &'static str)>>,
+        forms: std::collections::VecDeque<Option<[&'static str; 2]>>,
+        yes: bool,
+        rows: Vec<Vec<String>>,
+        spoken: Vec<String>,
+        errors: Vec<String>,
+        played: Vec<MediaItem>,
+    }
+
+    impl SourcesUi for MyStationsUi {
+        fn browse(&mut self, browser: &SourceBrowser) -> Option<SourceSelection> {
+            self.rows.push(browser.rows.clone());
+            self.browses
+                .pop_front()
+                .flatten()
+                .map(|(index, action)| SourceSelection {
+                    index,
+                    action: action.to_owned(),
+                })
+        }
+        fn form(&mut self, _form: &FeatureForm) -> Option<FormValues> {
+            self.forms.pop_front().flatten().map(|[name, address]| {
+                [
+                    ("name".to_owned(), FormValue::Text(name.to_owned())),
+                    ("address".to_owned(), FormValue::Text(address.to_owned())),
+                ]
+                .into_iter()
+                .collect()
+            })
+        }
+        fn status(&mut self, message: &str, _announce: bool) {
+            self.spoken.push(message.to_owned());
+        }
+        fn error(&mut self, message: &str) {
+            self.errors.push(message.to_owned());
+        }
+        fn play(&mut self, item: MediaItem) {
+            self.played.push(item);
+        }
+        fn choose_file(&mut self, _title: &str) -> Option<PathBuf> {
+            None
+        }
+        fn choose_folder(&mut self, _title: &str) -> Option<PathBuf> {
+            None
+        }
+        fn copy(&mut self, _text: &str) -> bool {
+            false
+        }
+        fn cue(&mut self, _started: bool) {}
+        fn ask_yes_no(&mut self, _message: &str) -> bool {
+            self.yes
+        }
+    }
+
+    /// 2.1.5: with no stations yet, My stations opens the form to add one;
+    /// a wrong address is refused, a saved station plays as a live station
+    /// of its own, and leaving the player goes back to My stations.
+    #[test]
+    fn my_stations_add_play_edit_and_delete() {
+        let folder = tempfile::tempdir().unwrap();
+        let environment = SourcesEnvironment {
+            directory: folder.path().to_owned(),
+            ..unused_environment()
+        };
+        let catalog = apricot_app::embedded_catalog("en");
+        let mut controller = SourcesController::default();
+        let mut ui = MyStationsUi::default();
+        ui.forms.extend([
+            Some(["Home", "ftp://h.test/live"]),
+            Some(["Home", "https://h.test/live"]),
+        ]);
+        ui.browses.push_back(Some((0, "open")));
+        controller.radio_navigate(&mut ui, &environment, RadioScreen::MyStations);
+        assert_eq!(
+            ui.spoken,
+            [
+                catalog.text("radio_my_stations_empty"),
+                catalog.text("radio_station_saved")
+            ]
+        );
+        assert_eq!(ui.errors, [catalog.text("radio_station_bad_address")]);
+        assert_eq!(ui.rows, [vec!["Home".to_owned()]]);
+        let item = &ui.played[0];
+        assert_eq!(item.title, "Home");
+        assert!(item.is_catalog_stream());
+        assert_eq!(item.kind, apricot_core::MediaKind::LiveStream);
+        let saved = std::fs::read_to_string(folder.path().join("radio.json")).unwrap();
+        assert!(saved.contains("\"my_stations\""));
+        assert!(saved.contains("https://h.test/live"));
+        let id = controller.radio.my_stations[0].stationuuid.clone();
+        assert!(id.starts_with(apricot_platform::radio::MY_STATION_PREFIX));
+        // It is kept with the recently played, under its own id.
+        assert_eq!(controller.radio.recent[0].stationuuid, id);
+
+        // Back from the player: My stations again. Edit renames it here and
+        // in the recently played; Delete asks first.
+        let mut ui = MyStationsUi {
+            yes: true,
+            ..MyStationsUi::default()
+        };
+        ui.forms.push_back(Some(["Home FM", "https://h.test/fm"]));
+        ui.browses.extend([
+            Some((0, "radio_station_edit")),
+            Some((0, "radio_station_delete")),
+        ]);
+        assert!(controller.resume_after_player(&mut ui, &environment, Some(&id), None));
+        assert_eq!(
+            ui.rows[..2],
+            [vec!["Home".to_owned()], vec!["Home FM".to_owned()]]
+        );
+        // The last one deleted, the radio menu follows.
+        assert_eq!(ui.rows[2].len(), RADIO_HUB.len());
+        assert_eq!(controller.radio.recent[0].name, "Home FM");
+        assert_eq!(controller.radio.recent[0].stationuuid, id);
+        assert!(controller.radio.my_stations.is_empty());
+        assert_eq!(
+            ui.spoken,
+            [
+                catalog.text("radio_station_saved"),
+                catalog.text("radio_station_deleted")
+            ]
+        );
+        assert!(ui.played.is_empty());
     }
 
     #[test]

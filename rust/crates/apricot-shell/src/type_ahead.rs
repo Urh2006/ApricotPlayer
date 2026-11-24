@@ -1,10 +1,12 @@
-//! Letter navigation in lists, as the Windows list box does it.
+//! Letter navigation in lists, drop-down lists and menus on both systems.
 //!
 //! Typing letters quickly searches for rows that start with all of them
-//! ("pl" finds "Playlists"). Typing the same letter again moves to the next
-//! row that starts with it and wraps around, so P, P, P cycles through every
-//! row on P. AppKit's own type select only does the first, which made a
-//! second P land nowhere (Urh's VoiceOver test of the spike, 11. 10. 2026).
+//! ("pl" finds "Playlists", "slov" finds "Slovenia"). Typing the same letter
+//! again moves to the next row that starts with it and wraps around, so P,
+//! P, P cycles through every row on P. AppKit's own type select only does
+//! the first, which made a second P land nowhere (Urh's VoiceOver test of
+//! the spike, 11. 10. 2026); the native Windows list box, combo box and menu
+//! only do the second, so Windows uses this search too (2.1.5).
 
 use std::time::{Duration, Instant};
 
@@ -38,9 +40,8 @@ impl TypeAhead {
         if labels.is_empty() {
             return None;
         }
-        let mut letters = self.typed.chars();
-        let first = letters.next()?;
-        if letters.all(|letter| letter == first) {
+        let first = self.typed.chars().next()?;
+        if self.one_letter() {
             // One letter, or the same letter again: the next row on it.
             let start = current.map_or(0, |index| index + 1);
             return find_from(labels, start, |label| {
@@ -51,6 +52,31 @@ impl TypeAhead {
         find_from(labels, current.unwrap_or(0), |label| {
             starts_with(label, &typed)
         })
+    }
+
+    /// Whether a search is running: letters were typed less than
+    /// [`TYPE_AHEAD_TIMEOUT`] ago.
+    pub fn searching(&self, now: Instant) -> bool {
+        !self.typed.is_empty()
+            && self
+                .last
+                .is_some_and(|last| now.saturating_duration_since(last) <= TYPE_AHEAD_TIMEOUT)
+    }
+
+    /// Whether `character` belongs to the search: any printable character,
+    /// and a space only inside a running search ("new y" finds "New York"),
+    /// so a space on its own keeps its usual meaning.
+    pub fn takes(&self, character: char, now: Instant) -> bool {
+        !character.is_control() && (!character.is_whitespace() || self.searching(now))
+    }
+
+    /// Whether the letters typed so far are one letter or the same letter
+    /// repeated, the search a native list or menu does by itself.
+    pub fn one_letter(&self) -> bool {
+        let mut letters = self.typed.chars();
+        letters
+            .next()
+            .is_some_and(|first| letters.all(|letter| letter == first))
     }
 
     /// Forgets the typed letters, for example after the list changed.

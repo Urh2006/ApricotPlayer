@@ -393,6 +393,15 @@ impl YtDlpYoutubeEngine {
         // Python `resolve_stream_url` runs yt-dlp for every page, so direct
         // links to other sites get its generic extraction.
         validate_resolvable_url(media_url)?;
+        // 2.1.5: a link to a radio stream, or to a .pls or .m3u playlist of
+        // one, plays as a live station at once, named after the station.
+        if validate_media_url(media_url).is_err()
+            && let Some(payload) =
+                crate::radio::probe_stream(media_url, self.config.proxy_url.as_deref())
+                    .and_then(|stream| radio_stream_payload(&stream))
+        {
+            return Ok(payload);
+        }
         let mut arguments = self.base_arguments();
         arguments.extend([
             OsString::from("--no-playlist"),
@@ -1675,6 +1684,47 @@ fn youtube_format(value: &Value, root_is_live: bool) -> Option<YoutubeFormat> {
         tracks: YoutubeFormatTracks { video, audio },
         is_live: root_is_live || bool_value(object, "is_live"),
         transport,
+    })
+}
+
+/// A radio stream found behind a direct link (2.1.5): a live item with the
+/// station's name, or its host without one, and the stream as its only
+/// format. Its `radio_station_id` makes it a catalog stream, so it plays
+/// again without a lookup and the song titles it sends are spoken.
+fn radio_stream_payload(stream: &crate::radio::StreamLink) -> Option<YoutubeResponsePayload> {
+    let mut item = MediaItem::from_direct_link(&stream.url)?;
+    item.title = if stream.name.is_empty() {
+        item.url
+            .as_ref()
+            .and_then(Url::host_str)
+            .unwrap_or(&stream.url)
+            .to_owned()
+    } else {
+        stream.name.clone()
+    };
+    item.kind = MediaKind::LiveStream;
+    item.metadata.insert(
+        "radio_station_id".to_owned(),
+        Value::String(stream.url.clone()),
+    );
+    let format = YoutubeFormat {
+        itag: 0,
+        url: stream.url.clone(),
+        mime_type: "audio".to_owned(),
+        bitrate: 0,
+        width: None,
+        height: None,
+        fps: None,
+        tracks: YoutubeFormatTracks {
+            video: false,
+            audio: true,
+        },
+        is_live: true,
+        transport: YoutubeFormatTransport::Direct,
+    };
+    Some(YoutubeResponsePayload::Resolved {
+        item: Box::new(item),
+        formats: vec![format],
     })
 }
 

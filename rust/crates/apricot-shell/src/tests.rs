@@ -122,6 +122,63 @@ fn different_letters_search_by_the_start_of_the_row() {
 }
 
 #[test]
+fn several_letters_find_a_country_and_a_space_continues_the_search() {
+    let countries = [
+        "Serbia",
+        "Slovakia",
+        "Slovenia",
+        "South Africa",
+        "Spain",
+        "United Kingdom",
+        "United States",
+    ];
+    let mut typing = TypeAhead::default();
+    let start = Instant::now();
+    let mut current = Some(0);
+    for (step, letter) in "slove".chars().enumerate() {
+        let now = start + Duration::from_millis(150 * step as u64);
+        assert!(typing.takes(letter, now));
+        current = typing
+            .type_character(&countries, current, letter, now)
+            .or(current);
+    }
+    assert_eq!(current, Some(2));
+    assert!(!typing.one_letter());
+
+    // "united s": the space belongs to the running search.
+    let mut typing = TypeAhead::default();
+    let mut current = Some(0);
+    for (step, letter) in "united s".chars().enumerate() {
+        let now = start + Duration::from_millis(100 * step as u64);
+        assert!(typing.takes(letter, now), "{letter:?}");
+        current = typing
+            .type_character(&countries, current, letter, now)
+            .or(current);
+    }
+    assert_eq!(current, Some(6));
+}
+
+#[test]
+fn a_space_or_control_character_alone_is_not_a_search() {
+    let mut typing = TypeAhead::default();
+    let start = Instant::now();
+    assert!(!typing.takes(' ', start));
+    assert!(!typing.takes('\r', start));
+    assert!(typing.takes('č', start));
+    assert!(typing.takes('7', start));
+    assert_eq!(typing.type_character(&ROWS, Some(0), 'p', start), Some(1));
+    assert!(typing.one_letter());
+    assert!(typing.searching(start + Duration::from_millis(900)));
+    assert!(!typing.searching(start + Duration::from_millis(1_100)));
+    assert!(!typing.takes(' ', start + Duration::from_millis(1_100)));
+    assert_eq!(
+        typing.type_character(&ROWS, Some(1), 'p', start + Duration::from_millis(200)),
+        Some(4)
+    );
+    assert!(typing.one_letter());
+}
+
+#[test]
 fn a_pause_starts_a_new_search_and_no_match_keeps_the_selection() {
     let mut typing = TypeAhead::default();
     let start = Instant::now();
