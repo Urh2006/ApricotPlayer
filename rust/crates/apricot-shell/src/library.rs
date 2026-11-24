@@ -71,6 +71,11 @@ impl Shell {
         }
         self.view = view;
         self.refresh_media_collection(ui, true, None);
+        self.prewarm_for_saved_list(if history {
+            apricot_app::SavedList::History
+        } else {
+            apricot_app::SavedList::Favorites
+        });
     }
 
     /// Windows `refresh_media_collection`, with the Windows creation order

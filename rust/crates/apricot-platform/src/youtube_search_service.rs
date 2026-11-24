@@ -48,6 +48,9 @@ struct PendingOperation {
     token: u64,
     command: YoutubeCommand,
     stage: OperationStage,
+    /// The configuration sent ahead of the command, remembered once the
+    /// component confirms it.
+    config: Option<YoutubeSessionConfig>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +65,9 @@ pub struct YoutubeSearchService {
     backend: Option<YoutubeBackend>,
     next_runtime_generation: u64,
     pending: Option<PendingOperation>,
+    /// The configuration the runtime confirmed last; `None` while one is on
+    /// its way or unknown.
+    configured: Option<YoutubeSessionConfig>,
 }
 
 impl YoutubeSearchService {
@@ -209,16 +215,37 @@ impl YoutubeSearchService {
         if self.runtime.is_none() {
             self.runtime = Some(spawn_youtube_runtime(backend, components_directory)?);
             self.backend = Some(backend);
+            self.configured = None;
         }
         let runtime = self.runtime.as_ref().ok_or(YoutubeRuntimeError::Stopped)?;
         self.next_runtime_generation = self.next_runtime_generation.wrapping_add(1).max(1);
         let runtime_generation = self.next_runtime_generation;
-        runtime.execute(runtime_generation, YoutubeCommand::Configure { config })?;
+        // 2.1.6: the runtime keeps its configuration, so an unchanged one
+        // is not sent again and the command does not wait for its reply.
+        if self.configured.as_ref() == Some(&config) {
+            runtime.execute(runtime_generation, command.clone())?;
+            self.pending = Some(PendingOperation {
+                runtime_generation,
+                token,
+                command,
+                stage: OperationStage::Executing,
+                config: None,
+            });
+            return Ok(());
+        }
+        self.configured = None;
+        runtime.execute(
+            runtime_generation,
+            YoutubeCommand::Configure {
+                config: config.clone(),
+            },
+        )?;
         self.pending = Some(PendingOperation {
             runtime_generation,
             token,
             command,
             stage: OperationStage::Configuring,
+            config: Some(config),
         });
         Ok(())
     }
@@ -249,6 +276,7 @@ impl YoutubeSearchService {
                 Ok(YoutubeResponsePayload::Configured)
                     if pending.stage == OperationStage::Configuring =>
                 {
+                    self.configured = pending.config.take();
                     if let Err(error) =
                         runtime.execute(pending.runtime_generation, pending.command.clone())
                     {
@@ -316,6 +344,7 @@ impl YoutubeSearchService {
             backend: Some(backend),
             next_runtime_generation: 0,
             pending: None,
+            configured: None,
         }
     }
 }
@@ -448,6 +477,72 @@ mod tests {
         let commands = commands.lock().expect("commands");
         assert!(matches!(commands[0], YoutubeCommand::Configure { .. }));
         assert!(matches!(commands[1], YoutubeCommand::Search { .. }));
+    }
+
+    fn next_update(service: &mut YoutubeSearchService) -> YoutubeSearchServiceUpdate {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Some(update) = service.poll().expect("poll") {
+                return update;
+            }
+            assert!(Instant::now() < deadline, "service timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn an_unchanged_configuration_is_not_sent_again() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&commands);
+        let runtime = YoutubeRuntime::spawn(Box::new(move || {
+            Ok(Box::new(FakeEngine {
+                commands: Arc::clone(&captured),
+            }))
+        }))
+        .expect("runtime");
+        let mut service = YoutubeSearchService::with_runtime(YoutubeBackend::YtDlp, runtime);
+        let proxy = YoutubeSessionConfig {
+            proxy_url: Some("http://proxy.test:8080".to_owned()),
+            ..YoutubeSessionConfig::default()
+        };
+        let search = |service: &mut YoutubeSearchService, config, token| {
+            service
+                .start(
+                    YoutubeBackend::YtDlp,
+                    Path::new("unused"),
+                    config,
+                    token,
+                    "query".to_owned(),
+                    apricot_media::YoutubeSearchKind::All,
+                    20,
+                )
+                .expect("start");
+        };
+        search(&mut service, YoutubeSessionConfig::default(), 1);
+        next_update(&mut service);
+        search(&mut service, YoutubeSessionConfig::default(), 2);
+        assert!(matches!(
+            next_update(&mut service),
+            YoutubeSearchServiceUpdate::Results { token: 2, .. }
+        ));
+        // A cancelled search whose configuration was never confirmed leaves
+        // the runtime's configuration unknown, so it is sent again.
+        search(&mut service, proxy.clone(), 3);
+        assert!(service.cancel());
+        search(&mut service, YoutubeSessionConfig::default(), 4);
+        loop {
+            if let YoutubeSearchServiceUpdate::Results { token: 4, .. } = next_update(&mut service)
+            {
+                break;
+            }
+        }
+        let kinds = commands
+            .lock()
+            .expect("commands")
+            .iter()
+            .map(|command| matches!(command, YoutubeCommand::Configure { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, [true, false, false, true, true, false]);
     }
 
     #[test]

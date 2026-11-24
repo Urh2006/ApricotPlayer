@@ -161,6 +161,16 @@ impl SearchSession {
         true
     }
 
+    /// The number of results [`Self::begin`] asks for first.
+    #[must_use]
+    pub fn initial_limit(configured_limit: i64) -> u32 {
+        if configured_limit == 0 {
+            DYNAMIC_SEARCH_PAGE_SIZE
+        } else {
+            u32::try_from(configured_limit.clamp(1, MAX_FIXED_RESULTS)).unwrap_or(250)
+        }
+    }
+
     /// Starts a new logical search and invalidates every older response.
     ///
     /// A configured limit of zero enables Python-compatible dynamic loading in

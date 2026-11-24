@@ -7,7 +7,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Child, Command, Stdio},
     sync::{Mutex, mpsc},
     thread,
     time::{Duration, Instant},
@@ -302,41 +302,85 @@ impl YtDlpYoutubeEngine {
 
         let fetch_limit = search_fetch_limit(kind, limit);
         let target = search_target(query, kind, fetch_limit);
-        // Python `youtube_search_results_with_shorts`: All and Video ask for
-        // Shorts at the same time and mix them in only when they are already
-        // there once the main results arrive.
-        let shorts = matches!(kind, YoutubeSearchKind::All | YoutubeSearchKind::Video).then(|| {
-            self.spawn_flat_items(
-                youtube_shorts_search_url(query),
-                Some(fetch_limit),
-                &["--extractor-retries", "0"],
-            )
-        });
-        let primary = self
-            .flat_items(target, Some(fetch_limit), "search results")?
+        // Python `youtube_search_results_with_shorts` also starts a Shorts
+        // search and mixes it in only when it is done before the main
+        // results. 2.1.6 leaves it out: measured on 2026-11-24 it took 7 to
+        // 9 s against 1 to 2.5 s for the main results, so it was never
+        // mixed in, it slowed the main search by about 0.3 s and its
+        // yt-dlp ran on for seconds afterwards (mostly finding nothing).
+        // Channel uploads still mix in the channel's Shorts.
+        let items = self.flat_items(&target, Some(fetch_limit), "search results")?;
+        // The next search on the same screen finds yt-dlp started.
+        self.prewarm_search(fetch_limit);
+        let items = items
             .into_iter()
             .filter(|item| search_kind_accepts(kind, item.kind))
-            .collect::<Vec<_>>();
-        let limit = limit as usize;
-        let items = match shorts.and_then(|receiver| receiver.try_recv().ok()) {
-            Some(shorts) => interleave_youtube_results(primary, shorts.unwrap_or_default(), limit),
-            None => primary.into_iter().take(limit).collect(),
-        };
+            .take(limit as usize)
+            .collect();
         Ok(YoutubeResponsePayload::SearchResults {
             items,
             continuation: None,
         })
     }
 
+    /// The flat search arguments without the target, which a waiting
+    /// process reads from standard input.
+    fn warm_search_arguments(&self, fetch_limit: u32) -> Vec<OsString> {
+        let mut arguments = self.flat_arguments(String::new(), Some(fetch_limit), &[]);
+        // Without "--" and the empty target.
+        arguments.truncate(arguments.len() - 2);
+        arguments.extend([OsString::from("--batch-file"), OsString::from("-")]);
+        arguments
+    }
+
+    /// Starts a yt-dlp process for the next search, unless one with the
+    /// same arguments already waits.
+    fn prewarm_search(&self, fetch_limit: u32) {
+        if WARM_PROCESSES_ENABLED {
+            spawn_warm_process(
+                &WARM_SEARCH,
+                &self.executable,
+                self.warm_search_arguments(fetch_limit),
+            );
+        }
+    }
+
     /// Python `extract_flat_entries`: one flat `yt-dlp` listing as items.
+    /// A waiting search process takes it when it has the same arguments,
+    /// as a playlist or channel page of the search's size has (2.1.6).
     fn flat_items(
         &self,
-        target: String,
+        target: &str,
         limit: Option<u32>,
         description: &str,
     ) -> Result<Vec<MediaItem>, YtDlpError> {
-        let arguments = self.flat_arguments(target, limit, &[]);
-        flat_items_from_output(self.run(&arguments)?, description)
+        let arguments = self.flat_arguments(target.to_owned(), limit, &[]);
+        let warm_output = limit
+            .filter(|_| is_batch_line(target))
+            .and_then(|limit| {
+                take_warm_process(
+                    &WARM_SEARCH,
+                    &self.executable,
+                    &self.warm_search_arguments(limit),
+                )
+            })
+            .and_then(|child| run_warm_process(child, target).ok());
+        let output = match warm_output {
+            Some(output) => {
+                if let Some(limit) = limit {
+                    self.prewarm_search(limit);
+                }
+                cookie_retry_after(
+                    &self.executable,
+                    &self.config,
+                    &arguments,
+                    CookieRetry::Extract,
+                    output,
+                )?
+            }
+            None => self.run(&arguments)?,
+        };
+        flat_items_from_output(output, description)
     }
 
     /// Runs a flat listing on its own thread, like Python's Shorts requests.
@@ -410,13 +454,16 @@ impl YtDlpYoutubeEngine {
             OsString::from("--"),
             OsString::from(media_url),
         ]);
-        // A batch file line holds one plain ASCII URL.
-        let warm_output = media_url
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic())
-            .then(|| take_warm_resolver(&self.executable, &self.warm_resolve_arguments()))
+        let warm_output = is_batch_line(media_url)
+            .then(|| {
+                take_warm_process(
+                    &WARM_RESOLVER,
+                    &self.executable,
+                    &self.warm_resolve_arguments(),
+                )
+            })
             .flatten()
-            .and_then(|child| run_warm_resolver(child, media_url).ok());
+            .and_then(|child| run_warm_process(child, media_url).ok());
         self.prewarm_resolver();
         let first = match warm_output {
             Some(output) => Ok(output),
@@ -552,8 +599,7 @@ impl YtDlpYoutubeEngine {
                 .filter(|item| collection_kind_accepts(kind, item.kind))
                 .collect::<Vec<_>>()
         };
-        let mut items =
-            accepted(self.flat_items(target.clone(), fetch_limit, "collection entries")?);
+        let mut items = accepted(self.flat_items(&target, fetch_limit, "collection entries")?);
         if let (Some(shorts), Some(limit)) = (shorts, limit) {
             let shorts = shorts.recv().ok().and_then(Result::ok).unwrap_or_default();
             items = interleave_youtube_results(items, accepted(shorts), limit as usize);
@@ -585,8 +631,12 @@ impl YtDlpYoutubeEngine {
     /// Starts a yt-dlp process for the next playback start, unless one with
     /// the same arguments already waits.
     fn prewarm_resolver(&self) {
-        if WARM_RESOLVER_ENABLED {
-            spawn_warm_resolver(&self.executable, self.warm_resolve_arguments());
+        if WARM_PROCESSES_ENABLED {
+            spawn_warm_process(
+                &WARM_RESOLVER,
+                &self.executable,
+                self.warm_resolve_arguments(),
+            );
         }
     }
 
@@ -671,7 +721,7 @@ fn cookie_retry_after(
     retry: CookieRetry<'_>,
     output: ProcessOutput,
 ) -> Result<ProcessOutput, YtDlpError> {
-    if output.status.success() {
+    if output.success {
         return Ok(output);
     }
     let error = process_error_text(&output);
@@ -689,7 +739,7 @@ fn cookie_retry_after(
             if let Some(cookies_file) = cookies_file {
                 let output =
                     run_executable(executable, with_cookies(config, cookies_file, arguments))?;
-                if output.status.success() {
+                if output.success {
                     return Ok(output);
                 }
                 retry_error = process_error_text(&output);
@@ -737,35 +787,51 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let arguments = arguments
+        .into_iter()
+        .map(|argument| argument.as_ref().to_owned())
+        .collect::<Vec<_>>();
+    let end = if arguments
+        .iter()
+        .any(|argument| argument == "--dump-single-json")
+    {
+        OutputEnd::FirstJsonLine
+    } else {
+        OutputEnd::Exit
+    };
     let mut command = Command::new(executable);
     command
-        .args(arguments)
+        .args(&arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
-    let mut child = command
+    let child = command
         .spawn()
         .map_err(|error| YtDlpError::Launch(error.to_string()))?;
-    collect_process_output(&mut child, OPERATION_TIMEOUT)
+    collect_process_output(child, OPERATION_TIMEOUT, end)
 }
 
 /// Starting yt-dlp.exe costs about a second before it does any work (measured
 /// 1.15 s for `--version`). A process started in advance with
 /// `--batch-file -` has paid that and waits for its URL on standard input;
-/// a playback start through it measured 0.6 to 1 s faster. Apricot stops it
-/// when it exits: a closed pipe alone did not always end it (beta 14), and a
-/// leftover yt-dlp.exe made the installer refuse to update the app.
-const WARM_RESOLVER_ENABLED: bool = cfg!(not(test));
+/// a playback start through it measured 0.6 to 1 s faster, a search 0.9 to
+/// 1.1 s (2.1.6). Apricot stops them when it exits: a closed pipe alone did
+/// not always end one (beta 14), and a leftover yt-dlp.exe made the
+/// installer refuse to update the app.
+const WARM_PROCESSES_ENABLED: bool = cfg!(not(test));
 
-struct WarmResolver {
+struct WarmProcess {
     executable: PathBuf,
     arguments: Vec<OsString>,
     child: Child,
 }
 
-static WARM_RESOLVER: Mutex<Option<WarmResolver>> = Mutex::new(None);
+/// The process for the next playback start.
+static WARM_RESOLVER: Mutex<Option<WarmProcess>> = Mutex::new(None);
+/// The process for the next search (2.1.6).
+static WARM_SEARCH: Mutex<Option<WarmProcess>> = Mutex::new(None);
 
 /// Starts a waiting yt-dlp for the next playback start, as a search does.
 pub fn prewarm_playback_resolver(executable: &Path, config: YoutubeSessionConfig) {
@@ -776,26 +842,62 @@ pub fn prewarm_playback_resolver(executable: &Path, config: YoutubeSessionConfig
     }
 }
 
-/// Stops the waiting yt-dlp; the application calls this when it exits.
-pub fn stop_playback_resolver() {
-    let Ok(mut slot) = WARM_RESOLVER.lock() else {
-        return;
-    };
-    if let Some(mut warm) = slot.take() {
-        stop_child(&mut warm.child);
+/// Starts a waiting yt-dlp for the next search of `requested` results of
+/// the All, Video or `SoundCloud` Track type, as the search screen opens.
+pub fn prewarm_search(executable: &Path, config: YoutubeSessionConfig, requested: u32) {
+    if let Ok(mut engine) = YtDlpYoutubeEngine::new(executable)
+        && engine.configure(config).is_ok()
+    {
+        engine.prewarm_search(search_fetch_limit(YoutubeSearchKind::All, requested));
     }
 }
 
-fn take_warm_resolver(executable: &Path, arguments: &[OsString]) -> Option<Child> {
-    if !WARM_RESOLVER_ENABLED {
+/// Stops the waiting yt-dlp processes; the application calls this when it
+/// exits.
+pub fn stop_warm_processes() {
+    for slot in [&WARM_RESOLVER, &WARM_SEARCH] {
+        let Ok(mut slot) = slot.lock() else {
+            continue;
+        };
+        if let Some(mut warm) = slot.take() {
+            stop_child(&mut warm.child);
+        }
+    }
+}
+
+/// yt-dlp reads a batch file line as one URL: it strips the line, skips
+/// one that starts with `#`, `;` or `]`, cuts it at a space followed by
+/// `#`, and decodes standard input with the system code page. Only a
+/// trimmed ASCII line that passes these rules reaches it unchanged.
+fn is_batch_line(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+        && !value.starts_with(['#', ';', ']'])
+        && !value.contains(" #")
+}
+
+fn take_warm_process(
+    slot: &Mutex<Option<WarmProcess>>,
+    executable: &Path,
+    arguments: &[OsString],
+) -> Option<Child> {
+    if !WARM_PROCESSES_ENABLED {
         return None;
     }
-    let mut slot = WARM_RESOLVER.lock().ok()?;
+    let mut slot = slot.lock().ok()?;
+    // One with other arguments keeps waiting: a search of another size or
+    // type does not take the process of the usual search. The next prewarm
+    // replaces it.
+    if slot
+        .as_ref()
+        .is_none_or(|warm| warm.executable != executable || warm.arguments != arguments)
+    {
+        return None;
+    }
     let mut warm = slot.take()?;
-    if warm.executable != executable || warm.arguments != arguments {
-        stop_child(&mut warm.child);
-        return None;
-    }
     // A process that ended on its own is of no use.
     if !matches!(warm.child.try_wait(), Ok(None)) {
         return None;
@@ -803,8 +905,12 @@ fn take_warm_resolver(executable: &Path, arguments: &[OsString]) -> Option<Child
     Some(warm.child)
 }
 
-fn spawn_warm_resolver(executable: &Path, arguments: Vec<OsString>) {
-    let Ok(mut slot) = WARM_RESOLVER.lock() else {
+fn spawn_warm_process(
+    slot: &Mutex<Option<WarmProcess>>,
+    executable: &Path,
+    arguments: Vec<OsString>,
+) {
+    let Ok(mut slot) = slot.lock() else {
         return;
     };
     if let Some(warm) = slot.as_mut() {
@@ -826,7 +932,7 @@ fn spawn_warm_resolver(executable: &Path, arguments: Vec<OsString>) {
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
     if let Ok(child) = command.spawn() {
-        *slot = Some(WarmResolver {
+        *slot = Some(WarmProcess {
             executable: executable.to_owned(),
             arguments,
             child,
@@ -834,18 +940,21 @@ fn spawn_warm_resolver(executable: &Path, arguments: Vec<OsString>) {
     }
 }
 
-fn run_warm_resolver(mut child: Child, media_url: &str) -> Result<ProcessOutput, YtDlpError> {
-    let written = child.stdin.take().map(|mut stdin| {
-        // The URL was validated: one line without line breaks.
-        stdin.write_all(format!("{media_url}\n").as_bytes())
-    });
+/// Hands a waiting process its one line, a URL or search target that
+/// [`is_batch_line`] accepted, and closes standard input so that it ends
+/// after it.
+fn run_warm_process(mut child: Child, line: &str) -> Result<ProcessOutput, YtDlpError> {
+    let written = child
+        .stdin
+        .take()
+        .map(|mut stdin| stdin.write_all(format!("{line}\n").as_bytes()));
     if !matches!(written, Some(Ok(()))) {
         stop_child(&mut child);
         return Err(YtDlpError::Launch(
             "the waiting yt-dlp process did not take the URL".to_owned(),
         ));
     }
-    collect_process_output(&mut child, OPERATION_TIMEOUT)
+    collect_process_output(child, OPERATION_TIMEOUT, OutputEnd::FirstJsonLine)
 }
 
 fn flat_items_from_output(
@@ -858,14 +967,6 @@ fn flat_items_from_output(
         .and_then(Value::as_array)
         .ok_or_else(|| YtDlpError::InvalidOutput(format!("{description} were missing")))?;
     Ok(entries.iter().filter_map(media_item_from_value).collect())
-}
-
-/// Python `youtube_shorts_search_url`.
-fn youtube_shorts_search_url(query: &str) -> String {
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    serializer.append_pair("search_query", query);
-    serializer.append_pair("sp", "EgIQCQ==");
-    format!("https://www.youtube.com/results?{}", serializer.finish())
 }
 
 /// Python `interleave_youtube_results`: up to four main results, then one
@@ -972,19 +1073,20 @@ fn read_downloaded_transcript(directory: &Path) -> Result<String, YtDlpError> {
 }
 
 fn search_target(query: &str, kind: YoutubeSearchKind, limit: u32) -> String {
-    if kind == YoutubeSearchKind::Video {
-        return format!("ytsearch{limit}:{query}");
-    }
     // Python `soundcloud_search_entries` for the Track type.
     if kind.is_soundcloud() {
         return format!("scsearch{limit}:{query}");
     }
     let filter = match kind {
+        // Python asks `ytsearch{limit}:{query}`, which is yt-dlp's
+        // YoutubeSearchIE: the same search with its "videos only" filter.
+        // As a results address the query stays plain ASCII, so a waiting
+        // yt-dlp can take it on standard input (2.1.6).
+        YoutubeSearchKind::Video => Some("EgIQAfABAQ=="),
         YoutubeSearchKind::Playlist => Some("EgIQAw=="),
         YoutubeSearchKind::Channel => Some("EgIQAg=="),
         YoutubeSearchKind::All
         | YoutubeSearchKind::Film
-        | YoutubeSearchKind::Video
         | YoutubeSearchKind::SoundcloudTrack
         | YoutubeSearchKind::SoundcloudPlaylist
         | YoutubeSearchKind::SoundcloudUser => None,
@@ -1342,7 +1444,7 @@ fn is_soundcloud_url(value: &str) -> bool {
 }
 
 struct ProcessOutput {
-    status: ExitStatus,
+    success: bool,
     stdout: BoundedBytes,
     stderr: BoundedBytes,
 }
@@ -1352,33 +1454,72 @@ struct BoundedBytes {
     overflowed: bool,
 }
 
+/// When [`collect_process_output`] has what it waits for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputEnd {
+    /// When the process exits.
+    Exit,
+    /// As soon as standard output holds one complete JSON line. yt-dlp with
+    /// `--dump-single-json` prints it only after a successful extraction
+    /// and then needs about 0.4 s more to exit (measured 2026-11-24), which
+    /// happens in the background (2.1.6).
+    FirstJsonLine,
+}
+
+/// How long a process that already gave its JSON line may take to exit
+/// before it is stopped.
+const FINISH_TIMEOUT: Duration = Duration::from_secs(10);
+
 fn collect_process_output(
-    child: &mut Child,
+    mut child: Child,
     timeout: Duration,
+    end: OutputEnd,
 ) -> Result<ProcessOutput, YtDlpError> {
     let Some(stdout) = child.stdout.take() else {
-        stop_child(child);
+        stop_child(&mut child);
         return Err(YtDlpError::Launch("stdout pipe was not created".to_owned()));
     };
     let Some(stderr) = child.stderr.take() else {
-        stop_child(child);
+        stop_child(&mut child);
         return Err(YtDlpError::Launch("stderr pipe was not created".to_owned()));
     };
-    let stdout_reader = thread::spawn(move || read_bounded(stdout, MAX_STDOUT_BYTES));
-    let stderr_reader = thread::spawn(move || read_bounded(stderr, MAX_STDERR_BYTES));
+    let (line_sender, line_receiver) = mpsc::channel();
+    let line_sender = (end == OutputEnd::FirstJsonLine).then_some(line_sender);
+    let stdout_reader =
+        thread::spawn(move || read_bounded(stdout, MAX_STDOUT_BYTES, line_sender.as_ref()));
+    let stderr_reader = thread::spawn(move || read_bounded(stderr, MAX_STDERR_BYTES, None));
     let deadline = Instant::now() + timeout;
     let status = loop {
+        match line_receiver.recv_timeout(POLL_INTERVAL) {
+            Ok(line) => {
+                finish_in_background(child, stdout_reader, stderr_reader);
+                return Ok(ProcessOutput {
+                    success: true,
+                    stdout: BoundedBytes {
+                        bytes: line,
+                        overflowed: false,
+                    },
+                    stderr: BoundedBytes {
+                        bytes: Vec::new(),
+                        overflowed: false,
+                    },
+                });
+            }
+            // No sender, or the reader is done: only the exit is left.
+            Err(mpsc::RecvTimeoutError::Disconnected) => thread::sleep(POLL_INTERVAL),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => thread::sleep(POLL_INTERVAL),
+            Ok(None) if Instant::now() < deadline => {}
             Ok(None) => {
-                stop_child(child);
+                stop_child(&mut child);
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
                 return Err(YtDlpError::Timeout);
             }
             Err(error) => {
-                stop_child(child);
+                stop_child(&mut child);
                 let _ = stdout_reader.join();
                 let _ = stderr_reader.join();
                 return Err(YtDlpError::Launch(error.to_string()));
@@ -1394,10 +1535,31 @@ fn collect_process_output(
         return Err(YtDlpError::OutputLimit("error output"));
     }
     Ok(ProcessOutput {
-        status,
+        success: status.success(),
         stdout,
         stderr,
     })
+}
+
+/// Lets a process that gave its result exit on its own, and stops it when
+/// it does not.
+fn finish_in_background(
+    mut child: Child,
+    stdout_reader: thread::JoinHandle<io::Result<BoundedBytes>>,
+    stderr_reader: thread::JoinHandle<io::Result<BoundedBytes>>,
+) {
+    thread::spawn(move || {
+        let deadline = Instant::now() + FINISH_TIMEOUT;
+        while matches!(child.try_wait(), Ok(None)) {
+            if Instant::now() >= deadline {
+                stop_child(&mut child);
+                break;
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+        let _ = stdout_reader.join();
+        let _ = stderr_reader.join();
+    });
 }
 
 fn stop_child(child: &mut Child) {
@@ -1405,10 +1567,18 @@ fn stop_child(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<BoundedBytes> {
+/// Reads at most `limit` bytes and drains the rest. With `first_line`, the
+/// first line is sent there as soon as it is complete, when it is one JSON
+/// document.
+fn read_bounded(
+    mut reader: impl Read,
+    limit: usize,
+    mut first_line: Option<&mpsc::Sender<Vec<u8>>>,
+) -> io::Result<BoundedBytes> {
     let mut bytes = Vec::with_capacity(limit.min(64 * 1_024));
     let mut overflowed = false;
-    let mut buffer = [0_u8; 8 * 1_024];
+    let mut scanned = 0;
+    let mut buffer = vec![0_u8; 64 * 1_024];
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
@@ -1418,6 +1588,20 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<BoundedBytes>
         let retained = remaining.min(count);
         bytes.extend_from_slice(&buffer[..retained]);
         overflowed |= retained < count;
+        if overflowed {
+            first_line = None;
+        }
+        if let Some(sender) = first_line {
+            if let Some(offset) = bytes[scanned..].iter().position(|byte| *byte == b'\n') {
+                let line = &bytes[..scanned + offset];
+                if serde_json::from_slice::<serde::de::IgnoredAny>(line).is_ok() {
+                    let _ = sender.send(line.to_vec());
+                }
+                first_line = None;
+            } else {
+                scanned = bytes.len();
+            }
+        }
     }
     Ok(BoundedBytes { bytes, overflowed })
 }
@@ -1432,7 +1616,7 @@ fn join_reader(
 }
 
 fn checked_stdout(output: ProcessOutput) -> Result<Vec<u8>, YtDlpError> {
-    if output.status.success() {
+    if output.success {
         return Ok(output.stdout.bytes);
     }
     Err(YtDlpError::Request(process_error_text(&output)))
@@ -2021,10 +2205,10 @@ mod tests {
 
     use super::{
         BoundedBytes, YtDlpYoutubeEngine, collection_kind_accepts, collection_response,
-        collection_target, component_executable, interleave_youtube_results, media_item_from_value,
-        popular_numeric_value, read_bounded, sanitize_error, search_fetch_limit,
-        search_kind_accepts, search_target, sort_formats, sort_popular_items, validate_media_url,
-        validate_resolvable_url, youtube_format, youtube_shorts_search_url,
+        collection_target, component_executable, interleave_youtube_results, is_batch_line,
+        media_item_from_value, popular_numeric_value, read_bounded, sanitize_error,
+        search_fetch_limit, search_kind_accepts, search_target, sort_formats, sort_popular_items,
+        validate_media_url, validate_resolvable_url, youtube_format,
     };
     use apricot_core::{MediaItem, MediaKind, MediaSource};
     use apricot_media::{
@@ -2120,10 +2304,6 @@ mod tests {
                 "aaaaaaaaaa4",
                 "sssssssssS1",
             ]
-        );
-        assert_eq!(
-            youtube_shorts_search_url("open ai"),
-            "https://www.youtube.com/results?search_query=open+ai&sp=EgIQCQ%3D%3D"
         );
     }
 
@@ -2238,7 +2418,7 @@ mod tests {
     fn search_targets_match_python_type_semantics() {
         assert_eq!(
             search_target("open ai", YoutubeSearchKind::Video, 20),
-            "ytsearch20:open ai"
+            "https://www.youtube.com/results?search_query=open+ai&sp=EgIQAfABAQ%3D%3D"
         );
         assert_eq!(
             search_target("open ai", YoutubeSearchKind::All, 20),
@@ -2480,9 +2660,64 @@ mod tests {
     #[test]
     fn reader_drains_but_retains_only_the_limit() {
         let BoundedBytes { bytes, overflowed } =
-            read_bounded(Cursor::new(vec![b'x'; 32]), 8).expect("read");
+            read_bounded(Cursor::new(vec![b'x'; 32]), 8, None).expect("read");
         assert_eq!(bytes.len(), 8);
         assert!(overflowed);
+    }
+
+    #[test]
+    fn reader_hands_over_the_first_json_line_at_once() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let output = b"{\"id\": \"a\", \"entries\": []}\nlater".to_vec();
+        let BoundedBytes { bytes, overflowed } =
+            read_bounded(Cursor::new(output.clone()), 1_024, Some(&sender)).expect("read");
+        assert_eq!(bytes, output);
+        assert!(!overflowed);
+        assert_eq!(
+            receiver.try_recv().expect("first line"),
+            b"{\"id\": \"a\", \"entries\": []}".to_vec()
+        );
+        // Anything that is not one JSON document waits for the exit.
+        for output in [&b"WARNING: no json\n{}\n"[..], b"\n{}\n", b"{\"open\": "] {
+            read_bounded(Cursor::new(output.to_vec()), 1_024, Some(&sender)).expect("read");
+            assert!(receiver.try_recv().is_err());
+        }
+        // A line over the limit is never handed over.
+        read_bounded(Cursor::new(b"{}\n".to_vec()), 1, Some(&sender)).expect("read");
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn batch_lines_are_only_targets_yt_dlp_reads_unchanged() {
+        assert!(is_batch_line(
+            "https://www.youtube.com/results?search_query=%C4%8Devap&sp=EgIQAfABAQ%3D%3D"
+        ));
+        assert!(is_batch_line("scsearch20:daft punk"));
+        assert!(is_batch_line("https://youtu.be/abcdefghijk#t=30"));
+        for line in [
+            "",
+            " scsearch20:x",
+            "scsearch20:x ",
+            "scsearch20:\u{10d}evap\u{10d}i\u{10d}i",
+            "scsearch20:music #shorts",
+            "#comment",
+            ";comment",
+            "]comment",
+            "scsearch20:a\tb",
+        ] {
+            assert!(!is_batch_line(line), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn warm_search_takes_the_target_from_standard_input() {
+        let engine = YtDlpYoutubeEngine::new(&std::env::current_exe().unwrap()).unwrap();
+        let warm = engine.warm_search_arguments(20);
+        let cold = engine.flat_arguments("target".to_owned(), Some(20), &[]);
+        assert_eq!(warm[..warm.len() - 2], cold[..cold.len() - 2]);
+        assert_eq!(warm[warm.len() - 2..], ["--batch-file", "-"]);
+        assert!(warm.windows(2).any(|pair| pair == ["--playlist-end", "20"]));
+        assert!(!warm.iter().any(|argument| argument == "--"));
     }
 
     #[test]

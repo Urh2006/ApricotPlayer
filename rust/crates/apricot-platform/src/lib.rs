@@ -75,7 +75,7 @@ pub use youtube_helper_process::{YoutubeHelperProcess, YoutubeProcessError};
 pub use youtube_search_service::{
     YoutubeSearchService, YoutubeSearchServiceError, YoutubeSearchServiceUpdate,
 };
-pub use ytdlp_youtube::{YtDlpYoutubeEngine, spawn_youtube_runtime, stop_playback_resolver};
+pub use ytdlp_youtube::{YtDlpYoutubeEngine, spawn_youtube_runtime, stop_warm_processes};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ApplicationIdentity {

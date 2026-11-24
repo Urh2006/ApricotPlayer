@@ -432,7 +432,7 @@ impl Shell {
 
     /// Windows `prewarm_playback_resolver`: yt-dlp starts while the link is
     /// typed.
-    fn prewarm_playback_resolver(&mut self) {
+    pub(crate) fn prewarm_playback_resolver(&mut self) {
         let Some(components) = components_directory() else {
             return;
         };
@@ -440,6 +440,28 @@ impl Shell {
         let config = self.youtube_session_config();
         std::thread::spawn(move || {
             apricot_platform::ytdlp_youtube::prewarm_playback_resolver(&executable, config);
+        });
+    }
+
+    /// Windows `prewarm_for_saved_list`: a saved list that plays through
+    /// yt-dlp starts it as the list opens (2.1.6).
+    pub(crate) fn prewarm_for_saved_list(&mut self, list: apricot_app::SavedList) {
+        if self.application.saved_list_plays_through_resolver(list) {
+            self.prewarm_playback_resolver();
+        }
+    }
+
+    /// Windows `prewarm_search`: the search screen starts yt-dlp for the
+    /// search being typed (2.1.6).
+    pub(crate) fn prewarm_search(&mut self) {
+        let Some(components) = components_directory() else {
+            return;
+        };
+        let executable = apricot_platform::app_update::preferred_ytdlp_executable(&components);
+        let config = self.youtube_session_config();
+        let requested = self.application.search_results_requested();
+        std::thread::spawn(move || {
+            apricot_platform::ytdlp_youtube::prewarm_search(&executable, config, requested);
         });
     }
 

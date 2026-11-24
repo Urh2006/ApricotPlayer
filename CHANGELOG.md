@@ -1,3 +1,19 @@
+# v2.1.6 - Faster YouTube search and playback start
+
+## Changed
+
+- YouTube and SoundCloud searches are faster. The search screen now starts yt-dlp as soon as it opens, so the search you type does not wait for yt-dlp to start, and after each search yt-dlp is ready again for the next one. Searches measured 1.1 to 2 seconds instead of 2.6 to 3.7 seconds. Opening a playlist or channel from the results uses the same head start when it lists as many items as a search.
+- Playing from Favorites, History, your playlists, Subscriptions and the Notification center starts sooner. When such a list holds YouTube, SoundCloud or other web items, ApricotPlayer starts yt-dlp as the list opens, as it already did for search results and Direct link, so the first Enter does not wait for it. The first item played measured about 2.5 seconds instead of about 4.5 seconds.
+- Every YouTube or SoundCloud start, search and list arrives about 0.4 seconds sooner, because ApricotPlayer uses yt-dlp's answer as soon as it is complete instead of waiting for yt-dlp to close.
+
+## Fixed
+
+- A YouTube search of the All or Video type no longer starts a second, hidden search for Shorts. That search took 7 to 9 seconds, so its results were never shown, yet it slowed the main search down and kept running in the background after the results appeared. Channel videos still include the channel's Shorts.
+
+These changes apply to Windows and macOS. Existing settings and saved data are retained.
+
+Download **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, or **ApricotPlayer-macOS-arm64.dmg** for Apple silicon Macs running macOS 26 or later. The Mac ZIP is used by the in-app updater.
+
 # v2.1.5 - Letter navigation and My stations
 
 ## Added
