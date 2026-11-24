@@ -1,3 +1,19 @@
+# v2.1.5 - Letter navigation and My stations
+
+## Added
+
+- Letter navigation now works with several letters in every list, menu and drop-down list on Windows, as it already did in Mac lists. Type the first letters of an item quickly, for example "slov" in the country list of Radio, and the selection moves to the first item that begins with them. After a pause of about a second, typing starts a new search. Typing the same letter again still moves to the next item that begins with it. NVDA reads the new item as it does for a single letter, and nothing else is announced.
+- Radio has My stations, for stations that are not in Radio Browser. Add a station with its name and stream address, then play, edit, delete, copy the address of or add to radio favorites any station in the list. Shift+F2 edits the selected station and Delete deletes it after asking, the same keys as for files. A stream address may also be a .pls or .m3u playlist of the station. With no stations yet, My stations opens the form for adding one. Going back from the player returns to My stations.
+- A direct link to an internet radio stream, or to its .pls or .m3u playlist, now plays at once as a live radio station under the station's name, without a yt-dlp lookup. Song titles the station sends are announced as in Radio.
+
+## Changed
+
+- In the Radio menu, My stations and Surprise me now come just above Radio settings, so the station lists stay together at the top.
+
+These changes apply to Windows and macOS. Existing settings and saved data are retained.
+
+Download **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, or **ApricotPlayer-macOS-arm64.dmg** for Apple silicon Macs running macOS 26 or later. The Mac ZIP is used by the in-app updater.
+
 # v2.1.4 - Radio Surprise me
 
 ## Added

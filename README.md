@@ -2,7 +2,7 @@
 
 ApricotPlayer is an accessible media player and downloader for Windows and macOS. Search YouTube and SoundCloud, listen to Spotify, follow podcasts, watch videos, play your own files, and keep everything within reach of the keyboard.
 
-The current stable release is **2.1.4**, written in Rust with native Windows and Mac interfaces. It adds a 15-band equalizer with advanced settings, audio processing, crossfade, a sleep timer, A-B repeat and saved excerpts, subtitles read aloud, an audiobook mode, a playlist editor, file management, Radio, IPTV, recording, converter options, YouTube search suggestions, media keys, global shortcuts, Spotify playlist subscriptions, notifications for new releases of followed Spotify artists, a categorized shortcut editor and settings and bookmark backups to the Spotify and macOS support of 2.0. Its release notes describe every new command and its keys. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
+The current stable release is **2.1.5**, written in Rust with native Windows and Mac interfaces. It adds a 15-band equalizer with advanced settings, audio processing, crossfade, a sleep timer, A-B repeat and saved excerpts, subtitles read aloud, an audiobook mode, a playlist editor, file management, Radio, IPTV, recording, converter options, YouTube search suggestions, media keys, global shortcuts, Spotify playlist subscriptions, notifications for new releases of followed Spotify artists, a categorized shortcut editor and settings and bookmark backups to the Spotify and macOS support of 2.0. Its release notes describe every new command and its keys. Existing Windows users can update directly from the Python-based 1.0.21 release through the Stable update channel.
 
 ## Contents
 
@@ -25,7 +25,7 @@ The current stable release is **2.1.4**, written in Rust with native Windows and
 
 ## Download and install
 
-Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose **2.1.4 or a newer stable release** for everyday use. Releases marked **Pre-release** are optional test versions, offered through the Beta update channel. Read the release notes before installing.
+Open the [Releases page](https://github.com/Urh2006/ApricotPlayer/releases), choose a release, and expand **Assets**. Choose **2.1.5 or a newer stable release** for everyday use. Releases marked **Pre-release** are optional test versions, offered through the Beta update channel. Read the release notes before installing.
 
 The files under **Source code** are for development. To run ApricotPlayer, download one of the packages below. The packages include the media tools they need; you do not need to install Python, Rust, mpv, or FFmpeg separately.
 
@@ -54,7 +54,7 @@ A release may also contain **ApricotPlayer-macos-arm64.zip**. This is used by th
 
 On the first run, choose your language. Open **Settings** whenever you want to change the language, playback behavior, download folder, or shortcuts.
 
-Use the arrow keys to move through menus and lists, **Enter** on Windows or **Return** on Mac to open the selected item, and **Tab** and **Shift+Tab** to move between controls. Menus support first-letter navigation. Use **Escape** to go back one screen, keeping your place in the list you came from.
+Use the arrow keys to move through menus and lists, **Enter** on Windows or **Return** on Mac to open the selected item, and **Tab** and **Shift+Tab** to move between controls. Menus, lists and drop-down lists support letter navigation: type the first letters of an item quickly, for example **slov** for Slovenia, to move to it, or type the same letter again to move to the next item that begins with it. Use **Escape** to go back one screen, keeping your place in the list you came from.
 
 Most lists and the player have a context menu with additional actions. Open it with **Applications** or **Shift+F10** on Windows, or **Shift+F10** on Mac. VoiceOver's **VO+Shift+M** menu command also opens the selected row's menu, and **VO+Space** activates a row.
 
@@ -106,7 +106,7 @@ Search YouTube for all results, videos, playlists, or channels. Search SoundClou
 
 Open a YouTube channel to browse its videos, popular uploads, playlists, and live streams. Open a playlist to choose a particular video, play it in order, or shuffle it. More results load as you reach the end of supported lists, without sending you back to the first result. You can also open items in your browser, copy their page links, or copy a resolved stream URL where available.
 
-Direct links use yt-dlp for YouTube, SoundCloud, and other supported sites, as well as direct playable streams. Whether a particular link can play or download depends on the site's current support, permissions, and media format. Spotify links use the Spotify integration instead.
+Direct links use yt-dlp for YouTube, SoundCloud, and other supported sites, as well as direct playable streams. A link to an internet radio stream, or to its .pls or .m3u playlist, plays at once as a live radio station under the station's name, and song titles the station sends are announced as in Radio. Whether a particular link can play or download depends on the site's current support, permissions, and media format. Spotify links use the Spotify integration instead.
 
 YouTube playback prefers the original audio language rather than automatically choosing a dubbed track. Playback can continue through a list or use related videos, according to Settings. There is also a command to play the next related YouTube video. You can choose browser playback instead of the internal player where offered.
 
@@ -440,7 +440,7 @@ Actions apply where available. List commands use the selection; player commands 
 - **Up / Down in a list**: Select the previous or next row.
 - **Home / End in a list**: Move to the beginning or end; supported paginated lists can load further items.
 - **PageUp / PageDown in a list**: Move through a page of rows.
-- **A letter in a menu**: Move to an item beginning with that letter.
+- **Letters in a menu or list**: Move to the first item beginning with the letters typed; the same letter again moves to the next item beginning with it.
 - **Ctrl+A in a Spotify collection**: Select all songs, including unloaded pages, for bulk actions.
 - **Escape in a screen or dialog**: Go back or close that screen or dialog.
 - **Shift+F10**: Open the context menu, as an alternative to Applications.
@@ -576,7 +576,7 @@ Actions apply where available. List commands use the selection; player commands 
 - **Up / Down in a list**: Select the previous or next row.
 - **Home / End in a list**: Move to the beginning or end; supported paginated lists can load further items.
 - **PageUp / PageDown in a list**: Move through a page of rows.
-- **A letter in a menu**: Move to an item beginning with that letter.
+- **Letters in a menu or list**: Move to the first item beginning with the letters typed; the same letter again moves to the next item beginning with it.
 - **Command+A in a Spotify collection**: Select all songs, including unloaded pages, for bulk actions.
 - **Escape in a screen or dialog**: Go back or close that screen or dialog.
 - **VO+Space**: Activate the row under the VoiceOver cursor.

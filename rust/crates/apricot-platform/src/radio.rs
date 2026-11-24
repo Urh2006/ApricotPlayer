@@ -652,6 +652,8 @@ pub fn http_url(value: &str) -> Option<Url> {
 #[serde(default)]
 pub struct RadioLibrary {
     pub favorites: Vec<Station>,
+    /// Stations the user added by name and address (2.1.5).
+    pub my_stations: Vec<Station>,
     pub recent: Vec<Station>,
     pub global_filters: RadioFilters,
     pub local_filters: BTreeMap<String, RadioFilters>,
@@ -662,6 +664,7 @@ impl Default for RadioLibrary {
     fn default() -> Self {
         Self {
             favorites: Vec::new(),
+            my_stations: Vec::new(),
             recent: Vec::new(),
             global_filters: RadioFilters {
                 only_working: true,
@@ -705,8 +708,355 @@ impl RadioLibrary {
     }
 }
 
+/// A link that turned out to be a radio stream when its answer was read
+/// (2.1.5).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StreamLink {
+    /// The address that plays: the link itself, or the first stream of the
+    /// .pls or .m3u playlist it named.
+    pub url: String,
+    /// The station's name from its `icy-name` header or the playlist; empty
+    /// without one.
+    pub name: String,
+}
+
+/// What the answer to a link says it is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LinkKind {
+    Stream,
+    Pls,
+    M3u,
+    Other,
+}
+
+/// A stream sends `icy-` headers, or an audio type without a length (a
+/// file has one); a .pls or .m3u playlist is known by its type, or by its
+/// ending when the server calls it plain text or bytes. HLS (`.m3u8`,
+/// `application/vnd.apple.mpegurl`) stays with yt-dlp, which reads it.
+fn link_kind(content_type: &str, has_length: bool, icy: bool, path: &str) -> LinkKind {
+    let content_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    match content_type.as_str() {
+        "audio/x-scpls" | "application/pls+xml" => return LinkKind::Pls,
+        "audio/x-mpegurl" | "audio/mpegurl" => return LinkKind::M3u,
+        "text/plain" | "application/octet-stream" | "" if has_extension(path, "pls") => {
+            return LinkKind::Pls;
+        }
+        "text/plain" | "application/octet-stream" | "" if has_extension(path, "m3u") => {
+            return LinkKind::M3u;
+        }
+        _ => {}
+    }
+    let audio = content_type.starts_with("audio/") || content_type == "application/ogg";
+    if icy || (audio && !has_length) {
+        LinkKind::Stream
+    } else {
+        LinkKind::Other
+    }
+}
+
+fn has_extension(path: &str, extension: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+}
+
+/// The first stream address of a playlist and its title.
+fn playlist_entry(kind: LinkKind, text: &str) -> Option<StreamLink> {
+    let lines = text.lines().map(str::trim);
+    match kind {
+        LinkKind::Pls => {
+            let mut entries: BTreeMap<u32, StreamLink> = BTreeMap::new();
+            for line in lines {
+                let Some((key, value)) = line.split_once('=') else {
+                    continue;
+                };
+                let key = key.trim().to_ascii_lowercase();
+                let value = value.trim();
+                let (field, number) = if let Some(number) = key.strip_prefix("file") {
+                    ("file", number)
+                } else if let Some(number) = key.strip_prefix("title") {
+                    ("title", number)
+                } else {
+                    continue;
+                };
+                let Ok(number) = number.parse::<u32>() else {
+                    continue;
+                };
+                let entry = entries.entry(number).or_default();
+                if field == "file" {
+                    value.clone_into(&mut entry.url);
+                } else {
+                    value.clone_into(&mut entry.name);
+                }
+            }
+            entries
+                .into_values()
+                .find(|entry| http_url(&entry.url).is_some())
+        }
+        LinkKind::M3u => {
+            let mut title = String::new();
+            for line in lines {
+                if let Some(info) = line.strip_prefix("#EXTINF:") {
+                    title = info
+                        .split_once(',')
+                        .map(|(_, name)| name.trim().to_owned())
+                        .unwrap_or_default();
+                } else if !line.is_empty() && !line.starts_with('#') {
+                    if http_url(line).is_some() {
+                        return Some(StreamLink {
+                            url: line.to_owned(),
+                            name: title,
+                        });
+                    }
+                    title.clear();
+                }
+            }
+            None
+        }
+        LinkKind::Stream | LinkKind::Other => None,
+    }
+}
+
+/// Reads the answer to `link` and tells whether it is a radio stream or a
+/// playlist of one; `None` for anything else (a page, a file) or when the
+/// link does not answer, so yt-dlp tries it as before. Only the headers of
+/// a stream are read; a playlist is read up to 64 KB. Runs on a worker.
+#[must_use]
+pub fn probe_stream(link: &str, proxy: Option<&str>) -> Option<StreamLink> {
+    let url = http_url(link)?;
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(6))
+        .connect_timeout(Duration::from_secs(3))
+        .redirect(Policy::limited(4))
+        .user_agent(format!("ApricotPlayer/{}", env!("CARGO_PKG_VERSION")));
+    if let Some(proxy) = proxy.filter(|proxy| !proxy.trim().is_empty()) {
+        builder = builder.proxy(reqwest::Proxy::all(proxy).ok()?);
+    }
+    let response = builder
+        .build()
+        .ok()?
+        .get(url.clone())
+        .header("Icy-MetaData", "1")
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let headers = response.headers();
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let icy = headers.keys().any(|name| name.as_str().starts_with("icy-"));
+    let has_length = header("content-length")
+        .parse::<u64>()
+        .is_ok_and(|length| length > 0);
+    let kind = link_kind(
+        &header("content-type"),
+        has_length,
+        icy,
+        response.url().path(),
+    );
+    let name = header("icy-name");
+    match kind {
+        LinkKind::Stream => Some(StreamLink {
+            url: url.to_string(),
+            name,
+        }),
+        LinkKind::Pls | LinkKind::M3u => {
+            let mut body = Vec::new();
+            response.take(64 * 1024).read_to_end(&mut body).ok()?;
+            let mut entry = playlist_entry(kind, &String::from_utf8_lossy(&body))?;
+            if !name.is_empty() {
+                entry.name = name;
+            }
+            Some(entry)
+        }
+        LinkKind::Other => None,
+    }
+}
+
+/// A station the user saved under My stations: its own name and address,
+/// with an id of its own that is no catalog id (2.1.5).
+#[must_use]
+pub fn my_station(id: &str, name: &str, address: &str) -> Station {
+    Station {
+        stationuuid: format!("{MY_STATION_PREFIX}{id}"),
+        name: name.trim().to_owned(),
+        url: address.trim().to_owned(),
+        ..Station::default()
+    }
+}
+
+/// The id prefix of My stations; the catalog never counts their plays.
+pub const MY_STATION_PREFIX: &str = "my-station:";
+
+impl Station {
+    /// A station of My stations, not of the catalog.
+    #[must_use]
+    pub fn is_my_station(&self) -> bool {
+        self.stationuuid.starts_with(MY_STATION_PREFIX)
+    }
+
+    /// Its address names a .pls or .m3u playlist, read before playing.
+    #[must_use]
+    pub fn names_playlist(&self) -> bool {
+        self.stream_url()
+            .is_some_and(|url| has_extension(url.path(), "pls") || has_extension(url.path(), "m3u"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// 2.1.5: a link's answer tells a radio stream, a playlist of one, or
+    /// anything else, which yt-dlp keeps reading.
+    #[test]
+    fn link_answers_tell_streams_and_playlists_apart() {
+        use super::{LinkKind, link_kind};
+        assert_eq!(
+            link_kind("audio/mpeg", false, false, "/live"),
+            LinkKind::Stream
+        );
+        assert_eq!(link_kind("text/html", false, true, "/"), LinkKind::Stream);
+        assert_eq!(
+            link_kind("application/ogg", false, false, "/a"),
+            LinkKind::Stream
+        );
+        // A file has a length and stays with yt-dlp.
+        assert_eq!(
+            link_kind("audio/mpeg", true, false, "/song.mp3"),
+            LinkKind::Other
+        );
+        assert_eq!(
+            link_kind("text/html; charset=utf-8", false, false, "/"),
+            LinkKind::Other
+        );
+        assert_eq!(
+            link_kind("audio/x-scpls", true, false, "/listen"),
+            LinkKind::Pls
+        );
+        assert_eq!(
+            link_kind("audio/x-mpegurl", true, false, "/x"),
+            LinkKind::M3u
+        );
+        assert_eq!(
+            link_kind("text/plain", true, false, "/Radio.PLS"),
+            LinkKind::Pls
+        );
+        assert_eq!(
+            link_kind("application/octet-stream", true, false, "/r.m3u"),
+            LinkKind::M3u
+        );
+        // HLS is yt-dlp's.
+        assert_eq!(
+            link_kind("application/vnd.apple.mpegurl", true, false, "/live.m3u8"),
+            LinkKind::Other
+        );
+    }
+
+    #[test]
+    fn playlists_give_their_first_stream_and_its_title() {
+        use super::{LinkKind, StreamLink, playlist_entry};
+        let pls = "[playlist]\r\nNumberOfEntries=2\r\nFile2=http://b.test/2\r\nTitle1=Radio One\r\nFile1=https://a.test/1\r\nLength1=-1\r\n";
+        assert_eq!(
+            playlist_entry(LinkKind::Pls, pls),
+            Some(StreamLink {
+                url: "https://a.test/1".to_owned(),
+                name: "Radio One".to_owned(),
+            })
+        );
+        let m3u = "#EXTM3U\n#EXTINF:-1,Jazz Live\nhttp://c.test/jazz\nhttp://c.test/other\n";
+        assert_eq!(
+            playlist_entry(LinkKind::M3u, m3u),
+            Some(StreamLink {
+                url: "http://c.test/jazz".to_owned(),
+                name: "Jazz Live".to_owned(),
+            })
+        );
+        assert_eq!(
+            playlist_entry(LinkKind::M3u, "#EXTM3U\nfile:///etc/x\n"),
+            None
+        );
+        assert_eq!(playlist_entry(LinkKind::Pls, "File1=ftp://x.test/a"), None);
+    }
+
+    #[test]
+    fn my_stations_have_their_own_ids_and_say_when_they_name_a_playlist() {
+        let station = super::my_station("1", " Home radio ", " http://h.test/radio.pls ");
+        assert!(station.is_my_station());
+        assert_eq!(station.name, "Home radio");
+        assert!(station.names_playlist());
+        let stream = super::my_station("2", "Live", "https://h.test/live");
+        assert!(!stream.names_playlist());
+        assert!(stream.media().is_some_and(|item| item.is_catalog_stream()));
+        assert!(!super::Station::default().is_my_station());
+    }
+
+    /// A live stream on a local server: its headers say what it is.
+    #[test]
+    fn a_local_stream_and_playlist_are_recognized() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("listener");
+        let port = listener.local_addr().expect("address").port();
+        let server = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let (stream, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut request = String::new();
+                reader.read_line(&mut request).expect("request");
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut stream = stream;
+                let answer = if request.contains("/live") {
+                    "HTTP/1.0 200 OK\r\nContent-Type: audio/mpeg\r\nicy-name: Test FM\r\n\r\nID3"
+                        .to_owned()
+                } else if request.contains("/list.pls") {
+                    let body = format!(
+                        "[playlist]\nFile1=http://127.0.0.1:{port}/live\nTitle1=From list\n"
+                    );
+                    format!(
+                        "HTTP/1.0 200 OK\r\nContent-Type: audio/x-scpls\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    )
+                } else {
+                    "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: 4\r\n\r\n<p/>"
+                        .to_owned()
+                };
+                let _ = stream.write_all(answer.as_bytes());
+            }
+        });
+        let base = format!("http://127.0.0.1:{port}");
+        assert_eq!(
+            super::probe_stream(&format!("{base}/live"), None),
+            Some(super::StreamLink {
+                url: format!("{base}/live"),
+                name: "Test FM".to_owned(),
+            })
+        );
+        assert_eq!(
+            super::probe_stream(&format!("{base}/list.pls"), None),
+            Some(super::StreamLink {
+                url: format!("{base}/live"),
+                name: "From list".to_owned(),
+            })
+        );
+        assert_eq!(super::probe_stream(&format!("{base}/page"), None), None);
+        server.join().expect("server");
+    }
+
     /// Review 2.1: rows are station names; only stations that share a name
     /// add their codec and bit rate.
     #[test]

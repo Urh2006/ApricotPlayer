@@ -788,6 +788,9 @@ struct WindowState {
 }
 
 pub fn run_application(application: Application, version: &str, start_hidden: bool) -> Result<()> {
+    // Letter search with several letters in every list, drop-down list and
+    // menu of this thread (2.1.5).
+    crate::type_ahead_win32::install();
     // SAFETY: The window, state pointer, controls, and message loop are confined
     // to this thread. Dynamic UTF-16 buffers outlive each Win32 call that uses
     // them, and owned state is released exactly once during WM_DESTROY.
@@ -4983,7 +4986,11 @@ fn resolved_playback_item(
     if preserve_sequence || original.source == apricot_core::MediaSource::Direct {
         resolved.source = original.source;
         resolved.id = original.id.clone();
-        resolved.url.clone_from(&original.url);
+        // A radio stream found behind a playlist link keeps the stream, so
+        // it plays again without reading the playlist (2.1.5).
+        if !resolved.is_catalog_stream() {
+            resolved.url.clone_from(&original.url);
+        }
     }
     resolved
 }

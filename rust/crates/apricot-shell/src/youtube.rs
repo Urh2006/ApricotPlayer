@@ -343,7 +343,11 @@ fn resolved_playback_item(
     if preserve_sequence || original.source == MediaSource::Direct {
         resolved.source = original.source;
         resolved.id = original.id.clone();
-        resolved.url.clone_from(&original.url);
+        // A radio stream found behind a playlist link keeps the stream, so
+        // it plays again without reading the playlist (2.1.5).
+        if !resolved.is_catalog_stream() {
+            resolved.url.clone_from(&original.url);
+        }
     }
     resolved
 }
