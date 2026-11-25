@@ -220,6 +220,105 @@ fn item(kind: ItemKind, uri: &str) -> CatalogItem {
     row
 }
 
+fn loaded_frame(source: Source, title: &str, items: Vec<CatalogItem>) -> Frame {
+    Frame {
+        source,
+        title: title.to_owned(),
+        items,
+        next_offset: None,
+        total: None,
+        selected: 0,
+        loading: None,
+        loaded: true,
+        refresh: None,
+        error: None,
+        mixed: false,
+        can_edit: false,
+        can_rename: false,
+        personalised: false,
+        following: None,
+        sections: Vec::new(),
+        search_screen: false,
+        focus_results: false,
+    }
+}
+
+#[test]
+fn native_artist_page_parts_open_with_enter_and_menus_act_on_the_artist()
+-> windows::core::Result<()> {
+    use apricot_spotify::catalog::artist_section_uri;
+    let fixture = Fixture::new()?;
+    let window = fixture.window;
+    let artist = "spotify:artist:6UOk7DmvqlzWmo6gjhZvn6";
+    let part = |section: ArtistSection, count: Option<u64>| CatalogItem {
+        kind: ItemKind::Section,
+        uri: artist_section_uri(artist, section),
+        name: String::new(),
+        subtitle: String::new(),
+        album: "Da Tweekaz".to_owned(),
+        album_uri: String::new(),
+        artist_uri: artist.to_owned(),
+        duration_ms: None,
+        playable: false,
+        explicit: false,
+        uid: None,
+        saved: None,
+        count,
+        editable: false,
+        format: String::new(),
+    };
+    // SAFETY: Production handlers on this fixture's hidden controls only.
+    unsafe {
+        let state = super::state_mut(window).unwrap();
+        let texts = super::super::spotify::catalog(state);
+        let mut rows = vec![
+            part(ArtistSection::Popular, Some(10)),
+            part(ArtistSection::Songs, None),
+            part(ArtistSection::Singles, Some(157)),
+        ];
+        apricot_app::spotify::name_artist_sections(&texts, &mut rows);
+        state.spotify_browse.frames = vec![loaded_frame(
+            Source::Artist(artist.into()),
+            "Da Tweekaz, artist",
+            rows,
+        )];
+        state.view = MainView::SpotifyBrowse;
+        render(window, true);
+        fixture.choose(1);
+        let state = super::state(window).unwrap();
+        let target = context_item(state).unwrap();
+        assert_eq!(
+            (target.kind, target.uri.as_str()),
+            (ItemKind::Artist, artist)
+        );
+        let menu = commands(state);
+        for command in [
+            C::SpotifyOpen,
+            C::SpotifyPlay,
+            C::SpotifyShufflePlay,
+            C::SpotifyRadio,
+        ] {
+            assert!(menu.contains(&command), "missing {command:?}");
+        }
+        command(window, C::SpotifyOpen);
+        let state = super::state(window).unwrap();
+        let frame = top(state).unwrap();
+        assert_eq!(
+            frame.source,
+            Source::ArtistSection {
+                artist: artist.into(),
+                section: ArtistSection::Songs,
+            }
+        );
+        assert_eq!(frame.title, "All songs, Da Tweekaz");
+        back(window);
+        let state = super::state(window).unwrap();
+        assert_eq!(state.spotify_browse.frames.len(), 1);
+        assert_eq!(SendMessageW(state.list, LB_GETCURSEL, None, None).0, 1);
+    }
+    Ok(())
+}
+
 #[test]
 fn native_spotify_player_menu_uses_playing_track_and_current_saved_state()
 -> windows::core::Result<()> {

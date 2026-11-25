@@ -1657,3 +1657,25 @@ Urhove zahteve z dne 2. 10. 2026:
 - Ni spremenjeno: izbira HLS formatov (dolgi testi so pokazali, da je DASH slabši), lastno
   InnerTube iskanje (odločitev: YouTube vedno prek yt-dlp), Spotify, radio in Direct link
   povezave na druge strani (te pred yt-dlp naredijo en HTTP preizkus za radijski tok).
+
+### Stran Spotify izvajalca po delih, 2.1.7 (25. 11. 2026)
+
+- Urh je 25. 11. 2026 izbral predlog: Enter na izvajalcu odpre seznam delov (Popular, All
+  songs, Albums, Singles and EPs, Compilations, Appears on, Playlists, Related artists),
+  vsak del je svoj popoln seznam, All songs je razvrščen od najnovejše izdaje naprej, ponovljen
+  komad z istim naslovom in dolžino (razlika do 1 s) pa ostane samo pri najnovejši izdaji.
+  Python verzija Spotifyja nima, zato to ni odstopanje od Pythona.
+- Prej je `queryArtistOverview` vrnil eno stran vsakega razdelka (pri Da Tweekaz 10 od 157
+  singlov), singli pa so se brali kot album. Deli zdaj berejo `queryArtistDiscography*`,
+  `queryArtistAppearsOn`, `queryArtistPlaylists` in `queryArtistRelated` po straneh, vrsta
+  izdaje pride iz polja `type` (`CatalogItem.format`).
+- All songs: `queryArtistDiscographyAll` po 50, nato `queryAlbumTracks` za vsako izdajo, 6
+  hkrati; seznam ostane v pomnilniku do izhoda. Pesem iz All songs se predvaja kot Connect
+  seznam skladb (`LoadRequest::from_tracks`, metapodatek `spotify_artist_songs`), zato Next
+  gre na naslednjo pesem seznama. Popular se še vedno predvaja v kontekstu izvajalca.
+- Vrstice strani izvajalca v kontekstnem meniju in bližnjicah predstavljajo izvajalca
+  (`artist_of_section_row`), Open pa odpre izbrani del.
+- Preverjeno v živo na ločenem namizju z nadomestnim NVDA odjemalcem: stran Da Tweekaz v
+  7 s skupaj s prijavo, All songs 336 pesmi v 4,1 s (362 pred odstranitvijo ponovitev), Enter
+  na drugi pesmi izgovori samo "Playing: ...", Next predvaja tretjo pesem seznama, Escape
+  vrne fokus na isto vrstico seznama in strani, Singles and EPs naloži naslednjo stran na koncu.

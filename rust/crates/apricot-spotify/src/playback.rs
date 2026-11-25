@@ -1367,6 +1367,29 @@ fn load_request(
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
     };
+    // A song of an artist's All songs list continues with the next song of
+    // that list (2.1.7); the list is known while the application runs.
+    if text("spotify_context").is_none()
+        && let Some(songs) = text("spotify_artist_songs")
+            .and_then(|artist| crate::catalog::artist_song_uris(&artist))
+            .filter(|songs| songs.contains(&uri))
+    {
+        log::info!("load artist songs ({} songs)", songs.len());
+        let request = LoadRequest::from_tracks(
+            songs,
+            LoadRequestOptions {
+                start_playing: !paused,
+                seek_to: position_ms,
+                context_options: Some(LoadContextOptions::Options(ConnectOptions {
+                    shuffle,
+                    repeat: matches!(repeat_mode, RepeatMode::Context),
+                    repeat_track: matches!(repeat_mode, RepeatMode::Track),
+                })),
+                playing_track: Some(PlayingTrack::Uri(uri)),
+            },
+        );
+        return (request, true);
+    }
     // An album, playlist, artist or show saved as an item plays whole.
     let collection_uri = SpotifyRef::parse(&uri)
         .filter(|reference| {
@@ -2297,6 +2320,70 @@ mod tests {
             .insert("spotify_collection".into(), true.into());
         let (_, names_song) = load_request(&whole, whole.id.0.clone(), 0, false, RepeatMode::Off);
         assert!(!names_song);
+    }
+
+    #[test]
+    fn a_song_of_all_songs_continues_with_the_next_song_of_that_list() {
+        let artist = "spotify:artist:all-songs-test";
+        let song = |uri: &str| crate::CatalogItem {
+            kind: crate::ItemKind::Track,
+            uri: uri.into(),
+            name: String::new(),
+            subtitle: String::new(),
+            album: String::new(),
+            album_uri: String::new(),
+            artist_uri: String::new(),
+            duration_ms: None,
+            playable: true,
+            explicit: false,
+            uid: None,
+            saved: None,
+            count: None,
+            editable: false,
+            format: String::new(),
+        };
+        let mut item = SpotifyTrack {
+            uri: "spotify:track:second".into(),
+            title: "Second".into(),
+            artists: "Artist".into(),
+            artist_uri: String::new(),
+            album: String::new(),
+            duration_ms: 1000,
+        }
+        .media_item();
+        item.metadata
+            .insert("spotify_artist_songs".into(), artist.into());
+        // Not read in this run: the song plays alone.
+        let (request, names_song) =
+            load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Off);
+        assert!(!names_song);
+        assert!(request.playing_track.is_none());
+        crate::catalog::remember_artist_songs(
+            artist,
+            vec![
+                song("spotify:track:first"),
+                song("spotify:track:second"),
+                song("spotify:track:third"),
+            ],
+        );
+        let (request, names_song) =
+            load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Off);
+        assert!(names_song);
+        assert!(matches!(
+            &request.playing_track,
+            Some(PlayingTrack::Uri(uri)) if uri == "spotify:track:second"
+        ));
+        let described = format!("{request:?}");
+        assert!(
+            described.contains("spotify:track:first") && described.contains("spotify:track:third")
+        );
+        // A song of another list (a context) keeps that context.
+        item.metadata.insert(
+            "spotify_context".into(),
+            "spotify:album:1DFixLWuPkv3KT3TnV35m3".into(),
+        );
+        let (request, _) = load_request(&item, item.id.0.clone(), 0, false, RepeatMode::Off);
+        assert!(format!("{request:?}").contains("spotify:album:1DFixLWuPkv3KT3TnV35m3"));
     }
 
     #[tokio::test]
