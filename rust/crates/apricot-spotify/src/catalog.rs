@@ -329,7 +329,12 @@ pub fn parse_item(value: &Value) -> CatalogItem {
             .pointer("/currentUserCapabilities/canEditItems")
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        format: text(node, "/format").to_owned(),
+        // A playlist's format, or a release's type (ALBUM, SINGLE, EP,
+        // COMPILATION) so rows can say single or EP instead of album.
+        format: match text(node, "/format") {
+            "" if kind == ItemKind::Album => text(node, "/type").to_owned(),
+            format => format.to_owned(),
+        },
     }
 }
 
@@ -1283,45 +1288,187 @@ pub async fn playlist(
     })
 }
 
-/// An artist's overview: popular tracks, then albums, singles and
-/// compilations (each opens its release).
-pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collection, ApiError> {
-    let data = api
+/// The parts of an artist page (Urh, 2.1.7): Spotify's overview shows only
+/// the first page of each, so every part opens as its own complete list,
+/// and All songs gathers the songs of every release.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ArtistSection {
+    Popular,
+    Songs,
+    Albums,
+    Singles,
+    Compilations,
+    AppearsOn,
+    Playlists,
+    Related,
+}
+
+impl ArtistSection {
+    /// Page order.
+    pub const ALL: [Self; 8] = [
+        Self::Popular,
+        Self::Songs,
+        Self::Albums,
+        Self::Singles,
+        Self::Compilations,
+        Self::AppearsOn,
+        Self::Playlists,
+        Self::Related,
+    ];
+
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Popular => "popular",
+            Self::Songs => "songs",
+            Self::Albums => "albums",
+            Self::Singles => "singles",
+            Self::Compilations => "compilations",
+            Self::AppearsOn => "appears_on",
+            Self::Playlists => "playlists",
+            Self::Related => "related",
+        }
+    }
+
+    /// The translation key of the row and list name.
+    #[must_use]
+    pub const fn text_key(self) -> &'static str {
+        match self {
+            Self::Popular => "spotify_artist_popular",
+            Self::Songs => "spotify_artist_songs",
+            Self::Albums => "spotify_artist_albums",
+            Self::Singles => "spotify_artist_singles",
+            Self::Compilations => "spotify_artist_compilations",
+            Self::AppearsOn => "spotify_artist_appears_on",
+            Self::Playlists => "spotify_artist_playlists",
+            Self::Related => "spotify_artist_related",
+        }
+    }
+}
+
+/// The row of an artist page that opens `section`.
+#[must_use]
+pub fn artist_section_uri(artist: &str, section: ArtistSection) -> String {
+    format!("apricot:{artist}:{}", section.key())
+}
+
+/// The artist and part an artist page row opens.
+#[must_use]
+pub fn parse_artist_section_uri(uri: &str) -> Option<(String, ArtistSection)> {
+    let rest = uri.strip_prefix("apricot:spotify:artist:")?;
+    let (id, key) = rest.split_once(':')?;
+    let section = ArtistSection::ALL
+        .into_iter()
+        .find(|section| section.key() == key)?;
+    (!id.is_empty()).then(|| (format!("spotify:artist:{id}"), section))
+}
+
+/// The artist a row of an artist page belongs to, so the context menu and
+/// shortcuts (play, follow, radio, copy link) act on the artist there.
+/// Section rows carry the artist's name in `album`.
+#[must_use]
+pub fn artist_of_section_row(row: &CatalogItem) -> Option<CatalogItem> {
+    if row.kind != ItemKind::Section {
+        return None;
+    }
+    let (artist, _) = parse_artist_section_uri(&row.uri)?;
+    Some(CatalogItem {
+        kind: ItemKind::Artist,
+        uri: artist,
+        name: row.album.clone(),
+        subtitle: String::new(),
+        album: String::new(),
+        album_uri: String::new(),
+        artist_uri: String::new(),
+        duration_ms: None,
+        playable: true,
+        explicit: false,
+        uid: None,
+        saved: row.saved,
+        count: None,
+        editable: false,
+        format: String::new(),
+    })
+}
+
+fn artist_section_row(
+    artist: &str,
+    name: &str,
+    section: ArtistSection,
+    count: Option<u64>,
+) -> CatalogItem {
+    CatalogItem {
+        kind: ItemKind::Section,
+        uri: artist_section_uri(artist, section),
+        // The window names the row in the user's language.
+        name: String::new(),
+        subtitle: String::new(),
+        album: name.to_owned(),
+        album_uri: String::new(),
+        artist_uri: artist.to_owned(),
+        duration_ms: None,
+        playable: false,
+        explicit: false,
+        uid: None,
+        saved: None,
+        count,
+        editable: false,
+        format: String::new(),
+    }
+}
+
+async fn artist_overview(api: &Api, session: &Session, uri: &str) -> Result<Value, ApiError> {
+    let mut data = api
         .pathfinder(
             session,
             "queryArtistOverview",
             json!({ "uri": uri, "locale": "", "includePrerelease": true }),
         )
         .await?;
-    let artist = data
-        .get("artistUnion")
-        .ok_or_else(|| ApiError::Shape("queryArtistOverview".into()))?;
-    let mut items = parse_page(&artist["discography"]["topTracks"], 0).items;
-    for section in ["albums", "singles", "compilations"] {
-        let releases = artist
-            .pointer(&format!("/discography/{section}/items"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for release in releases {
-            // Each release group lists its first release.
-            let release = release
-                .pointer("/releases/items/0")
-                .cloned()
-                .unwrap_or(release);
-            items.push(parse_item(&release));
-        }
-    }
-    if let Some(related) = artist
-        .pointer("/relatedContent/relatedArtists/items")
+    data.get_mut("artistUnion")
+        .map(Value::take)
+        .ok_or_else(|| ApiError::Shape("queryArtistOverview".into()))
+}
+
+/// An artist page: one row for each part that has entries, with its size.
+pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collection, ApiError> {
+    let artist = artist_overview(api, session, uri).await?;
+    let name = text(&artist, "/profile/name").to_owned();
+    let total = |pointer: &str| {
+        artist
+            .pointer(&format!("{pointer}/totalCount"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let popular = artist
+        .pointer("/discography/topTracks/items")
         .and_then(Value::as_array)
-    {
-        items.extend(related.iter().map(parse_item));
-    }
-    items.retain(|item| item.kind != ItemKind::Unavailable || !item.uri.is_empty());
+        .map_or(0, Vec::len) as u64;
+    let releases = total("/discography/albums")
+        + total("/discography/singles")
+        + total("/discography/compilations");
+    let items = ArtistSection::ALL
+        .into_iter()
+        .filter_map(|section| {
+            let count = match section {
+                ArtistSection::Popular => Some(popular),
+                // The number of songs is known only once all are read.
+                ArtistSection::Songs => return (releases > 0).then_some((section, None)),
+                ArtistSection::Albums => Some(total("/discography/albums")),
+                ArtistSection::Singles => Some(total("/discography/singles")),
+                ArtistSection::Compilations => Some(total("/discography/compilations")),
+                ArtistSection::AppearsOn => Some(total("/relatedContent/appearsOn")),
+                ArtistSection::Playlists => Some(total("/profile/playlistsV2")),
+                ArtistSection::Related => Some(total("/relatedContent/relatedArtists")),
+            };
+            count
+                .filter(|count| *count > 0)
+                .map(|count| (section, Some(count)))
+        })
+        .map(|(section, count)| artist_section_row(uri, &name, section, count))
+        .collect();
     Ok(Collection {
         uri: uri.to_owned(),
-        name: text(artist, "/profile/name").to_owned(),
+        name,
         subtitle: String::new(),
         description: String::new(),
         can_edit_items: false,
@@ -1335,6 +1482,244 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
             next_offset: None,
         },
     })
+}
+
+/// A page of release groups (`{items: [{releases: {items}}], totalCount}`):
+/// each group shows its first release.
+fn release_page(list: &Value, offset: u64) -> CatalogPage {
+    let items: Vec<CatalogItem> = list
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|groups| {
+            groups
+                .iter()
+                .map(|group| parse_item(group.pointer("/releases/items/0").unwrap_or(group)))
+                .collect()
+        })
+        .unwrap_or_default();
+    let total = list.get("totalCount").and_then(Value::as_u64);
+    let end = offset + items.len() as u64;
+    CatalogPage {
+        next_offset: total
+            .filter(|total| end < *total && !items.is_empty())
+            .map(|_| end),
+        items,
+        total,
+    }
+}
+
+/// One part of an artist page, page by page; All songs comes whole.
+pub async fn artist_section(
+    api: &std::sync::Arc<Api>,
+    session: &Session,
+    artist: &str,
+    section: ArtistSection,
+    offset: u64,
+) -> Result<CatalogPage, ApiError> {
+    let paged = |operation: &'static str| {
+        api.pathfinder(
+            session,
+            operation,
+            json!({ "uri": artist, "offset": offset, "limit": PAGE, "order": "DATE_DESC" }),
+        )
+    };
+    let mut page = match section {
+        ArtistSection::Popular => {
+            let overview = artist_overview(api, session, artist).await?;
+            let mut page = parse_page(&overview["discography"]["topTracks"], 0);
+            page.next_offset = None;
+            page
+        }
+        ArtistSection::Songs => {
+            let items = artist_songs(api, session, artist).await?;
+            CatalogPage {
+                total: Some(items.len() as u64),
+                items,
+                next_offset: None,
+            }
+        }
+        ArtistSection::Albums => release_page(
+            &paged("queryArtistDiscographyAlbums").await?["artistUnion"]["discography"]["albums"],
+            offset,
+        ),
+        ArtistSection::Singles => release_page(
+            &paged("queryArtistDiscographySingles").await?["artistUnion"]["discography"]["singles"],
+            offset,
+        ),
+        ArtistSection::Compilations => release_page(
+            &paged("queryArtistDiscographyCompilations").await?["artistUnion"]["discography"]["compilations"],
+            offset,
+        ),
+        ArtistSection::AppearsOn => release_page(
+            &paged("queryArtistAppearsOn").await?["artistUnion"]["relatedContent"]["appearsOn"],
+            offset,
+        ),
+        ArtistSection::Playlists => parse_page(
+            &paged("queryArtistPlaylists").await?["artistUnion"]["profile"]["playlistsV2"],
+            offset,
+        ),
+        ArtistSection::Related => {
+            let data = api
+                .pathfinder(
+                    session,
+                    "queryArtistRelated",
+                    json!({ "uri": artist, "locale": "" }),
+                )
+                .await?;
+            let mut page = parse_page(&data["artistUnion"]["relatedContent"]["relatedArtists"], 0);
+            page.next_offset = None;
+            page
+        }
+    };
+    page.items
+        .retain(|item| item.kind != ItemKind::Unavailable || !item.uri.is_empty());
+    Ok(page)
+}
+
+/// All songs of artists read in this run of the application, newest first:
+/// reading them takes one request for every release, so they are read once.
+static ARTIST_SONGS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, Vec<CatalogItem>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Releases read at the same time for All songs.
+const RELEASES_AT_ONCE: usize = 6;
+
+/// The songs of the artist's All songs list, when it was read: playing one
+/// of them continues with the next one of that list.
+#[must_use]
+pub fn artist_song_uris(artist: &str) -> Option<Vec<String>> {
+    let lists = ARTIST_SONGS.lock().ok()?;
+    let items = lists.get(artist)?;
+    Some(items.iter().map(|item| item.uri.clone()).collect())
+}
+
+/// Keeps an artist's All songs list as if it had been read (tests).
+#[cfg(test)]
+pub(crate) fn remember_artist_songs(artist: &str, items: Vec<CatalogItem>) {
+    ARTIST_SONGS
+        .lock()
+        .unwrap()
+        .insert(artist.to_owned(), items);
+}
+
+/// Every song of every album, single, EP and compilation of the artist,
+/// newest release first and in release order; a song that came out again
+/// with the same title and length is listed once, at its newest release.
+pub async fn artist_songs(
+    api: &std::sync::Arc<Api>,
+    session: &Session,
+    artist: &str,
+) -> Result<Vec<CatalogItem>, ApiError> {
+    if let Some(items) = ARTIST_SONGS
+        .lock()
+        .ok()
+        .and_then(|lists| lists.get(artist).cloned())
+    {
+        return Ok(items);
+    }
+    let mut releases: Vec<(String, String)> = Vec::new();
+    let mut offset = 0;
+    loop {
+        let data = api
+            .pathfinder(
+                session,
+                "queryArtistDiscographyAll",
+                json!({ "uri": artist, "offset": offset, "limit": PAGE, "order": "DATE_DESC" }),
+            )
+            .await?;
+        let page = release_page(&data["artistUnion"]["discography"]["all"], offset);
+        releases.extend(
+            page.items
+                .into_iter()
+                .filter(|release| !release.uri.is_empty())
+                .map(|release| (release.uri, release.name)),
+        );
+        match page.next_offset {
+            Some(next) if next > offset && releases.len() < 5_000 => offset = next,
+            _ => break,
+        }
+    }
+    let limit = std::sync::Arc::new(tokio::sync::Semaphore::new(RELEASES_AT_ONCE));
+    let mut reads = tokio::task::JoinSet::new();
+    for (index, (uri, name)) in releases.into_iter().enumerate() {
+        let api = api.clone();
+        let session = session.clone();
+        let limit = limit.clone();
+        reads.spawn(async move {
+            let _permit = limit.acquire_owned().await;
+            let tracks = release_tracks(&api, &session, &uri, &name).await;
+            (index, tracks)
+        });
+    }
+    let mut read = Vec::new();
+    while let Some(joined) = reads.join_next().await {
+        let (index, tracks) =
+            joined.map_err(|error| ApiError::Shape(format!("release read stopped: {error}")))?;
+        read.push((index, tracks?));
+    }
+    read.sort_by_key(|(index, _)| *index);
+    let items = unique_songs(read.into_iter().flat_map(|(_, tracks)| tracks));
+    if let Ok(mut lists) = ARTIST_SONGS.lock() {
+        lists.insert(artist.to_owned(), items.clone());
+    }
+    Ok(items)
+}
+
+/// The tracks of one release, with the release as their album.
+async fn release_tracks(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    name: &str,
+) -> Result<Vec<CatalogItem>, ApiError> {
+    let mut tracks = Vec::new();
+    let mut offset = 0;
+    loop {
+        let data = api
+            .pathfinder(
+                session,
+                "queryAlbumTracks",
+                json!({ "uri": uri, "offset": offset, "limit": 300 }),
+            )
+            .await?;
+        let page = parse_page(&data["albumUnion"]["tracksV2"], offset);
+        for mut track in page.items {
+            if track.album_uri.is_empty() {
+                uri.clone_into(&mut track.album_uri);
+                name.clone_into(&mut track.album);
+            }
+            // Album uids are not Connect's: these songs play by URI.
+            track.uid = None;
+            tracks.push(track);
+        }
+        match page.next_offset {
+            Some(next) if next > offset => offset = next,
+            _ => return Ok(tracks),
+        }
+    }
+}
+
+/// Keeps the first of songs with the same URI, or with the same title
+/// (ignoring case) and a length within a second.
+fn unique_songs(songs: impl IntoIterator<Item = CatalogItem>) -> Vec<CatalogItem> {
+    let mut kept = Vec::new();
+    let mut uris = std::collections::HashSet::new();
+    let mut lengths: std::collections::HashMap<String, Vec<u64>> = std::collections::HashMap::new();
+    for song in songs {
+        if !song.kind.is_playable_item() || !uris.insert(song.uri.clone()) {
+            continue;
+        }
+        let known = lengths.entry(song.name.to_lowercase()).or_default();
+        if let Some(length) = song.duration_ms {
+            if known.iter().any(|other| other.abs_diff(length) <= 1_000) {
+                continue;
+            }
+            known.push(length);
+        }
+        kept.push(song);
+    }
+    kept
 }
 
 pub async fn show(
@@ -1514,6 +1899,112 @@ pub fn parse_saved_states(data: &Value, uris: &[String]) -> Result<Vec<bool>, Ap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artist_page_rows_open_their_part_and_stand_for_the_artist() {
+        let artist = "spotify:artist:6UOk7DmvqlzWmo6gjhZvn6";
+        for section in ArtistSection::ALL {
+            let uri = artist_section_uri(artist, section);
+            assert_eq!(
+                parse_artist_section_uri(&uri),
+                Some((artist.to_owned(), section))
+            );
+        }
+        assert_eq!(
+            parse_artist_section_uri("apricot:spotify:user:x:playlists"),
+            None
+        );
+        assert_eq!(
+            parse_artist_section_uri("apricot:spotify:artist::songs"),
+            None
+        );
+        assert_eq!(
+            parse_artist_section_uri("apricot:spotify:artist:a:other"),
+            None
+        );
+        let row = artist_section_row(artist, "Da Tweekaz", ArtistSection::Singles, Some(157));
+        assert_eq!((row.kind, row.count), (ItemKind::Section, Some(157)));
+        let owner = artist_of_section_row(&row).unwrap();
+        assert_eq!(
+            (owner.kind, owner.uri.as_str(), owner.name.as_str()),
+            (ItemKind::Artist, artist, "Da Tweekaz")
+        );
+        let mut other = row.clone();
+        other.uri = "spotify:section:home".into();
+        assert!(artist_of_section_row(&other).is_none());
+    }
+
+    #[test]
+    fn release_pages_show_each_first_release_with_its_type_and_page_on() {
+        let list = json!({ "totalCount": 157, "items": [
+            { "releases": { "items": [{ "uri": "spotify:album:a", "name": "FUEGO",
+                "type": "SINGLE", "date": { "year": 2026 } }] } },
+            { "releases": { "items": [{ "uri": "spotify:album:b", "name": "Shine",
+                "type": "EP", "date": { "year": 2025 } }] } }
+        ]});
+        let page = release_page(&list, 50);
+        let rows: Vec<_> = page
+            .items
+            .iter()
+            .map(|item| {
+                (
+                    item.kind,
+                    item.name.as_str(),
+                    item.format.as_str(),
+                    item.subtitle.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (ItemKind::Album, "FUEGO", "SINGLE", "2026"),
+                (ItemKind::Album, "Shine", "EP", "2025")
+            ]
+        );
+        assert_eq!((page.total, page.next_offset), (Some(157), Some(52)));
+        let final_page = release_page(&json!({ "totalCount": 52, "items": list["items"] }), 50);
+        assert_eq!(final_page.next_offset, None);
+    }
+
+    #[test]
+    fn all_songs_keep_the_newest_release_of_a_song_that_came_out_again() {
+        let song = |uri: &str, name: &str, length: u64| CatalogItem {
+            kind: ItemKind::Track,
+            uri: uri.into(),
+            name: name.into(),
+            subtitle: String::new(),
+            album: String::new(),
+            album_uri: String::new(),
+            artist_uri: String::new(),
+            duration_ms: Some(length),
+            playable: true,
+            explicit: false,
+            uid: None,
+            saved: None,
+            count: None,
+            editable: false,
+            format: String::new(),
+        };
+        let kept = unique_songs([
+            song("spotify:track:new", "Sun Goes Down", 180_000),
+            // The same recording on an older album.
+            song("spotify:track:old", "sun goes down", 180_600),
+            // Another mix has another length.
+            song("spotify:track:mix", "Sun Goes Down", 260_000),
+            song("spotify:track:new", "Sun Goes Down", 180_000),
+            song("spotify:track:other", "Fuego", 170_000),
+        ]);
+        let uris: Vec<_> = kept.iter().map(|song| song.uri.as_str()).collect();
+        assert_eq!(
+            uris,
+            [
+                "spotify:track:new",
+                "spotify:track:mix",
+                "spotify:track:other"
+            ]
+        );
+    }
 
     #[test]
     fn playlist_library_membership_is_distinct_from_profile_publication() {

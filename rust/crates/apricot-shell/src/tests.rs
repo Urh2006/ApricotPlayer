@@ -1251,6 +1251,124 @@ mod spotify_lists {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One walk through the artist page.
+    fn artist_page_parts_open_as_lists_and_stand_for_the_artist_in_menus() {
+        use apricot_spotify::catalog::{ArtistSection, artist_section_uri};
+        let artist = "spotify:artist:6UOk7DmvqlzWmo6gjhZvn6";
+        let part = |section: ArtistSection, name: &str, count: Option<u64>| CatalogItem {
+            kind: ItemKind::Section,
+            uri: artist_section_uri(artist, section),
+            name: name.to_owned(),
+            subtitle: String::new(),
+            album: "Da Tweekaz".to_owned(),
+            album_uri: String::new(),
+            artist_uri: artist.to_owned(),
+            duration_ms: None,
+            playable: false,
+            explicit: false,
+            uid: None,
+            saved: None,
+            count,
+            editable: false,
+            format: String::new(),
+        };
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::Artist(artist.into()),
+            "Da Tweekaz, artist",
+            vec![
+                part(ArtistSection::Popular, "Popular", Some(10)),
+                part(ArtistSection::Songs, "All songs", None),
+                part(ArtistSection::Singles, "Singles and EPs", Some(157)),
+            ],
+            false,
+        );
+        assert_eq!(
+            ui.screens.last().unwrap().rows,
+            [
+                "Popular, section, 10 items",
+                "All songs, section",
+                "Singles and EPs, section, 157 items"
+            ]
+        );
+        ui.selected = Some(1);
+        // The menu and shared actions act on the artist; Open opens the part.
+        let catalog = shell.catalog();
+        let titles = Vec::new();
+        let context = ContextMenuContext {
+            catalog: &catalog,
+            settings: shell.application.settings(),
+            user_playlist_titles: &titles,
+            queued_download_count: 0,
+        };
+        let menu = commands(&shell.spotify_browse_context_entries(&ui, &context).unwrap());
+        for command in [
+            ContextCommand::SpotifyOpen,
+            ContextCommand::SpotifyPlay,
+            ContextCommand::SpotifyShufflePlay,
+            ContextCommand::SpotifyRadio,
+        ] {
+            assert!(menu.contains(&command), "{command:?}");
+        }
+        assert_eq!(
+            shell.spotify_selected_media(&ui).map(|item| item.id.0),
+            Some(artist.to_owned())
+        );
+        shell.spotify_browse_test_activate(&mut ui);
+        assert_eq!(
+            shell.spotify_browse_test_source(),
+            Some(Source::ArtistSection {
+                artist: artist.into(),
+                section: ArtistSection::Songs,
+            })
+        );
+        assert_eq!(
+            ui.screens.last().unwrap().list_name,
+            "All songs, Da Tweekaz"
+        );
+        // A song of All songs continues with the list, not a Spotify context.
+        shell.spotify_browse_back(&mut ui);
+        assert_eq!(ui.screens.last().unwrap().selected, Some(1));
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::ArtistSection {
+                artist: artist.into(),
+                section: ArtistSection::Songs,
+            },
+            "All songs, Da Tweekaz",
+            vec![track("song", "u1")],
+            false,
+        );
+        ui.selected = Some(0);
+        let song = shell.spotify_selected_media(&ui).unwrap();
+        assert_eq!(
+            song.metadata.get("spotify_artist_songs"),
+            Some(&serde_json::Value::String(artist.into()))
+        );
+        assert!(!song.metadata.contains_key("spotify_context"));
+        // Popular songs keep playing in the artist's context.
+        shell.spotify_browse_back(&mut ui);
+        shell.spotify_browse_test_open(
+            &mut ui,
+            Source::ArtistSection {
+                artist: artist.into(),
+                section: ArtistSection::Popular,
+            },
+            "Popular, Da Tweekaz",
+            vec![track("song", "u1")],
+            false,
+        );
+        ui.selected = Some(0);
+        let song = shell.spotify_selected_media(&ui).unwrap();
+        assert_eq!(
+            song.metadata.get("spotify_context"),
+            Some(&serde_json::Value::String(artist.into()))
+        );
+    }
+
+    #[test]
     fn hub_pins_have_type_specific_menus_and_do_not_create_a_favourites_list() {
         use apricot_spotify::main_menu::{MenuPin, MenuTarget};
         let mut shell = super::keyboard::shell();

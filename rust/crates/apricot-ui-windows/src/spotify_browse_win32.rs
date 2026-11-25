@@ -8,6 +8,7 @@
 
 use apricot_app::spotify::{item_label, kind_word};
 use apricot_core::{Route, SpotifyStamp};
+use apricot_spotify::catalog::ArtistSection;
 use apricot_spotify::main_menu::{MenuOrigin, MenuPin, MenuTarget};
 use apricot_spotify::{
     CatalogItem, CatalogRequest, CatalogResult, ItemKind, LibraryFilter, SearchKind, SpotifyError,
@@ -366,7 +367,13 @@ pub(super) enum Source {
     LikedSongs,
     Album(String),
     Playlist(String),
+    /// An artist page: Popular, All songs, Albums and its other parts.
     Artist(String),
+    /// One part of an artist page, complete (2.1.7).
+    ArtistSection {
+        artist: String,
+        section: ArtistSection,
+    },
     Show(String),
     Home,
     DailyMixes,
@@ -443,6 +450,11 @@ impl Source {
                 offset,
             },
             Self::Artist(uri) => CatalogRequest::Artist(uri.clone()),
+            Self::ArtistSection { artist, section } => CatalogRequest::ArtistSection {
+                artist: artist.clone(),
+                section: *section,
+                offset,
+            },
             Self::Show(uri) => CatalogRequest::Show {
                 uri: uri.clone(),
                 offset,
@@ -457,6 +469,23 @@ impl Source {
             Self::Album(uri) | Self::Playlist(uri) | Self::Artist(uri) | Self::Show(uri) => {
                 Some(uri)
             }
+            // Popular songs play in the artist's context, as on Spotify.
+            Self::ArtistSection {
+                artist,
+                section: ArtistSection::Popular,
+            } => Some(artist),
+            _ => None,
+        }
+    }
+
+    /// All songs of an artist: a song continues with the next one of the
+    /// list, which has no Spotify context of its own.
+    fn artist_songs(&self) -> Option<&str> {
+        match self {
+            Self::ArtistSection {
+                artist,
+                section: ArtistSection::Songs,
+            } => Some(artist),
             _ => None,
         }
     }
@@ -913,7 +942,11 @@ pub(super) unsafe fn loaded(
             if frame.items.is_empty() {
                 frame.total = collection.page.total;
             }
-            frame.items.extend(collection.page.items);
+            let mut items = collection.page.items;
+            if matches!(frame.source, Source::Artist(_)) {
+                apricot_app::spotify::name_artist_sections(&texts, &mut items);
+            }
+            frame.items.extend(items);
             frame.next_offset = collection.page.next_offset;
         }
         Ok(CatalogResult::Sections { title, sections }) => {
@@ -1616,6 +1649,16 @@ pub(super) unsafe fn open_item(window: HWND, item: &CatalogItem) {
     if open_my_profile_item(window, item) {
         return;
     }
+    if let Some((artist, section)) = apricot_spotify::catalog::parse_artist_section_uri(&item.uri) {
+        let title = state(window).map_or_else(
+            || item.name.clone(),
+            |state| {
+                apricot_app::spotify::artist_section_title(&super::spotify::catalog(state), item)
+            },
+        );
+        open(window, Source::ArtistSection { artist, section }, title);
+        return;
+    }
     let source = match item.kind {
         ItemKind::Page => Source::Browse(Some(item.uri.clone())),
         ItemKind::Section
@@ -1765,6 +1808,11 @@ fn media_for(
             if let (Some(uid), true) = (&item.uid, by_uid) {
                 insert("spotify_uid", serde_json::Value::String(uid.clone()));
             }
+        } else if let Some(artist) = top(state).and_then(|frame| frame.source.artist_songs()) {
+            insert(
+                "spotify_artist_songs",
+                serde_json::Value::String(artist.to_owned()),
+            );
         }
     } else {
         let context = if item.kind == ItemKind::LikedSongs {
@@ -1885,7 +1933,10 @@ pub(super) fn context_item(state: &WindowState) -> Option<CatalogItem> {
                 .unwrap_or_else(|| pin.item()),
         )
     } else {
-        selected_item(state).cloned()
+        // A part of an artist page stands for the artist there.
+        selected_item(state).map(|item| {
+            apricot_spotify::catalog::artist_of_section_row(item).unwrap_or_else(|| item.clone())
+        })
     }
 }
 
@@ -3142,6 +3193,16 @@ pub(super) unsafe fn edited(
     }
 }
 
+/// Open in the context menu: a part of an artist page opens that part,
+/// although the menu's other commands act on the artist.
+unsafe fn open_command(window: HWND, item: &CatalogItem) {
+    let part = state(window)
+        .and_then(selected_item)
+        .filter(|row| apricot_spotify::catalog::artist_of_section_row(row).is_some())
+        .cloned();
+    open_item(window, part.as_ref().unwrap_or(item));
+}
+
 /// A context menu command on the selected row.
 pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::ContextCommand) {
     use apricot_app::context_menu::ContextCommand as C;
@@ -3156,7 +3217,7 @@ pub(super) unsafe fn command(window: HWND, command: apricot_app::context_menu::C
     match command {
         C::SpotifyPlay => play(window, &item, false),
         C::SpotifyShufflePlay => play(window, &item, true),
-        C::SpotifyOpen => open_item(window, &item),
+        C::SpotifyOpen => open_command(window, &item),
         C::SpotifyAddToQueue => {
             super::spotify::add_to_queue(window);
         }

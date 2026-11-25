@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use apricot_app::context_menu::{ContextCommand, ContextMenuEntry};
 use apricot_app::spotify::{SpotifyHubEntry, item_label, kind_word};
 use apricot_core::{MediaItem, Route, SpotifyEntityKind, SpotifyRef, SpotifyStamp};
+use apricot_spotify::catalog::ArtistSection;
 use apricot_spotify::{
     CatalogItem, CatalogRequest, CatalogResult, EditOutcome, ItemKind, LibraryEdit, LibraryFilter,
     SearchKind, SpotifyError, SpotifyTrack,
@@ -44,7 +45,13 @@ pub(crate) enum Source {
     },
     Album(String),
     Playlist(String),
+    /// An artist page: Popular, All songs, Albums and its other parts.
     Artist(String),
+    /// One part of an artist page, complete (2.1.7).
+    ArtistSection {
+        artist: String,
+        section: ArtistSection,
+    },
     Show(String),
     Home,
     DailyMixes,
@@ -119,6 +126,11 @@ impl Source {
                 offset,
             },
             Self::Artist(uri) => CatalogRequest::Artist(uri.clone()),
+            Self::ArtistSection { artist, section } => CatalogRequest::ArtistSection {
+                artist: artist.clone(),
+                section: *section,
+                offset,
+            },
             Self::Show(uri) => CatalogRequest::Show {
                 uri: uri.clone(),
                 offset,
@@ -133,6 +145,23 @@ impl Source {
             Self::Album(uri) | Self::Playlist(uri) | Self::Artist(uri) | Self::Show(uri) => {
                 Some(uri)
             }
+            // Popular songs play in the artist's context, as on Spotify.
+            Self::ArtistSection {
+                artist,
+                section: ArtistSection::Popular,
+            } => Some(artist),
+            _ => None,
+        }
+    }
+
+    /// All songs of an artist: a song continues with the next one of the
+    /// list, which has no Spotify context of its own.
+    fn artist_songs(&self) -> Option<&str> {
+        match self {
+            Self::ArtistSection {
+                artist,
+                section: ArtistSection::Songs,
+            } => Some(artist),
             _ => None,
         }
     }
@@ -352,6 +381,24 @@ impl Shell {
             return None;
         }
         self.browse_top()?.items.get(ui.selected_row()?)
+    }
+
+    /// Open in the context menu: a part of an artist page opens that part,
+    /// although the menu's other commands act on the artist.
+    fn browse_open_command(&mut self, ui: &mut dyn ShellUi, item: &CatalogItem) {
+        let part = self
+            .browse_selected_item(ui)
+            .filter(|row| apricot_spotify::catalog::artist_of_section_row(row).is_some())
+            .cloned();
+        self.browse_open_item(ui, part.as_ref().unwrap_or(item));
+    }
+
+    /// The selected row for the context menu and shortcuts: a part of an
+    /// artist page stands for the artist there (2.1.7).
+    fn browse_context_item(&self, ui: &dyn ShellUi) -> Option<CatalogItem> {
+        self.browse_selected_item(ui).map(|item| {
+            apricot_spotify::catalog::artist_of_section_row(item).unwrap_or_else(|| item.clone())
+        })
     }
 
     /// A list entry of the hub or its global shortcut.
@@ -980,7 +1027,11 @@ impl Shell {
                 if frame.items.is_empty() {
                     frame.total = collection.page.total;
                 }
-                frame.items.extend(collection.page.items);
+                let mut items = collection.page.items;
+                if matches!(frame.source, Source::Artist(_)) {
+                    apricot_app::spotify::name_artist_sections(&texts, &mut items);
+                }
+                frame.items.extend(items);
                 frame.next_offset = collection.page.next_offset;
             }
             Ok(CatalogResult::Sections { title, sections }) => {
@@ -1619,6 +1670,13 @@ impl Shell {
 
     /// Opens an album, playlist, artist, show, folder or Liked Songs row.
     fn browse_open_item(&mut self, ui: &mut dyn ShellUi, item: &CatalogItem) {
+        if let Some((artist, section)) =
+            apricot_spotify::catalog::parse_artist_section_uri(&item.uri)
+        {
+            let title = apricot_app::spotify::artist_section_title(&self.catalog(), item);
+            self.browse_open(ui, Source::ArtistSection { artist, section }, title);
+            return;
+        }
         if let Some(Source::MyProfile(uri)) = self.browse_top().map(|frame| &frame.source) {
             let uri = uri.clone();
             if item.uri == apricot_spotify::catalog::profile_section_uri(&uri, "friends") {
@@ -1722,11 +1780,11 @@ impl Shell {
     /// The selected row as an Apricot item, for Favorites, Apricot
     /// playlists and the other shared actions.
     pub(crate) fn spotify_selected_media(&self, ui: &dyn ShellUi) -> Option<MediaItem> {
-        let item = self.browse_selected_item(ui)?;
+        let item = self.browse_context_item(ui)?;
         if item.kind == ItemKind::Unavailable || SpotifyRef::parse(&item.uri).is_none() {
             return None;
         }
-        self.browse_media_for(item, false)
+        self.browse_media_for(&item, false)
     }
 
     pub(crate) fn spotify_subscribe_selected(&mut self, ui: &mut dyn ShellUi, subscribe: bool) {
@@ -1799,6 +1857,14 @@ impl Shell {
                 if let (Some(uid), true) = (&item.uid, by_uid) {
                     insert("spotify_uid", serde_json::Value::String(uid.clone()));
                 }
+            } else if let Some(artist) = self
+                .browse_top()
+                .and_then(|frame| frame.source.artist_songs())
+            {
+                insert(
+                    "spotify_artist_songs",
+                    serde_json::Value::String(artist.to_owned()),
+                );
             }
         } else {
             let context = if item.kind == ItemKind::LikedSongs {
@@ -1846,7 +1912,7 @@ impl Shell {
 
     /// The Spotify link of the selected row, for Copy link.
     fn browse_selected_link(&self, ui: &dyn ShellUi) -> Option<String> {
-        self.browse_selected_item(ui)
+        self.browse_context_item(ui)
             .and_then(|item| SpotifyRef::parse(&item.uri))
             .and_then(|reference| reference.to_url())
     }
@@ -1857,7 +1923,7 @@ impl Shell {
         ui: &dyn ShellUi,
         context: &apricot_app::context_menu::ContextMenuContext<'_>,
     ) -> Option<Vec<ContextMenuEntry>> {
-        let item = self.browse_selected_item(ui)?;
+        let item = self.browse_context_item(ui)?;
         let collection = matches!(
             item.kind,
             ItemKind::Album
@@ -1907,8 +1973,8 @@ impl Shell {
             },
             playlist_profile: item.kind == ItemKind::Playlist,
             playlist_published: self.spotify.browse.profile_states.get(&item.uri).copied(),
-            playlist_subscribed: self.spotify_playlist_subscribed(item),
-            main_menu_pin: self.spotify_pin_for_item(item).map(|pin| {
+            playlist_subscribed: self.spotify_playlist_subscribed(&item),
+            main_menu_pin: self.spotify_pin_for_item(&item).map(|pin| {
                 self.spotify
                     .hub_pins
                     .iter()
@@ -1987,7 +2053,7 @@ impl Shell {
     /// `spotify_radio`: Spotify's radio for the selected track, artist,
     /// album or playlist, or for the playing Spotify track.
     pub(crate) fn spotify_radio_target(&self, ui: &dyn ShellUi) -> Option<(String, String)> {
-        self.browse_selected_item(ui)
+        self.browse_context_item(ui)
             .filter(|item| {
                 matches!(
                     item.kind,
@@ -2087,7 +2153,7 @@ impl Shell {
             _ => None,
         });
         let uri = self
-            .browse_selected_item(ui)
+            .browse_context_item(ui)
             .filter(|item| item.kind != ItemKind::Unavailable && item.kind != ItemKind::Folder)
             .and_then(|item| {
                 if item.kind == ItemKind::Section {
@@ -2597,7 +2663,7 @@ impl Shell {
         match command {
             C::SpotifyPlay => self.browse_play(ui, &item, false),
             C::SpotifyShufflePlay => self.browse_play(ui, &item, true),
-            C::SpotifyOpen => self.browse_open_item(ui, &item),
+            C::SpotifyOpen => self.browse_open_command(ui, &item),
             C::SpotifyAddToQueue => {
                 self.spotify_add_to_queue(ui);
             }
@@ -2685,7 +2751,7 @@ impl Shell {
             .get(&uri)
             .copied()
             .or_else(|| {
-                self.browse_selected_item(ui)
+                self.browse_context_item(ui)
                     .filter(|item| item.uri == uri)
                     .and_then(|item| item.saved)
             });
@@ -2769,8 +2835,8 @@ impl Shell {
         let pin = if self.view == View::SpotifyHub {
             self.spotify_selected_pin(ui).cloned()
         } else {
-            self.browse_selected_item(ui)
-                .and_then(|item| self.spotify_pin_for_item(item))
+            self.browse_context_item(ui)
+                .and_then(|item| self.spotify_pin_for_item(&item))
         };
         let Some(pin) = pin else {
             return;
@@ -2822,7 +2888,7 @@ impl Shell {
     }
 
     fn spotify_context_identity(&self, ui: &dyn ShellUi) -> Option<String> {
-        self.browse_selected_item(ui)
+        self.browse_context_item(ui)
             .map(|item| item.uri.clone())
             .or_else(|| {
                 self.application
@@ -2847,7 +2913,7 @@ impl Shell {
     }
 
     fn spotify_context_artist(&self, ui: &dyn ShellUi) -> Option<String> {
-        self.browse_selected_item(ui)
+        self.browse_context_item(ui)
             .map(|item| {
                 if item.kind == ItemKind::Artist {
                     item.uri.clone()
@@ -2890,7 +2956,7 @@ impl Shell {
         if let Some(artist) = self.spotify_context_artist(ui) {
             uris.push(artist);
         }
-        if let Some(item) = self.browse_selected_item(ui)
+        if let Some(item) = self.browse_context_item(ui)
             && matches!(item.kind, ItemKind::Artist | ItemKind::Playlist)
             && !uris.contains(&item.uri)
         {
@@ -2974,7 +3040,7 @@ impl Shell {
                 .current_item()
                 .and_then(apricot_app::spotify::playing_item)
         } else {
-            self.browse_selected_item(ui).cloned()
+            self.browse_context_item(ui)
         }
     }
 

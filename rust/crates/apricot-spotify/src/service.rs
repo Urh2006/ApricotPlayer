@@ -246,6 +246,12 @@ pub enum CatalogRequest {
         offset: u64,
     },
     Artist(String),
+    /// One part of an artist page (2.1.7).
+    ArtistSection {
+        artist: String,
+        section: crate::catalog::ArtistSection,
+        offset: u64,
+    },
     Show {
         uri: String,
         offset: u64,
@@ -874,6 +880,7 @@ impl SpotifyService {
         self.runtime().spawn(async move {
             let result = async {
                 let session = session.ok_or(SpotifyError::NoCredentials)?;
+                let shared_api = api.clone();
                 let api = api.as_ref();
                 Ok(match request {
                     CatalogRequest::PlaylistProfileState(uri) => {
@@ -1021,6 +1028,14 @@ impl SpotifyService {
                     CatalogRequest::Artist(uri) => {
                         CatalogResult::Collection(catalog::artist(api, &session, &uri).await?)
                     }
+                    CatalogRequest::ArtistSection {
+                        artist,
+                        section,
+                        offset,
+                    } => CatalogResult::Page(
+                        catalog::artist_section(&shared_api, &session, &artist, section, offset)
+                            .await?,
+                    ),
                     CatalogRequest::Show { uri, offset } => {
                         CatalogResult::Collection(catalog::show(api, &session, &uri, offset).await?)
                     }

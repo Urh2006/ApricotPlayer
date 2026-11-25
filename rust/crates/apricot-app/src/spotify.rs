@@ -512,6 +512,40 @@ pub fn kind_word(catalog: &TranslationCatalog, kind: ItemKind) -> String {
         .to_owned()
 }
 
+/// The kind of a row, where a release says single, EP or compilation
+/// instead of album (2.1.7).
+pub fn release_kind_word(catalog: &TranslationCatalog, item: &CatalogItem) -> String {
+    let key = match (item.kind, item.format.as_str()) {
+        (ItemKind::Album, "SINGLE") => "spotify_kind_single",
+        (ItemKind::Album, "EP") => "spotify_kind_ep",
+        (ItemKind::Album, "COMPILATION") => "spotify_kind_compilation",
+        _ => return kind_word(catalog, item.kind),
+    };
+    catalog.text(key).to_owned()
+}
+
+/// Names the rows of an artist page (Popular, All songs, Albums and the
+/// others) in the user's language.
+pub fn name_artist_sections(catalog: &TranslationCatalog, items: &mut [CatalogItem]) {
+    for item in items {
+        if let Some((_, section)) = apricot_spotify::catalog::parse_artist_section_uri(&item.uri) {
+            catalog.text(section.text_key()).clone_into(&mut item.name);
+        }
+    }
+}
+
+/// The name of an artist page part's list: the part, then the artist.
+pub fn artist_section_title(catalog: &TranslationCatalog, row: &CatalogItem) -> String {
+    let Some((_, section)) = apricot_spotify::catalog::parse_artist_section_uri(&row.uri) else {
+        return row.name.clone();
+    };
+    [catalog.text(section.text_key()), row.album.as_str()]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// m:ss or h:mm:ss.
 pub fn duration_text(milliseconds: u64) -> String {
     let seconds = milliseconds / 1000;
@@ -541,7 +575,7 @@ pub fn item_label(
     }
     let mut parts = vec![item.name.clone()];
     if mixed || !item.kind.is_playable_item() {
-        parts.push(kind_word(catalog, item.kind));
+        parts.push(release_kind_word(catalog, item));
     }
     if !item.subtitle.is_empty() {
         parts.push(item.subtitle.clone());
@@ -882,6 +916,68 @@ mod tests {
             editable: false,
             format: String::new(),
         }
+    }
+
+    #[test]
+    fn artist_page_rows_name_their_part_and_releases_their_type() {
+        let catalog = english_catalog();
+        let artist = "spotify:artist:6UOk7DmvqlzWmo6gjhZvn6";
+        let mut rows: Vec<CatalogItem> = apricot_spotify::catalog::ArtistSection::ALL
+            .into_iter()
+            .map(|section| {
+                let mut row = catalog_item(ItemKind::Section, "", "");
+                row.uri = apricot_spotify::catalog::artist_section_uri(artist, section);
+                row.album = "Da Tweekaz".into();
+                row.duration_ms = None;
+                row
+            })
+            .collect();
+        rows[1].count = None;
+        rows[3].count = Some(157);
+        name_artist_sections(&catalog, &mut rows);
+        let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Popular",
+                "All songs",
+                "Albums",
+                "Singles and EPs",
+                "Compilations",
+                "Appears on",
+                "Playlists",
+                "Related artists"
+            ]
+        );
+        assert_eq!(
+            item_label(&catalog, &rows[3], false, true),
+            "Singles and EPs, section, 157 items"
+        );
+        assert_eq!(
+            artist_section_title(&catalog, &rows[1]),
+            "All songs, Da Tweekaz"
+        );
+        let mut single = catalog_item(ItemKind::Album, "FUEGO", "2026");
+        single.format = "SINGLE".into();
+        assert_eq!(
+            item_label(&catalog, &single, false, true),
+            "FUEGO, single, 2026"
+        );
+        single.format = "EP".into();
+        assert_eq!(
+            item_label(&catalog, &single, false, true),
+            "FUEGO, EP, 2026"
+        );
+        single.format = "COMPILATION".into();
+        assert_eq!(
+            item_label(&catalog, &single, false, true),
+            "FUEGO, compilation, 2026"
+        );
+        single.format = "ALBUM".into();
+        assert_eq!(
+            item_label(&catalog, &single, false, true),
+            "FUEGO, album, 2026"
+        );
     }
 
     #[test]
