@@ -1696,3 +1696,13 @@ Urhove zahteve z dne 2. 10. 2026:
 - Preverjeno v živo na ločenem namizju: datoteka se začne z višino 1.25 (Ctrl+0 izgovori "pitch
   reset to 1.25x"), polje je pri datoteki, pri SomaFM ga ni, No pusti aplikacijo in mapo,
   fokus se vrne na prejšnjo kontrolo, Yes zapre aplikacijo in mapa izgine v nekaj sekundah.
+
+### Drsnik Default playback volume, 2.1.9 (26. 11. 2026)
+
+- Urh je mislil, da ima privzeto glasnost 33, v resnici pa je imel 300: z vklopljenim
+  "Volume boost on by default" ima drsnik obseg 0 do 300, NVDA pa vrednost domorodnega
+  trackbarja bere kot odstotek obsega (100 od 300 = 33). Drsnik zdaj z
+  `annotate_slider` (`PROPID_ACC_VALUE`) pove dejansko vrednost ("100%", "300%"), tudi ob
+  premiku. Predvajalnik se že prej začne točno z vrednostjo drsnika, obseg 300 z boostom in
+  100 brez ostane. Mac je že prej bral dejansko vrednost. Preverjeno v živo (MSAA name in
+  value za 100 z boostom, 300 z boostom, 80 brez boosta in po premiku na 50).
