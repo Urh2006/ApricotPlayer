@@ -37,6 +37,8 @@ pub(crate) enum CookieExportOrigin {
     Repair,
     /// Python `prompt_cookie_refresh_for_playback`, for one resolve token.
     Playback(u64),
+    /// My YouTube's sign-in from the user's own browser (2.2.0).
+    MyYoutube,
 }
 
 pub(crate) enum CookieEvent {
@@ -52,6 +54,13 @@ pub(crate) enum CookieEvent {
         origin: CookieExportOrigin,
         error: String,
     },
+    /// My YouTube's own sign-in window ended (2.2.0).
+    YoutubeSignIn {
+        browser: String,
+        result: Box<Result<Vec<Value>, apricot_platform::browser_cookies::SignInEnd>>,
+    },
+    /// The signed-in account's name, when YouTube gave it.
+    YoutubeAccountName(Option<String>),
 }
 
 /// Posts `event` to the main window; it is dropped when the window is gone.

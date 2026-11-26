@@ -2795,9 +2795,8 @@ impl Application {
         availability.podcasts = visibility(settings.enable_podcasts_rss);
         availability.download_count = self.state.downloads.count();
         availability.playback_queue_count = self.state.playback_queue.queue().len();
-        availability.resume = visibility(
-            settings.show_resume_in_menu && self.state.last_player_session.is_available(),
-        );
+        // Customize main menu hides it like any other entry (2.2.0).
+        availability.resume = visibility(self.state.last_player_session.is_available());
         availability
     }
 
@@ -3457,6 +3456,98 @@ impl Application {
             ),
         ])?;
         self.save_settings()
+    }
+
+    /// The app data folder (the folder of `settings.json`).
+    pub fn app_data_folder(&self) -> PathBuf {
+        self.settings
+            .settings_file()
+            .parent()
+            .map_or_else(PathBuf::new, Path::to_path_buf)
+    }
+
+    /// The cookies yt-dlp uses: the configured file, otherwise the cache.
+    fn youtube_cookies_path(&self) -> PathBuf {
+        let configured = self.settings.current().cookies_file.trim().to_owned();
+        if configured.is_empty() {
+            self.cached_cookies_file()
+        } else {
+            crate::cookies::expand_cookie_path(&configured)
+        }
+    }
+
+    /// My YouTube (2.2.0): the cookies hold a YouTube sign-in.
+    pub fn youtube_signed_in(&self) -> bool {
+        crate::cookies::cookies_file_has_youtube_login(&self.youtube_cookies_path())
+    }
+
+    /// The cookies text for the account name request.
+    pub fn youtube_cookies_text(&self) -> Option<String> {
+        let bytes = std::fs::read(self.youtube_cookies_path()).ok()?;
+        Some(crate::cookies::decode_cookie_file_bytes(&bytes))
+    }
+
+    pub fn youtube_account_name(&self) -> Option<String> {
+        crate::youtube_account::load_account_name(&self.app_data_folder())
+    }
+
+    pub fn set_youtube_account_name(&self, name: Option<&str>) {
+        let _ = crate::youtube_account::save_account_name(&self.app_data_folder(), name);
+    }
+
+    /// My YouTube: keeps the cookies of ApricotPlayer's own sign-in window
+    /// and makes its profile the cookie source, so later cookie refreshes
+    /// read the same signed-in profile.
+    ///
+    /// # Errors
+    /// The cookies hold no YouTube sign-in, or they cannot be saved.
+    pub fn finish_youtube_sign_in(
+        &mut self,
+        browser: &str,
+        cookies: &[Value],
+    ) -> Result<(), String> {
+        let jar =
+            crate::cookies::youtube_cookie_jar(&crate::cookies::cdp_cookies_to_cookie_jar(cookies));
+        if !crate::cookies::cookie_jar_has_login_cookies(&jar) {
+            return Err("the sign-in holds no YouTube cookies".to_owned());
+        }
+        let cache = self.cached_cookies_file();
+        crate::cookies::save_cookie_jar_to_cache(&jar, &cache)
+            .map_err(|error| error.to_string())?;
+        let mut updated = self.settings.current().clone();
+        crate::cookies::remember_browser_export(&mut updated, &cache, browser);
+        updated.cookies_browser_profile =
+            crate::youtube_account::sign_in_profile(&self.app_data_folder())
+                .to_string_lossy()
+                .into_owned();
+        self.store_cookie_settings(&updated)
+            .map_err(|error| error.to_string())
+    }
+
+    /// My YouTube: forgets the sign-in on this computer. The cookie cache and
+    /// ApricotPlayer's own sign-in profile are deleted; a cookie file the
+    /// user chose stays, but is no longer used.
+    ///
+    /// # Errors
+    /// The settings could not be saved.
+    pub fn sign_out_of_youtube(&mut self) -> Result<(), String> {
+        let cache = self.cached_cookies_file();
+        let app_data = self.app_data_folder();
+        let own_profile = crate::youtube_account::sign_in_user_data_dir(&app_data);
+        let mut updated = self.settings.current().clone();
+        updated.cookies_file.clear();
+        updated.cookies_source_file.clear();
+        updated.cookies_source_signature.clear();
+        "none".clone_into(&mut updated.cookies_from_browser);
+        if Path::new(updated.cookies_browser_profile.trim()).starts_with(&own_profile) {
+            crate::cookies::COOKIE_PROFILE_AUTO.clone_into(&mut updated.cookies_browser_profile);
+        }
+        self.store_cookie_settings(&updated)
+            .map_err(|error| error.to_string())?;
+        let _ = std::fs::remove_file(&cache);
+        let _ = std::fs::remove_dir_all(&own_profile);
+        self.set_youtube_account_name(None);
+        Ok(())
     }
 
     /// Python `effective_cookies_file`: the cookies file for yt-dlp, or empty.
@@ -4434,7 +4525,7 @@ mod tests {
             &LastPlayerSessionFile::new(root.path().join("stable/last_player_session.json")),
         );
         app.start_player_item(media_item("remembered"));
-        app.set_boolean_setting(SettingId::ShowResumeInMenu, false)
+        app.set_main_menu_item_visible("resume_last_session", false)
             .expect("hide resume menu");
         assert!(
             app.main_menu_model()

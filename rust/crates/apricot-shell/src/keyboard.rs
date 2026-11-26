@@ -206,6 +206,7 @@ const fn view_shortcut_scope(view: View) -> (ActionScope, bool) {
         | View::SpotifyHub
         | View::SpotifyAccounts
         | View::SpotifyBrowse
+        | View::MyYoutube
         | View::Subscriptions
         | View::NotificationCenter => (ActionScope::List, false),
         View::Player => (ActionScope::Player, false),

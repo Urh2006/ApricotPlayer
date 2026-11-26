@@ -1301,11 +1301,13 @@ pub enum ArtistSection {
     AppearsOn,
     Playlists,
     Related,
+    /// The artist's biography, shown as text (2.2.0).
+    About,
 }
 
 impl ArtistSection {
     /// Page order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Popular,
         Self::Songs,
         Self::Albums,
@@ -1314,6 +1316,7 @@ impl ArtistSection {
         Self::AppearsOn,
         Self::Playlists,
         Self::Related,
+        Self::About,
     ];
 
     const fn key(self) -> &'static str {
@@ -1326,6 +1329,7 @@ impl ArtistSection {
             Self::AppearsOn => "appears_on",
             Self::Playlists => "playlists",
             Self::Related => "related",
+            Self::About => "about",
         }
     }
 
@@ -1341,6 +1345,7 @@ impl ArtistSection {
             Self::AppearsOn => "spotify_artist_appears_on",
             Self::Playlists => "spotify_artist_playlists",
             Self::Related => "spotify_artist_related",
+            Self::About => "spotify_artist_about",
         }
     }
 }
@@ -1446,6 +1451,10 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
     let releases = total("/discography/albums")
         + total("/discography/singles")
         + total("/discography/compilations");
+    let biography = plain_text(text(&artist, "/profile/biography/text"));
+    if let Ok(mut texts) = ARTIST_BIOGRAPHIES.lock() {
+        texts.insert(uri.to_owned(), biography.clone());
+    }
     let items = ArtistSection::ALL
         .into_iter()
         .filter_map(|section| {
@@ -1459,6 +1468,8 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
                 ArtistSection::AppearsOn => Some(total("/relatedContent/appearsOn")),
                 ArtistSection::Playlists => Some(total("/profile/playlistsV2")),
                 ArtistSection::Related => Some(total("/relatedContent/relatedArtists")),
+                // A text, not a list: no count.
+                ArtistSection::About => return (!biography.is_empty()).then_some((section, None)),
             };
             count
                 .filter(|count| *count > 0)
@@ -1482,6 +1493,55 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
             next_offset: None,
         },
     })
+}
+
+/// Biographies of artist pages opened in this run, for About.
+static ARTIST_BIOGRAPHIES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, String>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// The biography of an artist whose page was opened, as plain text.
+#[must_use]
+pub fn artist_biography(artist: &str) -> Option<String> {
+    ARTIST_BIOGRAPHIES
+        .lock()
+        .ok()?
+        .get(artist)
+        .filter(|text| !text.is_empty())
+        .cloned()
+}
+
+/// Spotify's biography markup as plain text: links keep their words, tags
+/// go, the usual entities become characters.
+fn plain_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for character in html.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => text.push(character),
+            _ => {}
+        }
+    }
+    let text = [
+        ("&nbsp;", " "),
+        ("&quot;", "\""),
+        ("&#39;", "'"),
+        ("&#x27;", "'"),
+        ("&lt;", "<"),
+        ("&gt;", ">"),
+        ("&amp;", "&"),
+    ]
+    .into_iter()
+    .fold(text, |text, (entity, character)| {
+        text.replace(entity, character)
+    });
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A page of release groups (`{items: [{releases: {items}}], totalCount}`):
@@ -1558,6 +1618,12 @@ pub async fn artist_section(
             &paged("queryArtistPlaylists").await?["artistUnion"]["profile"]["playlistsV2"],
             offset,
         ),
+        // About is shown from the page's text and has no list.
+        ArtistSection::About => CatalogPage {
+            items: Vec::new(),
+            total: Some(0),
+            next_offset: None,
+        },
         ArtistSection::Related => {
             let data = api
                 .pathfinder(
@@ -1932,6 +1998,17 @@ mod tests {
         let mut other = row.clone();
         other.uri = "spotify:section:home".into();
         assert!(artist_of_section_row(&other).is_none());
+    }
+
+    #[test]
+    fn a_biography_reads_as_plain_text() {
+        assert_eq!(
+            plain_text(
+                "<p>Da Tweekaz &amp; friends</p>\n  <a href=\"spotify:artist:x\">Sub Zero</a> &quot;live&quot;  "
+            ),
+            "Da Tweekaz & friends\nSub Zero \"live\""
+        );
+        assert_eq!(plain_text(""), "");
     }
 
     #[test]

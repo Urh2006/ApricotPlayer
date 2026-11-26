@@ -866,6 +866,10 @@ impl Shell {
                 self.show_spotify_hub(ui);
                 return true;
             }
+            "open_my_youtube" => {
+                self.show_my_youtube(ui);
+                return true;
+            }
             "spotify_accounts" => {
                 self.show_spotify_accounts(ui, None);
                 return true;

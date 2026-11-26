@@ -14,6 +14,8 @@ encoding_rs.workspace = true
 reqwest = { workspace = true, features = ["cookies"] }
 flate2 = "1.1.10"
 rand.workspace = true
+# SAPISIDHASH for the YouTube account name (2.2.0).
+sha1 = "0.10"
 regex = "1"
 serde_json.workspace = true
 serde.workspace = true

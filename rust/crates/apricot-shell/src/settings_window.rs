@@ -1009,7 +1009,8 @@ impl Shell {
             | View::AudiovaultResults
             | View::SpotifyHub
             | View::SpotifyAccounts
-            | View::SpotifyBrowse => {}
+            | View::SpotifyBrowse
+            | View::MyYoutube => {}
         }
         ui.focus_primary_control();
         self.configure_subscription_timer(ui);

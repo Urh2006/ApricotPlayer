@@ -1650,6 +1650,10 @@ pub(super) unsafe fn open_item(window: HWND, item: &CatalogItem) {
         return;
     }
     if let Some((artist, section)) = apricot_spotify::catalog::parse_artist_section_uri(&item.uri) {
+        if section == ArtistSection::About {
+            show_artist_about(window, &artist, item);
+            return;
+        }
         let title = state(window).map_or_else(
             || item.name.clone(),
             |state| {
@@ -1727,6 +1731,46 @@ pub(super) unsafe fn open_item(window: HWND, item: &CatalogItem) {
         item.name.clone()
     };
     open(window, source, title);
+}
+
+/// About on an artist page (2.2.0): the biography in the read-only text
+/// window of lyrics, with Copy and Back.
+unsafe fn show_artist_about(window: HWND, artist: &str, row: &CatalogItem) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    let texts = super::spotify::catalog(state);
+    let Some(text) = apricot_spotify::catalog::artist_biography(artist) else {
+        set_status(state, texts.text("spotify_artist_no_about"), true);
+        return;
+    };
+    let title = apricot_app::spotify::artist_section_title(&texts, row);
+    let labels = crate::details_win32::DetailsDialogLabels {
+        title: title.clone(),
+        copy: texts.text("spotify_artist_about_copy").to_owned(),
+        copied: texts.text("spotify_artist_about_copied").to_owned(),
+        back: texts.text("back").to_owned(),
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let _ = sender.send(Some(apricot_media::lyrics::LyricsDocument::parse(
+        &text, "",
+    )));
+    let pending = crate::details_win32::AsyncText {
+        receiver,
+        position: None,
+        unavailable: String::new(),
+        ready: title,
+    };
+    state.modal_open = true;
+    let result = crate::details_win32::show_async(window, String::new(), &labels, pending);
+    if let Some(state) = state_mut(window) {
+        state.modal_open = false;
+    }
+    super::resume_deferred_window_work(window);
+    restore_focus(window);
+    if let Err(error) = result {
+        show_error_message(window, &error.to_string());
+    }
 }
 
 /// Plays `item`: a track or episode in the context of the open list, at its

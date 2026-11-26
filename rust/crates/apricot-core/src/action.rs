@@ -233,6 +233,8 @@ pub const ACTIONS: &[ActionDefinition] = &[
     // Spotify (`docs/SPOTIFY_PLAN.md` 5.2). Not in Python 1.0.21; the first
     // `PYTHON_BASELINE_ACTIONS` entries stay the Python catalog.
     action!("open_spotify", "Ctrl+Alt+C", GLOBAL),
+    // My YouTube (2.2.0).
+    action!("open_my_youtube", "Ctrl+Alt+U", GLOBAL),
     action!("spotify_accounts", "Ctrl+Alt+Shift+C", GLOBAL),
     action!("spotify_search", "Ctrl+Alt+Shift+Y", GLOBAL),
     action!("spotify_library", "Ctrl+Alt+Shift+L", GLOBAL),

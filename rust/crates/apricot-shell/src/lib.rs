@@ -28,6 +28,7 @@ mod keyboard;
 mod library;
 mod lyrics;
 mod main_menu;
+pub mod my_youtube;
 pub mod playback_features;
 mod player;
 mod player_edit;
@@ -135,6 +136,8 @@ pub enum View {
     SpotifyHub,
     SpotifyAccounts,
     SpotifyBrowse,
+    /// My YouTube (2.2.0).
+    MyYoutube,
     /// Channel subscriptions (Windows `MainView::Subscriptions`).
     Subscriptions,
     /// New videos and episodes (Windows `MainView::NotificationCenter`).
@@ -179,6 +182,7 @@ pub struct Shell {
     cookies: cookies::CookieState,
     audiovault: audiovault::AudiovaultState,
     spotify: spotify::SpotifyState,
+    my_youtube: my_youtube::MyYoutubeState,
     /// A Settings browser export runs.
     settings_cookie_export_running: bool,
     actions: shell_actions::ActionState,
@@ -223,6 +227,7 @@ impl Shell {
             cookies: cookies::CookieState::default(),
             audiovault: audiovault::AudiovaultState::default(),
             spotify: spotify::SpotifyState::default(),
+            my_youtube: my_youtube::MyYoutubeState::default(),
             settings_cookie_export_running: false,
             actions: shell_actions::ActionState::default(),
             windows_import_committed: false,
@@ -449,6 +454,10 @@ impl Shell {
             }
             "spotify" => {
                 self.show_spotify_hub(ui);
+                return;
+            }
+            "my_youtube" => {
+                self.show_my_youtube(ui);
                 return;
             }
             "file_converter" | "folder_converter" => {
@@ -852,6 +861,7 @@ impl Shell {
                 | "new_subscription_videos"
                 | "open_audiovault"
                 | "open_spotify"
+                | "open_my_youtube"
                 | "spotify_accounts"
                 | "spotify_search"
                 | "spotify_library"

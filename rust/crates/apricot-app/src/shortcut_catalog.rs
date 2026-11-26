@@ -219,6 +219,7 @@ const ACTION_CATEGORIES: &[(&str, &str)] = &[
     ("open_channel", "youtube"),
     ("player_next_related", "youtube"),
     ("open_spotify", "spotify"),
+    ("open_my_youtube", "youtube"),
     ("spotify_accounts", "spotify"),
     ("spotify_search", "spotify"),
     ("spotify_library", "spotify"),

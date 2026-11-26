@@ -158,6 +158,7 @@ impl Shell {
                 self.audiovault_activate(ui);
             }
             View::SpotifyHub | View::SpotifyAccounts => self.spotify_activate(ui),
+            View::MyYoutube => self.my_youtube_activate(ui),
             View::SpotifyBrowse => self.spotify_browse_activate(ui),
             View::Subscriptions | View::NotificationCenter => {
                 self.activate_subscription_selection(ui);
@@ -238,6 +239,7 @@ impl Shell {
             self.poll_downloads(ui) | self.poll_conversions(ui) | self.poll_search_suggestions(ui);
         let cookies =
             self.poll_cookie_events(ui) | self.poll_audiovault(ui) | self.poll_spotify(ui);
+        let cookies = self.poll_my_youtube(ui) | cookies;
         youtube
             || related
             || folder
@@ -403,6 +405,10 @@ impl Shell {
             self.spotify_back(ui);
             return;
         }
+        if crate::my_youtube::is_view(self.view) {
+            self.my_youtube_back(ui);
+            return;
+        }
         self.cancel_youtube_work();
         self.cancel_local_folder_scan();
         let leaving_collection = self.view == View::Collection;
@@ -485,6 +491,7 @@ impl Shell {
             | Route::AudiovaultResults
             | Route::AudiovaultEpisodes => self.audiovault_restore_after_player(ui),
             Route::SpotifyHub => self.show_spotify_hub(ui),
+            Route::MyYoutube => self.show_my_youtube(ui),
             Route::SpotifyBrowse => self.spotify_browse_restore(ui),
             Route::SpotifyAccounts => self.show_spotify_accounts(ui, None),
             Route::Subscriptions => {

@@ -1673,7 +1673,21 @@ impl Shell {
         if let Some((artist, section)) =
             apricot_spotify::catalog::parse_artist_section_uri(&item.uri)
         {
-            let title = apricot_app::spotify::artist_section_title(&self.catalog(), item);
+            let catalog = self.catalog();
+            let title = apricot_app::spotify::artist_section_title(&catalog, item);
+            if section == ArtistSection::About {
+                match apricot_spotify::catalog::artist_biography(&artist) {
+                    Some(text) => ui.open_lyrics(crate::LyricsDialog::text(
+                        title,
+                        &text,
+                        catalog.text("spotify_artist_about_copy").to_owned(),
+                        catalog.text("spotify_artist_about_copied").to_owned(),
+                        catalog.text("back").to_owned(),
+                    )),
+                    None => ui.set_status(catalog.text("spotify_artist_no_about"), true),
+                }
+                return;
+            }
             self.browse_open(ui, Source::ArtistSection { artist, section }, title);
             return;
         }

@@ -36,6 +36,11 @@ pub const CUSTOMIZABLE_MAIN_MENU: &[MainMenuDefinition] = &[
         action_id: "spotify",
         label_key: "spotify",
     },
+    // My YouTube (2.2.0, Urh): right below Spotify, hidden like the others.
+    MainMenuDefinition {
+        action_id: "my_youtube",
+        label_key: "my_youtube",
+    },
     MainMenuDefinition {
         action_id: "radio",
         label_key: "radio",

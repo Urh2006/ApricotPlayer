@@ -92,6 +92,77 @@ pub enum YoutubeCollectionKind {
     ChannelPopular,
     /// Python `open_soundcloud_artist_tracks`: the artist's `/tracks` page.
     SoundcloudArtistTracks,
+    /// A list of the signed-in YouTube account (My YouTube, 2.2.0).
+    Account(YoutubeAccountFeed),
+}
+
+/// The lists of a signed-in YouTube account, read by yt-dlp with the cookies
+/// (My YouTube, 2.2.0).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum YoutubeAccountFeed {
+    Home,
+    Subscriptions,
+    Channels,
+    Playlists,
+    WatchLater,
+    Liked,
+    History,
+}
+
+impl YoutubeAccountFeed {
+    /// My YouTube's order.
+    pub const ALL: [Self; 7] = [
+        Self::Home,
+        Self::Subscriptions,
+        Self::Channels,
+        Self::Playlists,
+        Self::WatchLater,
+        Self::Liked,
+        Self::History,
+    ];
+
+    /// What yt-dlp reads for the list.
+    #[must_use]
+    pub const fn ytdlp_target(self) -> &'static str {
+        match self {
+            Self::Home => ":ytrec",
+            Self::Subscriptions => ":ytsubs",
+            Self::Channels => "https://www.youtube.com/feed/channels",
+            Self::Playlists => "https://www.youtube.com/feed/playlists",
+            Self::WatchLater => ":ytwatchlater",
+            Self::Liked => ":ytfav",
+            Self::History => ":ythis",
+        }
+    }
+
+    /// The list's page on youtube.com.
+    #[must_use]
+    pub const fn web_url(self) -> &'static str {
+        match self {
+            Self::Home => "https://www.youtube.com/",
+            Self::Subscriptions => "https://www.youtube.com/feed/subscriptions",
+            Self::Channels => "https://www.youtube.com/feed/channels",
+            Self::Playlists => "https://www.youtube.com/feed/playlists",
+            Self::WatchLater => "https://www.youtube.com/playlist?list=WL",
+            Self::Liked => "https://www.youtube.com/playlist?list=LL",
+            Self::History => "https://www.youtube.com/feed/history",
+        }
+    }
+
+    /// The translation key of the list's name.
+    #[must_use]
+    pub const fn text_key(self) -> &'static str {
+        match self {
+            Self::Home => "my_youtube_home",
+            Self::Subscriptions => "my_youtube_subscriptions",
+            Self::Channels => "my_youtube_channels",
+            Self::Playlists => "my_youtube_playlists",
+            Self::WatchLater => "my_youtube_watch_later",
+            Self::Liked => "my_youtube_liked",
+            Self::History => "my_youtube_history",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

@@ -624,6 +624,100 @@ pub fn devtools_browser_cookies(
     result.map(|cookies| (label, cookies))
 }
 
+/// Where the YouTube sign-in window of My YouTube starts (2.2.0).
+pub const YOUTUBE_SIGN_IN_URL: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F";
+
+/// The Chromium browsers ApricotPlayer can open for its own YouTube sign-in,
+/// the preferred one first.
+#[must_use]
+pub fn youtube_sign_in_browser(preferred: &str) -> Option<String> {
+    let preferred = preferred.trim().to_lowercase();
+    std::iter::once(preferred.as_str())
+        .chain(["edge", "chrome", "brave", "chromium", "vivaldi", "opera"])
+        .filter(|browser| !browser.is_empty() && *browser != "firefox" && *browser != "none")
+        .find(|browser| cookie_browser_executable(browser).is_some())
+        .map(str::to_owned)
+}
+
+/// Why the own sign-in window ended without cookies.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SignInEnd {
+    /// The user closed the browser window first.
+    Closed,
+    /// No sign-in within the time limit.
+    TimedOut,
+    /// The browser could not start or answer.
+    Failed(String),
+}
+
+/// My YouTube (2.2.0): opens `browser` with ApricotPlayer's own profile in
+/// `user_data_dir` at the Google sign-in, waits until `signed_in` accepts the
+/// profile's cookies, then closes the window and returns them. The user's own
+/// browser and profiles stay untouched. `cancel` ends the wait.
+///
+/// # Errors
+/// [`SignInEnd`] when the window closes, the time runs out or the browser
+/// cannot be driven.
+pub fn youtube_sign_in_with_own_profile(
+    browser: &str,
+    user_data_dir: &Path,
+    timeout: Duration,
+    cancel: &std::sync::atomic::AtomicBool,
+    signed_in: impl Fn(&[Value]) -> bool,
+) -> Result<Vec<Value>, SignInEnd> {
+    let executable = cookie_browser_executable(browser)
+        .ok_or_else(|| SignInEnd::Failed(format!("{browser} executable not found")))?;
+    std::fs::create_dir_all(user_data_dir).map_err(|error| SignInEnd::Failed(error.to_string()))?;
+    let port = free_local_port().map_err(|error| SignInEnd::Failed(error.to_string()))?;
+    let mut process = Command::new(&executable)
+        .arg(format!("--remote-debugging-port={port}"))
+        .arg("--remote-debugging-address=127.0.0.1")
+        .arg("--remote-allow-origins=*")
+        .arg(format!("--user-data-dir={}", user_data_dir.display()))
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--new-window")
+        .arg(YOUTUBE_SIGN_IN_URL)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| SignInEnd::Failed(error.to_string()))?;
+    let deadline = Instant::now() + timeout;
+    let result = loop {
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            break Err(SignInEnd::Closed);
+        }
+        if matches!(process.try_wait(), Ok(Some(_))) {
+            break Err(SignInEnd::Closed);
+        }
+        if Instant::now() >= deadline {
+            break Err(SignInEnd::TimedOut);
+        }
+        std::thread::sleep(Duration::from_millis(1_500));
+        let Ok(version) = fetch_devtools_json(port, "/json/version", Duration::from_secs(2)) else {
+            continue;
+        };
+        let websocket = version
+            .get("webSocketDebuggerUrl")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let Ok(websocket) = validate_devtools_websocket_url(websocket, port) else {
+            continue;
+        };
+        if let Ok(cookies) = devtools_get_all_cookies(&websocket)
+            && signed_in(&cookies)
+        {
+            // YouTube sets its own cookies right after the Google page.
+            std::thread::sleep(Duration::from_secs(2));
+            break Ok(devtools_get_all_cookies(&websocket).unwrap_or(cookies));
+        }
+    };
+    let _ = process.kill();
+    let _ = process.wait();
+    result
+}
+
 /// Python `devtools_get_all_cookies`.
 fn devtools_get_all_cookies(websocket: &Url) -> Result<Vec<Value>, String> {
     let request = serde_json::json!({

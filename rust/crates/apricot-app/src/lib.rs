@@ -46,12 +46,13 @@ pub mod subscription_controller;
 pub mod transcript;
 pub mod unavailable;
 pub mod user_playlist_controller;
+pub mod youtube_account;
 pub mod youtube_collection;
 pub mod youtube_extras;
 pub mod youtube_trending;
 
 use apricot_core::NavigationStack;
-pub use apricot_media::{YoutubeCollectionKind, YoutubeSearchKind};
+pub use apricot_media::{YoutubeAccountFeed, YoutubeCollectionKind, YoutubeSearchKind};
 pub use apricot_storage::{AppNotification, RssFeed, Subscription};
 
 pub use action_finder::{

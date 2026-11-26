@@ -411,6 +411,7 @@ impl Shell {
             | View::AudiovaultResults
             | View::SpotifyHub
             | View::SpotifyAccounts
+            | View::MyYoutube
             | View::Subscriptions
             | View::NotificationCenter
             | View::Player => {}

@@ -250,6 +250,10 @@ pub(crate) enum PendingList {
         token: u64,
         shuffle: bool,
     },
+    /// My YouTube: every subscribed channel of the account, to import.
+    ImportSubscriptions {
+        token: u64,
+    },
     Trending(crate::trending::PendingTrending),
 }
 
@@ -258,7 +262,7 @@ impl PendingList {
         match self {
             Self::Search(work) => work.generation,
             Self::Collection(work) => work.generation,
-            Self::PlaylistPlayback { token, .. } => *token,
+            Self::PlaylistPlayback { token, .. } | Self::ImportSubscriptions { token } => *token,
             Self::Trending(pending) => pending.work.generation,
         }
     }
@@ -770,7 +774,10 @@ impl Shell {
             Some(PendingList::Collection(_)) => {
                 let _ = self.application.cancel_pending_youtube_collection();
             }
-            Some(PendingList::PlaylistPlayback { .. }) | None => {}
+            Some(
+                PendingList::PlaylistPlayback { .. } | PendingList::ImportSubscriptions { .. },
+            )
+            | None => {}
         }
         self.youtube.pending_resolve = None;
         self.youtube.pending_trending_api = None;
@@ -880,7 +887,10 @@ impl Shell {
                 let _ = self.application.fail_search(generation, message);
                 (true, false)
             }
-            Some(PendingList::PlaylistPlayback { .. }) | None => (true, false),
+            Some(
+                PendingList::PlaylistPlayback { .. } | PendingList::ImportSubscriptions { .. },
+            )
+            | None => (true, false),
         };
         self.youtube.pending_navigation = None;
         ui.set_status(message, true);

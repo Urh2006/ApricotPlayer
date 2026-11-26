@@ -348,7 +348,8 @@ impl Shell {
             | View::AudiovaultMenu
             | View::SpotifyHub
             | View::SpotifyAccounts
-            | View::SpotifyBrowse => None,
+            | View::SpotifyBrowse
+            | View::MyYoutube => None,
         }
     }
 
