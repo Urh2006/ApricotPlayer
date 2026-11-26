@@ -1,9 +1,10 @@
-//! The name of the YouTube account in the cookies file, for My YouTube
-//! (2.2.0). YouTube's web page asks its account menu with the cookies and a
+//! The name of the `YouTube` account in the cookies file, for My `YouTube`
+//! (2.2.0). `YouTube`'s web page asks its account menu with the cookies and a
 //! `SAPISIDHASH` authorization; that one read request is the only call
-//! ApricotPlayer makes to YouTube outside yt-dlp, and it never changes the
+//! `ApricotPlayer` makes to `YouTube` outside yt-dlp, and it never changes the
 //! account.
 
+use std::fmt::Write as _;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
@@ -14,7 +15,7 @@ const ACCOUNT_MENU_URL: &str =
     "https://www.youtube.com/youtubei/v1/account/account_menu?prettyPrint=false";
 const WEB_CLIENT_VERSION: &str = "2.20251120.01.00";
 
-/// The cookies of a Netscape `cookies.txt` that YouTube receives.
+/// The cookies of a Netscape `cookies.txt` that `YouTube` receives.
 fn youtube_cookies(netscape: &str) -> Vec<(String, String)> {
     netscape
         .lines()
@@ -34,10 +35,13 @@ fn youtube_cookies(netscape: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// YouTube's web authorization: `SAPISIDHASH <time>_<sha1(time sapisid origin)>`.
+/// `YouTube`'s web authorization: `SAPISIDHASH <time>_<sha1(time sapisid origin)>`.
 fn sapisid_hash(sapisid: &str, seconds: u64) -> String {
     let digest = Sha1::digest(format!("{seconds} {sapisid} {ORIGIN}").as_bytes());
-    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex = digest.iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    });
     format!("SAPISIDHASH {seconds}_{hex}")
 }
 
@@ -59,7 +63,7 @@ fn account_name_of(answer: &Value) -> Option<String> {
 }
 
 /// The signed-in account's name, `None` when the cookies hold no sign-in
-/// YouTube accepts.
+/// `YouTube` accepts.
 ///
 /// # Errors
 /// The network error text.
@@ -136,10 +140,12 @@ mod tests {
     #[test]
     fn the_authorization_follows_youtubes_web_format() {
         // sha1("1700000000 abc https://www.youtube.com")
-        let expected: String = Sha1::digest(b"1700000000 abc https://www.youtube.com")
+        let expected = Sha1::digest(b"1700000000 abc https://www.youtube.com")
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+            .fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            });
         assert_eq!(expected.len(), 40);
         assert_eq!(
             sapisid_hash("abc", 1_700_000_000),

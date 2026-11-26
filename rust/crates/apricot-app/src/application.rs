@@ -3476,7 +3476,7 @@ impl Application {
         }
     }
 
-    /// My YouTube (2.2.0): the cookies hold a YouTube sign-in.
+    /// My `YouTube` (2.2.0): the cookies hold a `YouTube` sign-in.
     pub fn youtube_signed_in(&self) -> bool {
         crate::cookies::cookies_file_has_youtube_login(&self.youtube_cookies_path())
     }
@@ -3495,12 +3495,12 @@ impl Application {
         let _ = crate::youtube_account::save_account_name(&self.app_data_folder(), name);
     }
 
-    /// My YouTube: keeps the cookies of ApricotPlayer's own sign-in window
+    /// My `YouTube`: keeps the cookies of `ApricotPlayer`'s own sign-in window
     /// and makes its profile the cookie source, so later cookie refreshes
     /// read the same signed-in profile.
     ///
     /// # Errors
-    /// The cookies hold no YouTube sign-in, or they cannot be saved.
+    /// The cookies hold no `YouTube` sign-in, or they cannot be saved.
     pub fn finish_youtube_sign_in(
         &mut self,
         browser: &str,
@@ -3524,8 +3524,8 @@ impl Application {
             .map_err(|error| error.to_string())
     }
 
-    /// My YouTube: forgets the sign-in on this computer. The cookie cache and
-    /// ApricotPlayer's own sign-in profile are deleted; a cookie file the
+    /// My `YouTube`: forgets the sign-in on this computer. The cookie cache and
+    /// `ApricotPlayer`'s own sign-in profile are deleted; a cookie file the
     /// user chose stays, but is no longer used.
     ///
     /// # Errors

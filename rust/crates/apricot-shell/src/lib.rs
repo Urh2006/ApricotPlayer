@@ -136,7 +136,7 @@ pub enum View {
     SpotifyHub,
     SpotifyAccounts,
     SpotifyBrowse,
-    /// My YouTube (2.2.0).
+    /// My `YouTube` (2.2.0).
     MyYoutube,
     /// Channel subscriptions (Windows `MainView::Subscriptions`).
     Subscriptions,

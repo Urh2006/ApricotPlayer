@@ -361,7 +361,7 @@ enum MainView {
     SpotifyAccounts,
     /// Spotify lists: search, library, albums, playlists, artists, shows.
     SpotifyBrowse,
-    /// My YouTube (2.2.0).
+    /// My `YouTube` (2.2.0).
     MyYoutube,
     Player,
 }
@@ -421,11 +421,11 @@ struct PendingYoutubePlaylistPlayback {
     purpose: AllCollectionPurpose,
 }
 
-/// Why a whole YouTube list is read.
+/// Why a whole `YouTube` list is read.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AllCollectionPurpose {
     Play,
-    /// My YouTube's import of the account's subscriptions (2.2.0).
+    /// My `YouTube`'s import of the account's subscriptions (2.2.0).
     ImportSubscriptions,
 }
 
@@ -4390,7 +4390,7 @@ unsafe fn open_youtube_collection(
     start_youtube_collection_work(window, work);
 }
 
-/// Reads a whole YouTube list on the worker, for `purpose`.
+/// Reads a whole `YouTube` list on the worker, for `purpose`.
 unsafe fn load_all_youtube_collection(
     window: HWND,
     url: &str,
@@ -13456,6 +13456,7 @@ unsafe fn prompt_cookie_refresh_for_playback(
 
 /// Results of cookie workers: Python's `ui_queue` announcements,
 /// `finish_browser_cookies_export` and the playback retry.
+#[allow(clippy::too_many_lines)] // One arm per cookie event and origin.
 unsafe fn handle_cookie_event(window: HWND, event: crate::cookies_win32::CookieEvent) {
     use crate::cookies_win32::{CookieEvent, CookieExportOrigin};
     let Some(state) = state_mut(window) else {
@@ -13524,7 +13525,9 @@ unsafe fn handle_cookie_event(window: HWND, event: crate::cookies_win32::CookieE
         CookieEvent::YoutubeSignIn { browser, result } => {
             youtube_account::sign_in_window_ended(window, &browser, *result);
         }
-        CookieEvent::YoutubeAccountName(name) => youtube_account::account_name_read(window, name),
+        CookieEvent::YoutubeAccountName(name) => {
+            youtube_account::account_name_read(window, name.as_deref());
+        }
         CookieEvent::Failed { origin, error } => {
             let friendly = apricot_app::comments::friendly_error(&catalog, &error);
             match origin {

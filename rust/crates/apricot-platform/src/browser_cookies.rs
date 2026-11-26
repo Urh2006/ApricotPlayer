@@ -624,10 +624,10 @@ pub fn devtools_browser_cookies(
     result.map(|cookies| (label, cookies))
 }
 
-/// Where the YouTube sign-in window of My YouTube starts (2.2.0).
+/// Where the `YouTube` sign-in window of My `YouTube` starts (2.2.0).
 pub const YOUTUBE_SIGN_IN_URL: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F";
 
-/// The Chromium browsers ApricotPlayer can open for its own YouTube sign-in,
+/// The Chromium browsers `ApricotPlayer` can open for its own `YouTube` sign-in,
 /// the preferred one first.
 #[must_use]
 pub fn youtube_sign_in_browser(preferred: &str) -> Option<String> {
@@ -650,7 +650,7 @@ pub enum SignInEnd {
     Failed(String),
 }
 
-/// My YouTube (2.2.0): opens `browser` with ApricotPlayer's own profile in
+/// My `YouTube` (2.2.0): opens `browser` with `ApricotPlayer`'s own profile in
 /// `user_data_dir` at the Google sign-in, waits until `signed_in` accepts the
 /// profile's cookies, then closes the window and returns them. The user's own
 /// browser and profiles stay untouched. `cancel` ends the wait.

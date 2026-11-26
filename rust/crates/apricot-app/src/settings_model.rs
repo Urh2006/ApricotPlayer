@@ -2626,8 +2626,9 @@ mod tests {
                 SettingsSection::General,
                 27 + usize::from(cfg!(target_os = "macos")),
             ),
-            // 19 Python items, Spotify, the four 2.1 entries and the reset button.
-            (SettingsSection::MainMenu, 25),
+            // 19 Python items, Spotify, My YouTube (2.2.0), the four 2.1
+            // entries and the reset button.
+            (SettingsSection::MainMenu, 26),
             // 2.1 adds "Custom seek amount" and "Open a file from the
             // system with" and appends "Audio processing" and "Playback
             // transitions".

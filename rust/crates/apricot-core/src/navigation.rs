@@ -39,7 +39,7 @@ pub enum Route {
     SpotifyDevices,
     SpotifyBrowse,
     SpotifySearch,
-    /// My YouTube (2.2.0): the lists of the signed-in YouTube account.
+    /// My `YouTube` (2.2.0): the lists of the signed-in `YouTube` account.
     MyYoutube,
     DownloadQueue,
     PlaybackQueue,

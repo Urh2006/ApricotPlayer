@@ -32,7 +32,7 @@ pub(crate) enum CookieExportOrigin {
     Repair,
     /// Python `prompt_cookie_refresh_for_playback`, for one resolve token.
     Playback(u64),
-    /// My YouTube's sign-in from the user's own browser (2.2.0).
+    /// My `YouTube`'s sign-in from the user's own browser (2.2.0).
     MyYoutube,
 }
 
@@ -375,7 +375,7 @@ impl Shell {
             || self.my_youtube.exporting
     }
 
-    /// My YouTube's sign-in from the user's browser: closes it when it runs
+    /// My `YouTube`'s sign-in from the user's browser: closes it when it runs
     /// (the user agreed) and reads its cookies; the answer is a cookie event.
     pub(crate) fn start_my_youtube_browser_export(
         &mut self,

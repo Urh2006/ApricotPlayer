@@ -1669,23 +1669,28 @@ impl Shell {
     }
 
     /// Opens an album, playlist, artist, show, folder or Liked Songs row.
+    /// About on an artist page (2.2.0): the biography in the lyrics window.
+    fn browse_show_artist_about(&self, ui: &mut dyn ShellUi, artist: &str, title: String) {
+        let catalog = self.catalog();
+        match apricot_spotify::catalog::artist_biography(artist) {
+            Some(text) => ui.open_lyrics(crate::LyricsDialog::text(
+                title,
+                &text,
+                catalog.text("spotify_artist_about_copy").to_owned(),
+                catalog.text("spotify_artist_about_copied").to_owned(),
+                catalog.text("back").to_owned(),
+            )),
+            None => ui.set_status(catalog.text("spotify_artist_no_about"), true),
+        }
+    }
+
     fn browse_open_item(&mut self, ui: &mut dyn ShellUi, item: &CatalogItem) {
         if let Some((artist, section)) =
             apricot_spotify::catalog::parse_artist_section_uri(&item.uri)
         {
-            let catalog = self.catalog();
-            let title = apricot_app::spotify::artist_section_title(&catalog, item);
+            let title = apricot_app::spotify::artist_section_title(&self.catalog(), item);
             if section == ArtistSection::About {
-                match apricot_spotify::catalog::artist_biography(&artist) {
-                    Some(text) => ui.open_lyrics(crate::LyricsDialog::text(
-                        title,
-                        &text,
-                        catalog.text("spotify_artist_about_copy").to_owned(),
-                        catalog.text("spotify_artist_about_copied").to_owned(),
-                        catalog.text("back").to_owned(),
-                    )),
-                    None => ui.set_status(catalog.text("spotify_artist_no_about"), true),
-                }
+                self.browse_show_artist_about(ui, &artist, title);
                 return;
             }
             self.browse_open(ui, Source::ArtistSection { artist, section }, title);

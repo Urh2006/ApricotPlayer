@@ -92,12 +92,12 @@ pub enum YoutubeCollectionKind {
     ChannelPopular,
     /// Python `open_soundcloud_artist_tracks`: the artist's `/tracks` page.
     SoundcloudArtistTracks,
-    /// A list of the signed-in YouTube account (My YouTube, 2.2.0).
+    /// A list of the signed-in `YouTube` account (My `YouTube`, 2.2.0).
     Account(YoutubeAccountFeed),
 }
 
-/// The lists of a signed-in YouTube account, read by yt-dlp with the cookies
-/// (My YouTube, 2.2.0).
+/// The lists of a signed-in `YouTube` account, read by yt-dlp with the cookies
+/// (My `YouTube`, 2.2.0).
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum YoutubeAccountFeed {
@@ -111,7 +111,7 @@ pub enum YoutubeAccountFeed {
 }
 
 impl YoutubeAccountFeed {
-    /// My YouTube's order.
+    /// My `YouTube`'s order.
     pub const ALL: [Self; 7] = [
         Self::Home,
         Self::Subscriptions,

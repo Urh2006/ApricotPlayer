@@ -1,9 +1,9 @@
-//! My YouTube (2.2.0): the main menu entry below Spotify with the lists of
-//! the signed-in YouTube account. Each list opens as a YouTube collection
+//! My `YouTube` (2.2.0): the main menu entry below Spotify with the lists of
+//! the signed-in `YouTube` account. Each list opens as a `YouTube` collection
 //! (Enter plays, Load more at the end, the usual context menu); Back returns
 //! to the same row here. The sign-in first reads the user's own browser, as
-//! the cookie export in Settings does, and otherwise opens ApricotPlayer's
-//! own sign-in window, which closes by itself once YouTube knows the user.
+//! the cookie export in Settings does, and otherwise opens `ApricotPlayer`'s
+//! own sign-in window, which closes by itself once `YouTube` knows the user.
 
 use std::sync::{
     Arc,
@@ -28,7 +28,7 @@ use super::{
 };
 
 /// How long the own sign-in window waits for the user.
-const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(15);
 
 #[derive(Default)]
 pub(super) struct MyYoutubeState {
@@ -46,7 +46,7 @@ fn catalog(state: &super::WindowState) -> apricot_core::TranslationCatalog {
     apricot_app::embedded_catalog(&state.application.settings().language)
 }
 
-/// Main menu My YouTube, `open_my_youtube`.
+/// Main menu My `YouTube`, `open_my_youtube`.
 pub(super) unsafe fn show(window: HWND) {
     remember_menu_item(window, "my_youtube");
     restore_from_tray(window);
@@ -184,7 +184,7 @@ unsafe fn sign_in(window: HWND) {
     open_sign_in_window(window, if chromium { &browser } else { "" });
 }
 
-/// ApricotPlayer's own sign-in window with its own browser profile.
+/// `ApricotPlayer`'s own sign-in window with its own browser profile.
 unsafe fn open_sign_in_window(window: HWND, preferred: &str) {
     let Some(state) = state_mut(window) else {
         return;
@@ -300,13 +300,13 @@ unsafe fn signed_in_now(window: HWND) {
 }
 
 /// The account name arrived.
-pub(super) unsafe fn account_name_read(window: HWND, name: Option<String>) {
+pub(super) unsafe fn account_name_read(window: HWND, name: Option<&str>) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    state.application.set_youtube_account_name(name.as_deref());
+    state.application.set_youtube_account_name(name);
     let catalog = catalog(state);
-    let text = name.as_deref().map_or_else(
+    let text = name.map_or_else(
         || catalog.text("my_youtube_signed_in_noname").to_owned(),
         |name| catalog.text("my_youtube_signed_in").replace("{name}", name),
     );
@@ -355,7 +355,7 @@ unsafe fn import_subscriptions(window: HWND) {
     );
 }
 
-/// The account's channels arrived: the new ones join ApricotPlayer's
+/// The account's channels arrived: the new ones join `ApricotPlayer`'s
 /// subscriptions; nothing is removed.
 pub(super) unsafe fn channels_read(window: HWND, channels: Vec<apricot_core::MediaItem>) {
     let Some(state) = state_mut(window) else {
@@ -397,7 +397,7 @@ pub(super) unsafe fn channels_read(window: HWND, channels: Vec<apricot_core::Med
     focus_list(state.list);
 }
 
-/// Closes an open sign-in window when ApricotPlayer exits.
+/// Closes an open sign-in window when `ApricotPlayer` exits.
 pub(super) fn shutdown(state: &super::WindowState) {
     if let Some(cancel) = &state.my_youtube.signing_in {
         cancel.store(true, Ordering::SeqCst);

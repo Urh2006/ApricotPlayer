@@ -618,7 +618,7 @@ impl YtDlpYoutubeEngine {
         Ok(collection_response(&items, limit))
     }
 
-    /// My YouTube (2.2.0): an account list needs the cookies from the start;
+    /// My `YouTube` (2.2.0): an account list needs the cookies from the start;
     /// without a sign-in yt-dlp only says that it needs one.
     fn account_collection(
         &self,
@@ -885,8 +885,8 @@ pub fn prewarm_search(executable: &Path, config: YoutubeSessionConfig, requested
     }
 }
 
-/// My YouTube (2.2.0, optional): adds a played video to the account's
-/// YouTube history with yt-dlp's `--mark-watched`, on its own thread, so
+/// My `YouTube` (2.2.0, optional): adds a played video to the account's
+/// `YouTube` history with yt-dlp's `--mark-watched`, on its own thread, so
 /// playback never waits for it. Nothing happens without a cookies file.
 pub fn mark_watched(executable: &Path, config: &YoutubeSessionConfig, media_url: &str) {
     let Some(cookies_file) = config

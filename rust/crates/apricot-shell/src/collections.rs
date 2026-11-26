@@ -392,7 +392,7 @@ impl Shell {
         }
     }
 
-    /// Reads a whole YouTube list for My YouTube's import (Windows
+    /// Reads a whole `YouTube` list for My `YouTube`'s import (Windows
     /// `load_all_youtube_collection`).
     pub(crate) fn load_all_youtube_collection(
         &mut self,

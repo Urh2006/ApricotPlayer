@@ -250,7 +250,7 @@ pub(crate) enum PendingList {
         token: u64,
         shuffle: bool,
     },
-    /// My YouTube: every subscribed channel of the account, to import.
+    /// My `YouTube`: every subscribed channel of the account, to import.
     ImportSubscriptions {
         token: u64,
     },

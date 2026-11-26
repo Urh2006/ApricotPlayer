@@ -946,7 +946,8 @@ mod tests {
                 "Compilations",
                 "Appears on",
                 "Playlists",
-                "Related artists"
+                "Related artists",
+                "About"
             ]
         );
         assert_eq!(

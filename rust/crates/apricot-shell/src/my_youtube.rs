@@ -1,6 +1,6 @@
-//! My YouTube for the Mac (Windows `youtube_account_win32.rs`, 2.2.0): the
-//! main menu entry below Spotify with the lists of the signed-in YouTube
-//! account, its sign-in (the user's own browser first, then ApricotPlayer's
+//! My `YouTube` for the Mac (Windows `youtube_account_win32.rs`, 2.2.0): the
+//! main menu entry below Spotify with the lists of the signed-in `YouTube`
+//! account, its sign-in (the user's own browser first, then `ApricotPlayer`'s
 //! own sign-in window), the import of its subscriptions and the sign-out.
 
 use std::sync::{
@@ -16,10 +16,10 @@ use apricot_media::YoutubeAccountFeed;
 
 use crate::{ListScreen, ScreenControl, Shell, ShellUi, View};
 
-const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(15);
 
-/// Settings, Cookies, "Mark played videos as watched on YouTube" (2.2.0):
-/// a YouTube video that starts playing joins the account's history, on a
+/// Settings, Cookies, "Mark played videos as watched on `YouTube`" (2.2.0):
+/// a `YouTube` video that starts playing joins the account's history, on a
 /// worker, so playback never waits. Both frontends call this when playback
 /// starts.
 pub fn mark_youtube_watched(
@@ -45,7 +45,7 @@ pub fn mark_youtube_watched(
     );
 }
 
-/// What a My YouTube worker reports.
+/// What a My `YouTube` worker reports.
 pub(crate) enum MyYoutubeEvent {
     SignIn {
         browser: String,
@@ -69,7 +69,7 @@ pub(crate) const fn is_view(view: View) -> bool {
 }
 
 impl Shell {
-    /// Main menu My YouTube, `open_my_youtube`.
+    /// Main menu My `YouTube`, `open_my_youtube`.
     pub(crate) fn show_my_youtube(&mut self, ui: &mut dyn ShellUi) {
         self.remember_menu_item("my_youtube");
         ui.restore();
@@ -377,7 +377,7 @@ impl Shell {
         );
     }
 
-    /// Closes an open sign-in window when ApricotPlayer exits.
+    /// Closes an open sign-in window when `ApricotPlayer` exits.
     pub(crate) fn my_youtube_shutdown(&self) {
         if let Some(cancel) = &self.my_youtube.signing_in {
             cancel.store(true, Ordering::SeqCst);

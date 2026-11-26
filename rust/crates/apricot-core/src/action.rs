@@ -233,8 +233,6 @@ pub const ACTIONS: &[ActionDefinition] = &[
     // Spotify (`docs/SPOTIFY_PLAN.md` 5.2). Not in Python 1.0.21; the first
     // `PYTHON_BASELINE_ACTIONS` entries stay the Python catalog.
     action!("open_spotify", "Ctrl+Alt+C", GLOBAL),
-    // My YouTube (2.2.0).
-    action!("open_my_youtube", "Ctrl+Alt+U", GLOBAL),
     action!("spotify_accounts", "Ctrl+Alt+Shift+C", GLOBAL),
     action!("spotify_search", "Ctrl+Alt+Shift+Y", GLOBAL),
     action!("spotify_library", "Ctrl+Alt+Shift+L", GLOBAL),
@@ -382,6 +380,8 @@ pub const ACTIONS: &[ActionDefinition] = &[
     action!("player_marked_count", "K", PLAYER),
     action!("player_manage_marked", "Alt+Shift+K", PLAYER),
     action!("toggle_announcement_verbosity", "Ctrl+Alt+Shift+V", GLOBAL),
+    // My YouTube (2.2.0).
+    action!("open_my_youtube", "Ctrl+Alt+U", GLOBAL),
 ];
 
 /// Number of leading [`ACTIONS`] that mirror the Python 1.0.21 catalog.
@@ -404,7 +404,7 @@ mod tests {
         let ids: HashSet<_> = ACTIONS.iter().map(|action| action.id.as_str()).collect();
         assert_eq!(PYTHON_BASELINE_ACTIONS, 91);
         // 14 Spotify actions, then the 2.1 additions.
-        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 128);
+        assert_eq!(ACTIONS.len(), PYTHON_BASELINE_ACTIONS + 14 + 129);
         assert_eq!(ids.len(), ACTIONS.len());
         assert!(
             ACTIONS[PYTHON_BASELINE_ACTIONS..PYTHON_BASELINE_ACTIONS + 14]

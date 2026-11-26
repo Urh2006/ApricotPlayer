@@ -53,7 +53,7 @@ pub struct SettingsDocument {
     pub player_speed: String,
     /// The pitch the player starts with (2.1.8, not in Python).
     pub player_pitch: String,
-    /// My YouTube (2.2.0): played videos join the account's history.
+    /// My `YouTube` (2.2.0): played videos join the account's history.
     pub youtube_mark_watched: bool,
     pub speed_audio_mode: String,
     pub show_video_details_by_default: bool,

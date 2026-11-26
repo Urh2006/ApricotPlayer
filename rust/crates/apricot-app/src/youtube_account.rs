@@ -1,6 +1,6 @@
-//! My YouTube (2.2.0): the lists of the signed-in YouTube account, read by
+//! My `YouTube` (2.2.0): the lists of the signed-in `YouTube` account, read by
 //! yt-dlp with the app's cookies, and the sign-in that fills those cookies.
-//! ApricotPlayer's own subscriptions, history, favorites and playlists stay
+//! `ApricotPlayer`'s own subscriptions, history, favorites and playlists stay
 //! separate; the account's lists are read-only.
 
 use std::path::{Path, PathBuf};
@@ -9,12 +9,12 @@ use apricot_core::TranslationCatalog;
 use apricot_media::YoutubeAccountFeed;
 use serde_json::Value;
 
-/// The folder of ApricotPlayer's own browser profile for the YouTube
+/// The folder of `ApricotPlayer`'s own browser profile for the `YouTube`
 /// sign-in, inside the app data folder.
 pub const SIGN_IN_PROFILE_FOLDER: &str = "youtube-sign-in";
 const ACCOUNT_FILE: &str = "youtube_account.json";
 
-/// A row of My YouTube.
+/// A row of My `YouTube`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MyYoutubeEntry {
     SignIn,
@@ -29,7 +29,7 @@ pub struct MyYoutubeRow {
     pub label: String,
 }
 
-/// What My YouTube shows: before a sign-in only "Sign in with Google
+/// What My `YouTube` shows: before a sign-in only "Sign in with Google
 /// account", after it the account's lists, the import and the sign-out.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MyYoutubeModel {
@@ -85,7 +85,7 @@ impl MyYoutubeModel {
     }
 }
 
-/// ApricotPlayer's own sign-in profile; the browser makes its `Default`
+/// `ApricotPlayer`'s own sign-in profile; the browser makes its `Default`
 /// profile inside, which cookie exports then read like any other profile.
 #[must_use]
 pub fn sign_in_user_data_dir(app_data: &Path) -> PathBuf {
@@ -97,7 +97,7 @@ pub fn sign_in_profile(app_data: &Path) -> PathBuf {
     sign_in_user_data_dir(app_data).join("Default")
 }
 
-/// Whether the cookies of the sign-in window already hold YouTube's own
+/// Whether the cookies of the sign-in window already hold `YouTube`'s own
 /// sign-in, not only Google's.
 #[must_use]
 pub fn devtools_cookies_signed_in(cookies: &[Value]) -> bool {
@@ -145,7 +145,7 @@ pub fn save_account_name(app_data: &Path, name: Option<&str>) -> std::io::Result
     }
 }
 
-/// The channels of the account that are not in ApricotPlayer's
+/// The channels of the account that are not in `ApricotPlayer`'s
 /// subscriptions yet, in the account's order.
 #[must_use]
 pub fn channels_to_import(
