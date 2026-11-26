@@ -1589,7 +1589,8 @@ unsafe fn handle_settings_command(window: HWND, command: SettingsCommand) {
         | SettingsCommand::ExportSettings
         | SettingsCommand::ImportSettings
         | SettingsCommand::ExportBookmarks
-        | SettingsCommand::ImportBookmarks => {
+        | SettingsCommand::ImportBookmarks
+        | SettingsCommand::DeleteAllData => {
             if let Some(action) = command.deferred_action() {
                 defer_global_action(window, action);
             }

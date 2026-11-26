@@ -95,6 +95,7 @@ const PLAYBACK: &[SettingId] = &[
     SettingId::AnnouncePlaybackFinished,
     SettingId::EnableBackgroundPlayback,
     SettingId::PlayerSpeed,
+    SettingId::PlayerPitch,
     SettingId::SpeedAudioMode,
     SettingId::ShowVideoDetailsByDefault,
     SettingId::EnableAgeRestrictedVideos,
@@ -312,8 +313,9 @@ mod tests {
                 .iter()
                 .flat_map(|section| section.reset_fields)
                 .count(),
-            // 112 Python placements, eight 2.1 settings and three of 2.1.3.
-            123
+            // 112 Python placements, eight 2.1 settings, three of 2.1.3 and
+            // the playback pitch of 2.1.8.
+            124
         );
         assert!(
             SETTINGS_SECTIONS
@@ -332,7 +334,7 @@ mod tests {
         {
             *placement_counts.entry(*id).or_default() += 1;
         }
-        assert_eq!(placement_counts.len(), 122);
+        assert_eq!(placement_counts.len(), 123);
         assert_eq!(
             placement_counts.get(&SettingId::AppUpdateNotifications),
             Some(&2)

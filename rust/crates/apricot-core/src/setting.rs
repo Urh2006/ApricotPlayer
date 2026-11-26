@@ -147,6 +147,7 @@ define_setting_ids! {
     KeyboardShortcuts => "keyboard_shortcuts",
     MediaAssociationPromptedVersion => "media_association_prompted_version",
     LanguagePrompted => "language_prompted",
+    PlayerPitch => "player_pitch",
 }
 
 #[cfg(test)]
@@ -156,9 +157,9 @@ mod tests {
     use super::SettingId;
 
     #[test]
-    fn baseline_contains_127_unique_settings() {
+    fn baseline_contains_128_unique_settings() {
         let keys: HashSet<_> = SettingId::ALL.iter().map(|id| id.key()).collect();
-        assert_eq!(SettingId::ALL.len(), 127);
+        assert_eq!(SettingId::ALL.len(), 128);
         assert_eq!(keys.len(), SettingId::ALL.len());
     }
 }

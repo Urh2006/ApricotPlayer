@@ -15,6 +15,7 @@ mod collections;
 mod comments;
 mod converter;
 mod cookies;
+pub mod data_reset;
 mod download_work;
 mod downloads;
 mod equalizer_dialog;
@@ -503,6 +504,10 @@ impl Shell {
         }
         if let Some(backup) = backups::Backup::from_action(action_id) {
             self.run_backup(ui, backup);
+            return;
+        }
+        if action_id == data_reset::ACTION {
+            self.delete_all_data(ui);
             return;
         }
         match action_id {
