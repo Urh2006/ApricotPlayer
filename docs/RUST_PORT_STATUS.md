@@ -1679,3 +1679,20 @@ Urhove zahteve z dne 2. 10. 2026:
   7 s skupaj s prijavo, All songs 336 pesmi v 4,1 s (362 pred odstranitvijo ponovitev), Enter
   na drugi pesmi izgovori samo "Playing: ...", Next predvaja tretjo pesem seznama, Escape
   vrne fokus na isto vrstico seznama in strani, Singles and EPs naloži naslednjo stran na koncu.
+
+### Višina ob začetku, brisanje vseh podatkov in polje za naslednji element, 2.1.8 (26. 11. 2026)
+
+- **O-24.** Nastavitev `player_pitch` (Playback pitch, 0,5 do 2,0) za `player_speed`; predvajalnik
+  se začne s to višino, Ctrl+0 vrne hitrost in višino na privzeti vrednosti. Python ima samo
+  privzeto hitrost; Urh je dodatek odobril 26. 11. 2026.
+- **O-25.** Settings, General, Tools and backups: "Delete all ApricotPlayer data". Vprašanje z
+  privzetim No; po Yes skripta (Windows PowerShell z `[IO.Directory]::Delete`, Mac `/bin/sh`)
+  počaka na izhod procesa in izbriše mapo s podatki te izdaje (`data_reset::checked_folder`
+  dovoli samo mapo z imenom identitete), na Macu še Keychain vnose storitve. Python tega nima;
+  Urh je odobril 26. 11. 2026.
+- **O-26.** Polje "Automatically play next item in this player session" se ne pokaže za
+  Spotify in radijske postaje (`radio_station_id`), ker tam nič ne spremeni. Za ostale elemente
+  ostane kot v Pythonu (samo ko je `autoplay_next` izklopljen). Urh, 26. 11. 2026.
+- Preverjeno v živo na ločenem namizju: datoteka se začne z višino 1.25 (Ctrl+0 izgovori "pitch
+  reset to 1.25x"), polje je pri datoteki, pri SomaFM ga ni, No pusti aplikacijo in mapo,
+  fokus se vrne na prejšnjo kontrolo, Yes zapre aplikacijo in mapa izgine v nekaj sekundah.

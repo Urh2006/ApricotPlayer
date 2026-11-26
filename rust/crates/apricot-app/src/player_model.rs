@@ -122,7 +122,7 @@ impl PlayerScreenModel {
                 checked: None,
             });
         }
-        append_toggle_controls(&mut controls, catalog, settings, state);
+        append_toggle_controls(&mut controls, catalog, settings, state, item);
         Self {
             window_title: media_window_title(catalog, item),
             heading: format!("{}: {}", catalog.text("internal_player"), item.title),
@@ -266,6 +266,7 @@ fn append_toggle_controls(
     catalog: &TranslationCatalog,
     settings: &SettingsDocument,
     state: &PlayerViewState,
+    item: &MediaItem,
 ) {
     for (id, label_key, action_id, toggle) in [
         (
@@ -285,7 +286,11 @@ fn append_toggle_controls(
             state.enabled_toggles.contains(&toggle),
         ));
     }
-    if !settings.autoplay_next {
+    // Spotify plays its own next song and a radio station has no next item,
+    // so the session choice would change nothing there (Urh, 2.1.8).
+    let has_next_item =
+        item.source != MediaSource::Spotify && !item.metadata.contains_key("radio_station_id");
+    if !settings.autoplay_next && has_next_item {
         controls.push(checkbox_without_shortcut(
             catalog,
             "session_autoplay_next",
@@ -698,6 +703,38 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn the_session_next_item_choice_is_left_out_for_spotify_and_radio() {
+        let settings = SettingsDocument {
+            autoplay_next: false,
+            ..SettingsDocument::default()
+        };
+        let offers = |item: &apricot_core::MediaItem| {
+            PlayerScreenModel::build(
+                &english_catalog(),
+                &settings,
+                item,
+                &PlayerViewState::default(),
+            )
+            .controls
+            .iter()
+            .any(|control| control.id == "session_autoplay_next")
+        };
+        assert!(offers(&local_item()));
+        let mut spotify = local_item();
+        spotify.source = MediaSource::Spotify;
+        spotify.local_path = None;
+        assert!(!offers(&spotify));
+        let mut radio = local_item();
+        radio.source = MediaSource::Direct;
+        radio.kind = MediaKind::LiveStream;
+        radio.local_path = None;
+        radio
+            .metadata
+            .insert("radio_station_id".to_owned(), "station".into());
+        assert!(!offers(&radio));
     }
 
     fn background_settings() -> SettingsDocument {

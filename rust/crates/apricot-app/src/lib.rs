@@ -60,7 +60,7 @@ pub use action_finder::{
 pub use activation::ActivationRequest;
 pub use application::{
     Application, LastSessionResume, PlayerEqualizerSnapshot, PlayerNavigationOrigin,
-    PlayerNavigationOutcome, SavedList, player_start_speed,
+    PlayerNavigationOutcome, SavedList, player_start_pitch, player_start_speed,
 };
 pub use bookmark_controller::{BookmarkController, BookmarkControllerError};
 pub use context_menu::{ContextCommand, ContextMenuContext, ContextMenuEntry};

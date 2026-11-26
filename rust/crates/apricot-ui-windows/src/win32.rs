@@ -13495,6 +13495,35 @@ unsafe fn set_status(state: &WindowState, message: &str, announce: bool) {
 
 /// A warning with Yes and No, No being the default; focus returns to the
 /// control that had it, as after other message boxes.
+/// Settings, General, Delete all `ApricotPlayer` data (2.1.8): after Yes, a
+/// script deletes the data folder once `ApricotPlayer` has exited, and the
+/// window exits as it does for an update.
+unsafe fn delete_all_data(window: HWND) {
+    let Some(state) = state(window) else {
+        return;
+    };
+    let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
+    if !ask_yes_no(window, &apricot_shell::data_reset::question(&catalog)) {
+        return;
+    }
+    let scheduled = apricot_platform::discover_app_paths()
+        .map_err(|error| error.to_string())
+        .and_then(|paths| apricot_shell::data_reset::schedule(&paths.app_data));
+    if let Err(error) = scheduled {
+        show_error_message(
+            window,
+            &catalog
+                .text("delete_all_data_failed")
+                .replace("{error}", &error),
+        );
+        return;
+    }
+    if let Some(state) = state_mut(window) {
+        state.lifecycle = WindowLifecycle::Exiting;
+    }
+    let _ = DestroyWindow(window);
+}
+
 unsafe fn ask_yes_no(window: HWND, message: &str) -> bool {
     let previous = GetFocus();
     let message = wide(message);
@@ -14394,6 +14423,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "settings_import" => backups::run(window, apricot_shell::backups::Backup::ImportSettings),
         "bookmarks_export" => backups::run(window, apricot_shell::backups::Backup::ExportBookmarks),
         "bookmarks_import" => backups::run(window, apricot_shell::backups::Backup::ImportBookmarks),
+        apricot_shell::data_reset::ACTION => delete_all_data(window),
         "download_with_options" => download_with_options(window),
         "search_suggestions" => start_search_suggestions(window),
         "cancel_conversion" => cancel_conversions(window),
@@ -19121,10 +19151,14 @@ unsafe fn adjust_player_pitch(window: HWND, delta: f64) {
 
 /// Python `reset_speed_pitch_worker`.
 unsafe fn reset_player_speed_pitch(window: HWND) {
-    let speed = state(window).map_or(1.0, |state| {
-        apricot_app::player_start_speed(&state.application.settings().player_speed)
+    let (speed, pitch) = state(window).map_or((1.0, 1.0), |state| {
+        let settings = state.application.settings();
+        (
+            apricot_app::player_start_speed(&settings.player_speed),
+            apricot_app::player_start_pitch(&settings.player_pitch),
+        )
     });
-    if !apply_player_speed(window, speed) || !apply_player_pitch(window, 1.0, None) {
+    if !apply_player_speed(window, speed) || !apply_player_pitch(window, pitch, None) {
         return;
     }
     announce_player_text(
@@ -19132,7 +19166,7 @@ unsafe fn reset_player_speed_pitch(window: HWND) {
         "speed_pitch_reset",
         &[
             ("speed", &format_rate_for_speech(speed)),
-            ("pitch", &format_rate_for_speech(1.0)),
+            ("pitch", &format_rate_for_speech(pitch)),
         ],
     );
     crate::sound_win32::play_default_reached_sound();

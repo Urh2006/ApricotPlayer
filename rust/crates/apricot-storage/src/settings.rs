@@ -51,6 +51,8 @@ pub struct SettingsDocument {
     pub announce_playback_finished: bool,
     pub enable_background_playback: bool,
     pub player_speed: String,
+    /// The pitch the player starts with (2.1.8, not in Python).
+    pub player_pitch: String,
     pub speed_audio_mode: String,
     pub show_video_details_by_default: bool,
     pub direct_link_enter_action: String,
@@ -199,6 +201,7 @@ impl Default for SettingsDocument {
             announce_playback_finished: true,
             enable_background_playback: false,
             player_speed: "1.0".to_owned(),
+            player_pitch: "1.0".to_owned(),
             speed_audio_mode: RUBBERBAND_SPEED_MODE.to_owned(),
             show_video_details_by_default: false,
             direct_link_enter_action: "play".to_owned(),

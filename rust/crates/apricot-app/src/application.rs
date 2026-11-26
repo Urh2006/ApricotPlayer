@@ -2125,7 +2125,7 @@ impl Application {
                 volume: f64::from(i32::try_from(settings.default_volume).unwrap_or(100)),
                 output_device: settings.audio_output_device.clone(),
                 speed: player_start_speed(&settings.player_speed),
-                pitch: 1.0,
+                pitch: player_start_pitch(&settings.player_pitch),
                 equalizer: None,
             },
             enabled_toggles: toggles,
@@ -3618,6 +3618,20 @@ fn unix_timestamp() -> f64 {
 
 /// Python `player_start_speed_value`/`default_speed_value`: accepts an
 /// optional `x` suffix and clamps to the supported 0.25-4.0 range.
+/// The pitch the player starts with, within the reach of the pitch keys
+/// (2.1.8).
+#[must_use]
+pub fn player_start_pitch(value: &str) -> f64 {
+    value
+        .trim()
+        .trim_end_matches(['x', 'X'])
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|pitch| pitch.is_finite())
+        .map_or(1.0, |pitch| pitch.clamp(0.5, 2.0))
+}
+
 pub fn player_start_speed(value: &str) -> f64 {
     value
         .trim()
@@ -3716,6 +3730,14 @@ mod tests {
             duration_seconds: Some(1_800.0),
             metadata: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn player_start_pitch_stays_within_the_pitch_keys() {
+        assert!((super::player_start_pitch("1.25x") - 1.25).abs() < f64::EPSILON);
+        assert!((super::player_start_pitch("0.1") - 0.5).abs() < f64::EPSILON);
+        assert!((super::player_start_pitch("3") - 2.0).abs() < f64::EPSILON);
+        assert!((super::player_start_pitch("") - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

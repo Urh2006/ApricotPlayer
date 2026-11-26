@@ -1085,8 +1085,10 @@ impl Shell {
 
     /// Windows `reset_player_speed_pitch`.
     pub(crate) fn reset_player_speed_pitch(&mut self, ui: &mut dyn ShellUi) {
-        let speed = apricot_app::player_start_speed(&self.application.settings().player_speed);
-        if !self.apply_player_speed(ui, speed) || !self.apply_player_pitch(ui, 1.0, None) {
+        let settings = self.application.settings();
+        let speed = apricot_app::player_start_speed(&settings.player_speed);
+        let pitch = apricot_app::player_start_pitch(&settings.player_pitch);
+        if !self.apply_player_speed(ui, speed) || !self.apply_player_pitch(ui, pitch, None) {
             return;
         }
         self.announce_player_text(
@@ -1094,7 +1096,7 @@ impl Shell {
             "speed_pitch_reset",
             &[
                 ("speed", &format_rate_for_speech(speed)),
-                ("pitch", &format_rate_for_speech(1.0)),
+                ("pitch", &format_rate_for_speech(pitch)),
             ],
         );
         ui.play_default_reached_sound();

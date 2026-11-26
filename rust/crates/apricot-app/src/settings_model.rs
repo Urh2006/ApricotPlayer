@@ -76,6 +76,8 @@ pub enum SettingsCommand {
     SpotifyReleases,
     /// Spotify: check the subscriptions of the active account now (2.1.3).
     CheckSpotifySubscriptions,
+    /// Deletes the whole data folder after `ApricotPlayer` exits (2.1.8).
+    DeleteAllData,
 }
 
 impl SettingsCommand {
@@ -89,6 +91,7 @@ impl SettingsCommand {
             Self::ImportSettings => "settings_import",
             Self::ExportBookmarks => "bookmarks_export",
             Self::ImportBookmarks => "bookmarks_import",
+            Self::DeleteAllData => "delete_all_data",
             _ => return None,
         })
     }
@@ -405,6 +408,7 @@ impl SettingsScreenModel {
                 (SettingsCommand::ImportSettings, "settings_import"),
                 (SettingsCommand::ExportBookmarks, "bookmarks_export"),
                 (SettingsCommand::ImportBookmarks, "bookmarks_import"),
+                (SettingsCommand::DeleteAllData, "delete_all_data"),
             ] {
                 controls.push(SettingsControl::Command {
                     command,
@@ -560,6 +564,7 @@ fn general_groups() -> GroupTable {
                 Command(C::ImportSettings),
                 Command(C::ExportBookmarks),
                 Command(C::ImportBookmarks),
+                Command(C::DeleteAllData),
             ],
         ),
     ]
@@ -615,6 +620,7 @@ fn playback_groups() -> GroupTable {
             "settings_group_speed_pitch",
             vec![
                 Setting(SettingId::PlayerSpeed),
+                Setting(SettingId::PlayerPitch),
                 Setting(SettingId::SpeedAudioMode),
                 Setting(SettingId::PitchMode),
                 Setting(SettingId::SpeedStep),
@@ -1067,6 +1073,11 @@ fn playback_controls(
         "0.25", "0.5", "0.6", "0.7", "0.75", "0.8", "0.9", "1.0", "1.1", "1.2", "1.25", "1.3",
         "1.4", "1.5", "1.75", "2.0",
     ];
+    // The pitch keys reach 0.5 to 2.0.
+    let pitches = [
+        "0.5", "0.6", "0.7", "0.75", "0.8", "0.9", "1.0", "1.1", "1.2", "1.25", "1.3", "1.4",
+        "1.5", "1.75", "2.0",
+    ];
     let audio_modes = [
         ("Rubberband high quality", "speed_audio_mode_rubberband"),
         ("High quality scaletempo2", "speed_audio_mode_scaletempo2"),
@@ -1115,6 +1126,14 @@ fn playback_controls(
             "player_speed",
             &settings.player_speed,
             &playback_rates,
+            SettingsValueType::String,
+            catalog,
+        ),
+        choice_raw(
+            SettingId::PlayerPitch,
+            "player_pitch",
+            &settings.player_pitch,
+            &pitches,
             SettingsValueType::String,
             catalog,
         ),
@@ -2427,7 +2446,7 @@ mod tests {
         );
         // macOS adds "Import data from Windows" after "Set default player".
         let mac = usize::from(cfg!(target_os = "macos"));
-        assert_eq!(model.controls.len(), 26 + mac);
+        assert_eq!(model.controls.len(), 27 + mac);
         assert!(matches!(
             &model.controls[0],
             SettingsControl::Choice {
@@ -2600,17 +2619,19 @@ mod tests {
         let settings = SettingsDocument::default();
         let expected = [
             // 2.1 adds the yt-dlp channel and appends integrations, global
-            // shortcuts and the four import and export commands.
+            // shortcuts and the four import and export commands; 2.1.8
+            // appends "Delete all ApricotPlayer data".
             (
                 SettingsSection::General,
-                26 + usize::from(cfg!(target_os = "macos")),
+                27 + usize::from(cfg!(target_os = "macos")),
             ),
             // 19 Python items, Spotify, the four 2.1 entries and the reset button.
             (SettingsSection::MainMenu, 25),
             // 2.1 adds "Custom seek amount" and "Open a file from the
             // system with" and appends "Audio processing" and "Playback
             // transitions".
-            (SettingsSection::Playback, 40),
+            // 2.1.8 adds "Playback pitch" after "Playback speed".
+            (SettingsSection::Playback, 41),
             // 2.1 appends "Bass boost intensity".
             (SettingsSection::Equalizer, 4),
             // 2.1 adds chapters and SponsorBlock and appends "Converter

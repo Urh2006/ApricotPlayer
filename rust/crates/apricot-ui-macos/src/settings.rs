@@ -1469,7 +1469,8 @@ impl SettingsWindow {
             | SettingsCommand::ExportSettings
             | SettingsCommand::ImportSettings
             | SettingsCommand::ExportBookmarks
-            | SettingsCommand::ImportBookmarks => {
+            | SettingsCommand::ImportBookmarks
+            | SettingsCommand::DeleteAllData => {
                 if let Some(action) = command.deferred_action() {
                     self.defer_global_action(action);
                 }
