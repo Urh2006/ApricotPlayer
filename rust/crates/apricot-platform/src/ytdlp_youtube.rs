@@ -639,7 +639,24 @@ impl YtDlpYoutubeEngine {
             cookies_file,
             &self.flat_arguments(target.to_owned(), limit, &[]),
         );
-        let output = run_executable(&self.executable, &arguments)?;
+        let mut output = run_executable(&self.executable, &arguments)?;
+        if !output.success {
+            // Expired or revoked cookies: the usual cookie refresh from the
+            // chosen browser (or ApricotPlayer's own sign-in profile), once.
+            let error = process_error_text(&output);
+            if is_cookie_auth_error(&error)
+                && let Some(repaired) = crate::browser_cookies::repair_cookies_for_error(&error)
+            {
+                output = run_executable(
+                    &self.executable,
+                    with_cookies(
+                        &self.config,
+                        &repaired.to_string_lossy(),
+                        &self.flat_arguments(target.to_owned(), limit, &[]),
+                    ),
+                )?;
+            }
+        }
         let items: Vec<MediaItem> = flat_items_from_output(output, "account entries")?
             .into_iter()
             .filter(|item| collection_kind_accepts(kind, item.kind))

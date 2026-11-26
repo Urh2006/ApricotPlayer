@@ -22,17 +22,23 @@ const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(15);
 /// a `YouTube` video that starts playing joins the account's history, on a
 /// worker, so playback never waits. Both frontends call this when playback
 /// starts.
+/// Whether a started item is marked as watched: checked before the cookie
+/// configuration is prepared, so other playback never touches the cookies.
+#[must_use]
+pub fn wants_mark_watched(app: &apricot_app::Application, item: &MediaItem) -> bool {
+    app.settings().youtube_mark_watched
+        && item.source == apricot_core::MediaSource::Youtube
+        && item.youtube_video_id().is_some()
+        && item.url.is_some()
+}
+
 pub fn mark_youtube_watched(
     app: &apricot_app::Application,
     item: &MediaItem,
     components: &std::path::Path,
     config: &apricot_media::YoutubeSessionConfig,
 ) {
-    if !app.settings().youtube_mark_watched
-        || item.source != apricot_core::MediaSource::Youtube
-        || item.youtube_video_id().is_none()
-        || !app.youtube_signed_in()
-    {
+    if !wants_mark_watched(app, item) || !app.youtube_signed_in() {
         return;
     }
     let Some(url) = item.url.as_ref() else {
@@ -59,6 +65,8 @@ pub(crate) struct MyYoutubeState {
     rows: Vec<MyYoutubeEntry>,
     selected: Option<MyYoutubeEntry>,
     signing_in: Option<Arc<AtomicBool>>,
+    /// The worker that drives the sign-in window and closes it.
+    worker: Option<std::thread::JoinHandle<()>>,
     receiver: Option<Receiver<MyYoutubeEvent>>,
     /// The user's browser is being read for the sign-in.
     pub(crate) exporting: bool,
@@ -197,7 +205,7 @@ impl Shell {
         let (sender, receiver) = mpsc::channel();
         self.my_youtube.receiver = Some(receiver);
         ui.set_status(catalog.text("my_youtube_own_window"), true);
-        std::thread::spawn(move || {
+        self.my_youtube.worker = Some(std::thread::spawn(move || {
             let result = apricot_platform::browser_cookies::youtube_sign_in_with_own_profile(
                 &browser,
                 &profile,
@@ -206,7 +214,7 @@ impl Shell {
                 apricot_app::youtube_account::devtools_cookies_signed_in,
             );
             let _ = sender.send(MyYoutubeEvent::SignIn { browser, result });
-        });
+        }));
         ui.set_background_polling(true);
     }
 
@@ -294,15 +302,15 @@ impl Shell {
                 }
             }
             MyYoutubeEvent::AccountName(name) => {
+                // The rows already show the lists; the name appears in the
+                // sign-out row the next time My YouTube opens, so the
+                // selection and focus stay where the user is.
                 self.application.set_youtube_account_name(name.as_deref());
                 let text = name.as_deref().map_or_else(
                     || catalog.text("my_youtube_signed_in_noname").to_owned(),
                     |name| catalog.text("my_youtube_signed_in").replace("{name}", name),
                 );
                 ui.set_status(&text, true);
-                if is_view(self.view) {
-                    self.show_my_youtube(ui);
-                }
             }
         }
         self.my_youtube.receiver.is_some()
@@ -377,10 +385,14 @@ impl Shell {
         );
     }
 
-    /// Closes an open sign-in window when `ApricotPlayer` exits.
-    pub(crate) fn my_youtube_shutdown(&self) {
+    /// Closes an open sign-in window when `ApricotPlayer` exits and waits
+    /// until its browser is gone (a few seconds at most).
+    pub(crate) fn my_youtube_shutdown(&mut self) {
         if let Some(cancel) = &self.my_youtube.signing_in {
             cancel.store(true, Ordering::SeqCst);
+        }
+        if let Some(worker) = self.my_youtube.worker.take() {
+            let _ = worker.join();
         }
     }
 }

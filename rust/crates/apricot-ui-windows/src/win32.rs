@@ -1501,7 +1501,7 @@ unsafe extern "system" fn window_proc(
         WM_DESTROY => {
             remove_tray_icon(window);
             spotify::shutdown(window);
-            if let Some(state) = state(window) {
+            if let Some(state) = state_mut(window) {
                 youtube_account::shutdown(state);
             }
             let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
@@ -11221,10 +11221,11 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 let Some(state) = state_mut(window) else {
                     return;
                 };
-                if let (Some(item), Some(components)) = (
-                    current_item.as_ref(),
-                    application_directory().map(|path| path.join("components")),
-                ) {
+                if let Some(item) = current_item.as_ref().filter(|item| {
+                    apricot_shell::my_youtube::wants_mark_watched(&state.application, item)
+                }) && let Some(components) =
+                    application_directory().map(|path| path.join("components"))
+                {
                     let config = youtube_session_config(state);
                     apricot_shell::my_youtube::mark_youtube_watched(
                         &state.application,

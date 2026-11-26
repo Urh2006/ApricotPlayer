@@ -653,10 +653,16 @@ impl Shell {
                     self.player_started(ui);
                     self.source_playback_started(ui);
                     self.update_integrations();
-                    if let (Some(item), Some(components)) = (
-                        self.application.player_session().current_item().cloned(),
-                        crate::youtube::components_directory(),
-                    ) {
+                    if let Some(item) = self
+                        .application
+                        .player_session()
+                        .current_item()
+                        .filter(|item| {
+                            crate::my_youtube::wants_mark_watched(&self.application, item)
+                        })
+                        .cloned()
+                        && let Some(components) = crate::youtube::components_directory()
+                    {
                         let config = self.youtube_session_config();
                         crate::my_youtube::mark_youtube_watched(
                             &self.application,

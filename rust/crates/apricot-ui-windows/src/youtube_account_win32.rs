@@ -36,6 +36,8 @@ pub(super) struct MyYoutubeState {
     selected: Option<MyYoutubeEntry>,
     /// The own sign-in window is open; setting it closes the window.
     signing_in: Option<Arc<AtomicBool>>,
+    /// The worker that drives the sign-in window and closes it.
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -201,7 +203,7 @@ unsafe fn open_sign_in_window(window: HWND, preferred: &str) {
     state.my_youtube.signing_in = Some(cancel.clone());
     set_status(state, catalog.text("my_youtube_own_window"), true);
     let target = window.0 as isize;
-    std::thread::spawn(move || {
+    state.my_youtube.worker = Some(std::thread::spawn(move || {
         let result = apricot_platform::browser_cookies::youtube_sign_in_with_own_profile(
             &browser,
             &profile,
@@ -216,7 +218,7 @@ unsafe fn open_sign_in_window(window: HWND, preferred: &str) {
                 result: Box::new(result),
             },
         );
-    });
+    }));
 }
 
 /// The user's browser was read (or could not be): signed in, or on to the
@@ -304,6 +306,9 @@ pub(super) unsafe fn account_name_read(window: HWND, name: Option<&str>) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    // The rows already show the lists; the name appears in the sign-out row
+    // the next time My YouTube opens, so the selection and focus stay where
+    // the user is.
     state.application.set_youtube_account_name(name);
     let catalog = catalog(state);
     let text = name.map_or_else(
@@ -311,9 +316,6 @@ pub(super) unsafe fn account_name_read(window: HWND, name: Option<&str>) {
         |name| catalog.text("my_youtube_signed_in").replace("{name}", name),
     );
     set_status(state, &text, true);
-    if is_view(state.view) {
-        show(window);
-    }
 }
 
 unsafe fn sign_out(window: HWND) {
@@ -397,9 +399,13 @@ pub(super) unsafe fn channels_read(window: HWND, channels: Vec<apricot_core::Med
     focus_list(state.list);
 }
 
-/// Closes an open sign-in window when `ApricotPlayer` exits.
-pub(super) fn shutdown(state: &super::WindowState) {
+/// Closes an open sign-in window when `ApricotPlayer` exits and waits until
+/// its browser is gone (a few seconds at most).
+pub(super) fn shutdown(state: &mut super::WindowState) {
     if let Some(cancel) = &state.my_youtube.signing_in {
         cancel.store(true, Ordering::SeqCst);
+    }
+    if let Some(worker) = state.my_youtube.worker.take() {
+        let _ = worker.join();
     }
 }
