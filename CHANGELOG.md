@@ -1,3 +1,15 @@
+# v2.1.9 - Default volume slider reads its real value
+
+## Fixed
+
+- On Windows, the screen reader now reads the real value of Default playback volume in Settings, Playback. With Volume boost on by default the slider goes up to 300, and NVDA used to read its position as a share of that range, so a volume of 100 sounded like 33, and a slider at the top sounded like 100 while the player really started at 300. The slider now says "100%" for a volume of 100 and "300%" at the top, with or without volume boost. The player starts with exactly the volume the slider shows: 100 is normal loudness, and with volume boost you can still raise it above 100 while playing. Without volume boost the slider goes up to 100, as before.
+
+If you had set this slider to its top with volume boost on, your default volume is 300. Set it to 100 in Settings, Playback, to start at normal loudness.
+
+These changes apply to Windows. Existing settings and saved data are retained.
+
+Download **ApricotPlayerSetup.exe** or **ApricotPlayer.zip** for Windows, or **ApricotPlayer-macOS-arm64.dmg** for Apple silicon Macs running macOS 26 or later. The Mac ZIP is used by the in-app updater.
+
 # v2.1.8 - Playback pitch and deleting all data
 
 ## Added

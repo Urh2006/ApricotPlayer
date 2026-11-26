@@ -803,6 +803,15 @@ unsafe fn create_bound_control(
                 Some(WPARAM(1)),
                 Some(LPARAM(isize::try_from(value).unwrap_or_default())),
             );
+            // A screen reader reads a trackbar as a percentage of its range,
+            // so a volume of 100 out of 300 sounded like 33 (2.1.9): the
+            // value is announced as it is.
+            crate::accessibility_win32::annotate_slider(
+                control,
+                &label,
+                &slider_value_text(value, unit),
+                false,
+            );
             (
                 Some(label_control),
                 control,
@@ -1107,15 +1116,26 @@ unsafe fn handle_slider_change(window: HWND, lparam: LPARAM) {
     }
 }
 
+/// The value a screen reader announces for a settings slider: "300%" for a
+/// percentage, otherwise the number with its unit.
+fn slider_value_text(value: i64, unit: &str) -> String {
+    match unit {
+        "" => value.to_string(),
+        "percent" => format!("{value}%"),
+        unit => format!("{value} {unit}"),
+    }
+}
+
 unsafe fn update_slider_accessible_name(bound: &BoundControl) {
     let position = SendMessageW(bound.control, TBM_GETPOS, None, None).0;
-    let name = match &bound.binding {
+    match &bound.binding {
         ControlBinding::IntegerSlider { label, unit, .. } => {
-            if unit.is_empty() {
-                format!("{label}, {position}")
-            } else {
-                format!("{label}, {position} {unit}")
-            }
+            crate::accessibility_win32::annotate_slider(
+                bound.control,
+                label,
+                &slider_value_text(i64::try_from(position).unwrap_or_default(), unit),
+                true,
+            );
         }
         ControlBinding::EqualizerBand { label, .. } => {
             let tenths = i32::try_from(position).unwrap_or_default();
@@ -1125,11 +1145,9 @@ unsafe fn update_slider_accessible_name(bound: &BoundControl) {
                 &apricot_app::equalizer::slider_value_text(tenths),
                 true,
             );
-            return;
         }
-        _ => return,
-    };
-    set_window_text(bound.control, &name);
+        _ => {}
+    }
 }
 
 /// Python `on_equalizer_settings_slider` with a running player: the global
