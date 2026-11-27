@@ -182,7 +182,7 @@ impl Shell {
                 .replace("{browser}", &title);
             if ui.ask_yes_no(&question, catalog.text("yes"), catalog.text("no")) {
                 ui.set_status(catalog.text("my_youtube_signing_in"), true);
-                self.start_my_youtube_browser_export(ui, browser, running);
+                self.start_my_youtube_browser_export(ui, browser);
                 return;
             }
         }

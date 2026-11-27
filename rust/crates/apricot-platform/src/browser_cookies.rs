@@ -705,17 +705,41 @@ pub fn youtube_sign_in_with_own_profile(
         let Ok(websocket) = validate_devtools_websocket_url(websocket, port) else {
             continue;
         };
-        if let Ok(cookies) = devtools_get_all_cookies(&websocket)
+        if let Ok(cookies) = devtools_browser_storage_cookies(&websocket)
             && signed_in(&cookies)
         {
             // YouTube sets its own cookies right after the Google page.
             std::thread::sleep(Duration::from_secs(2));
-            break Ok(devtools_get_all_cookies(&websocket).unwrap_or(cookies));
+            break Ok(devtools_browser_storage_cookies(&websocket).unwrap_or(cookies));
         }
     };
     let _ = process.kill();
     let _ = process.wait();
     result
+}
+
+/// Every cookie of the browser through its own `DevTools` target, which
+/// has the Storage domain (the Network domain belongs to page targets);
+/// `Network.getCookies` is the fallback for older browsers.
+fn devtools_browser_storage_cookies(websocket: &Url) -> Result<Vec<Value>, String> {
+    let request = serde_json::json!({ "id": 1, "method": "Storage.getCookies", "params": {} });
+    let mut socket = WebSocket::connect(websocket)?;
+    socket.send_text(&request.to_string())?;
+    loop {
+        let payload: Value =
+            serde_json::from_str(&socket.receive_text()?).map_err(|error| error.to_string())?;
+        if payload.get("id").and_then(Value::as_i64) != Some(1) {
+            continue;
+        }
+        if payload.get("error").is_some_and(|error| !error.is_null()) {
+            return devtools_get_all_cookies(websocket);
+        }
+        return Ok(payload
+            .pointer("/result/cookies")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default());
+    }
 }
 
 /// Python `devtools_get_all_cookies`.

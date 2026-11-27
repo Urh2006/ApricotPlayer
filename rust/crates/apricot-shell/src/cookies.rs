@@ -375,18 +375,14 @@ impl Shell {
             || self.my_youtube.exporting
     }
 
-    /// My `YouTube`'s sign-in from the user's browser: closes it when it runs
-    /// (the user agreed) and reads its cookies; the answer is a cookie event.
+    /// My `YouTube`'s sign-in from the user's browser (the user agreed to
+    /// close it when it runs): the export worker closes it and reads its
+    /// cookies; the answer is a cookie event.
     pub(crate) fn start_my_youtube_browser_export(
         &mut self,
         ui: &mut dyn ShellUi,
         browser: String,
-        close_browser: bool,
     ) {
-        if close_browser {
-            close_cookie_browser_processes(&browser);
-            wait_for_cookie_browser_exit(&browser, Duration::from_secs(6));
-        }
         let settings = self.application.settings();
         self.my_youtube.exporting = true;
         spawn_export(
