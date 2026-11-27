@@ -155,6 +155,7 @@ pub const SCREENS: &[ScreenDefinition] = &[
     page!("audiovault_results", "audiovault", AudiovaultResults, List),
     page!("audiovault_episodes", "episode", AudiovaultEpisodes, List),
     page!("spotify_hub", "spotify", SpotifyHub, List),
+    page!("my_youtube", "my_youtube", MyYoutube, List),
     page!(
         "spotify_accounts",
         "spotify_accounts",
@@ -230,7 +231,7 @@ mod tests {
     #[test]
     fn screen_ids_are_unique_and_every_route_has_one_screen() {
         let ids: HashSet<_> = SCREENS.iter().map(|screen| screen.id).collect();
-        assert_eq!(SCREENS.len(), 70);
+        assert_eq!(SCREENS.len(), 71);
         assert_eq!(ids.len(), SCREENS.len());
 
         let mut route_counts = HashMap::new();

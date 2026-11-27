@@ -581,7 +581,6 @@ fn playback_groups() -> GroupTable {
                 Setting(SettingId::AutoplayRelated),
                 Setting(SettingId::EnableBackgroundPlayback),
                 Setting(SettingId::ResumePlayback),
-                Setting(SettingId::ShowResumeInMenu),
                 Setting(SettingId::PlayerStartPaused),
                 Setting(SettingId::PlayerFullscreen),
                 Setting(SettingId::PreferBrowserPlayback),
@@ -763,6 +762,7 @@ fn cookie_groups() -> GroupTable {
                 Setting(SettingId::CookiesBrowserProfile),
                 Command(C::OpenYoutubeLoginProfile),
                 Command(C::ExportBrowserCookies),
+                Setting(SettingId::YoutubeMarkWatched),
                 Setting(SettingId::CookieUserAgent),
             ],
         ),
@@ -1273,12 +1273,6 @@ fn playback_controls(
             SettingId::ResumePlayback,
             "resume_playback",
             settings.resume_playback,
-            catalog,
-        ),
-        checkbox(
-            SettingId::ShowResumeInMenu,
-            "show_resume_in_menu",
-            settings.show_resume_in_menu,
             catalog,
         ),
         SettingsControl::Choice {
@@ -1902,6 +1896,13 @@ fn cookie_controls(
             command: SettingsCommand::ExportBrowserCookies,
             label: catalog.text("export_browser_cookies").to_owned(),
         },
+        // My YouTube (2.2.0).
+        checkbox(
+            SettingId::YoutubeMarkWatched,
+            "youtube_mark_watched",
+            settings.youtube_mark_watched,
+            catalog,
+        ),
         text(SettingId::Proxy, "proxy", &settings.proxy, false, catalog),
         text(
             SettingId::YoutubeDataApiKey,
@@ -2558,6 +2559,7 @@ mod tests {
             autoplay: Autoplay::Off,
             library_order: LibraryOrder::Alphabetical,
             key_cache: true,
+            defaults: 1,
         };
         let model = SettingsScreenModel::build_with_spotify(
             &english_catalog(),
@@ -2625,13 +2627,15 @@ mod tests {
                 SettingsSection::General,
                 27 + usize::from(cfg!(target_os = "macos")),
             ),
-            // 19 Python items, Spotify, the four 2.1 entries and the reset button.
-            (SettingsSection::MainMenu, 25),
+            // 19 Python items, Spotify, My YouTube (2.2.0), the four 2.1
+            // entries and the reset button.
+            (SettingsSection::MainMenu, 26),
             // 2.1 adds "Custom seek amount" and "Open a file from the
             // system with" and appends "Audio processing" and "Playback
             // transitions".
-            // 2.1.8 adds "Playback pitch" after "Playback speed".
-            (SettingsSection::Playback, 41),
+            // 2.1.8 adds "Playback pitch" after "Playback speed"; 2.2.0
+            // moves the resume menu choice to Customize main menu.
+            (SettingsSection::Playback, 40),
             // 2.1 appends "Bass boost intensity".
             (SettingsSection::Equalizer, 4),
             // 2.1 adds chapters and SponsorBlock and appends "Converter
@@ -2641,7 +2645,8 @@ mod tests {
             (SettingsSection::Podcasts, 10),
             // 2.1.3 adds Spotify subscription notifications.
             (SettingsSection::Notifications, 6),
-            (SettingsSection::Cookies, 13),
+            // 2.2.0 adds "Mark played videos as watched on YouTube".
+            (SettingsSection::Cookies, 14),
             (SettingsSection::Audiovault, 5),
             // 2.1.3 adds two subscription checkboxes and Check now.
             (SettingsSection::Spotify, 11),
@@ -2674,7 +2679,7 @@ mod tests {
             Path::new("settings.json"),
             SettingsSection::Cookies,
         );
-        assert_eq!(model.controls.len(), 17);
+        assert_eq!(model.controls.len(), 18);
         assert!(model.controls.iter().any(|control| matches!(
             control,
             SettingsControl::Choice {

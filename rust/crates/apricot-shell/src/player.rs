@@ -653,6 +653,24 @@ impl Shell {
                     self.player_started(ui);
                     self.source_playback_started(ui);
                     self.update_integrations();
+                    if let Some(item) = self
+                        .application
+                        .player_session()
+                        .current_item()
+                        .filter(|item| {
+                            crate::my_youtube::wants_mark_watched(&self.application, item)
+                        })
+                        .cloned()
+                        && let Some(components) = crate::youtube::components_directory()
+                    {
+                        let config = self.youtube_session_config();
+                        crate::my_youtube::mark_youtube_watched(
+                            &self.application,
+                            &item,
+                            &components,
+                            &config,
+                        );
+                    }
                 }
                 PlaybackEvent::MediaInfo(_) => self.source_stream_metadata(ui),
                 PlaybackEvent::Paused(paused) => {
@@ -1384,6 +1402,7 @@ impl Shell {
             self.close_player_runtime(ui);
         }
         self.spotify_shutdown();
+        self.my_youtube_shutdown();
         // A recording in progress is finished and saved, not cut off; a
         // failure or a kept "(incomplete)" file is told at the next start.
         let catalog = self.catalog();

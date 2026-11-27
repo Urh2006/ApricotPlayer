@@ -34,10 +34,12 @@ pub mod single_instance;
 pub mod soundcloud_search;
 pub mod transcript;
 pub mod windows_registration;
+pub mod youtube_account;
 pub mod youtube_data_api;
 pub mod youtube_helper_process;
 pub mod youtube_related;
 pub mod youtube_search_service;
+pub mod youtube_uploads_feed;
 pub mod ytdlp_youtube;
 pub mod zip_archive;
 

@@ -443,21 +443,6 @@ impl SettingsWindow {
             };
             (bound.binding.clone(), input)
         };
-        let input = if binding == SettingsBinding::SpotifyListeningHistory
-            && input == SettingsInput::Checked(true)
-            && !self
-                .with_shell(|shell, ui| shell.settings_confirm_spotify_history(ui, true))
-                .unwrap_or(false)
-        {
-            if let Some(bound) = self.ivars().controls.borrow().get(index)
-                && let ControlKind::Check(check) = &bound.kind
-            {
-                check.set_checked(false);
-            }
-            SettingsInput::Checked(false)
-        } else {
-            input
-        };
         self.with_shell(|shell, _| shell.settings_apply(&binding, &input, &gains))
             .unwrap_or(Ok(()))
     }

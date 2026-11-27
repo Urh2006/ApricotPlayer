@@ -70,7 +70,6 @@ pub struct SpotifySettingsTexts {
     pub qualities: [String; 3],
     pub normalisation: String,
     pub listening_history: String,
-    pub experimental_warning: String,
     pub key_cache: String,
     pub yes: String,
     pub no: String,
@@ -866,6 +865,10 @@ impl Shell {
                 self.show_spotify_hub(ui);
                 return true;
             }
+            "open_my_youtube" => {
+                self.show_my_youtube(ui);
+                return true;
+            }
             "spotify_accounts" => {
                 self.show_spotify_accounts(ui, None);
                 return true;
@@ -939,7 +942,6 @@ impl Shell {
             ],
             normalisation: text("spotify_normalisation"),
             listening_history: text("spotify_listening_history"),
-            experimental_warning: text("spotify_listening_history_warning"),
             key_cache: text("spotify_key_cache"),
             yes: text("yes"),
             no: text("no"),

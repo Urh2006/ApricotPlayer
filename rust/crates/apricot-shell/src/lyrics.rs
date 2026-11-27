@@ -119,6 +119,35 @@ impl LyricsDialog {
     }
 }
 
+impl LyricsDialog {
+    /// A plain text in the lyrics window, such as an artist's biography
+    /// (2.2.0).
+    pub(crate) fn text(
+        title: String,
+        text: &str,
+        copy: String,
+        copied: String,
+        back: String,
+    ) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let _ = sender.send(Some(LyricsDocument::parse(text, "")));
+        Self {
+            ready: title.clone(),
+            title,
+            copy,
+            back,
+            loading: String::new(),
+            copied,
+            unavailable_message: String::new(),
+            receiver: Some(receiver),
+            position: None,
+            text: None,
+            timeline: None,
+            active_line: None,
+        }
+    }
+}
+
 impl Shell {
     /// Windows `show_player_lyrics`.
     pub(crate) fn show_player_lyrics(&mut self, ui: &mut dyn ShellUi) {

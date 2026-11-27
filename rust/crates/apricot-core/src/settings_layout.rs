@@ -110,7 +110,6 @@ const PLAYBACK: &[SettingId] = &[
     SettingId::CacheFolder,
     SettingId::CacheSizeMb,
     SettingId::ResumePlayback,
-    SettingId::ShowResumeInMenu,
     SettingId::AudioOutputDevice,
     SettingId::SpeedStep,
     SettingId::PitchStep,
@@ -205,6 +204,7 @@ const COOKIES: &[SettingId] = &[
     SettingId::CookiesFile,
     SettingId::CookiesFromBrowser,
     SettingId::CookiesBrowserProfile,
+    SettingId::YoutubeMarkWatched,
     SettingId::ShowAdvancedNetworkSettings,
     SettingId::CookieUserAgent,
     SettingId::FfmpegLocation,
@@ -295,6 +295,8 @@ pub const INTERNAL_SETTINGS: &[SettingId] = &[
     SettingId::CookiesSourceSignature,
     SettingId::MediaAssociationPromptedVersion,
     SettingId::LanguagePrompted,
+    // 2.2.0: folded into Customize main menu, kept for older data.
+    SettingId::ShowResumeInMenu,
 ];
 
 #[cfg(test)]
@@ -313,8 +315,10 @@ mod tests {
                 .iter()
                 .flat_map(|section| section.reset_fields)
                 .count(),
-            // 112 Python placements, eight 2.1 settings, three of 2.1.3 and
-            // the playback pitch of 2.1.8.
+            // 112 Python placements, eight 2.1 settings, three of 2.1.3,
+            // the playback pitch of 2.1.8 and My YouTube's history choice of
+            // 2.2.0, without the resume menu setting that 2.2.0 folds into
+            // Customize main menu.
             124
         );
         assert!(
@@ -344,7 +348,7 @@ mod tests {
         }));
 
         let internals: HashSet<_> = INTERNAL_SETTINGS.iter().copied().collect();
-        assert_eq!(internals.len(), 5);
+        assert_eq!(internals.len(), 6);
         assert!(
             internals
                 .iter()

@@ -53,6 +53,8 @@ pub struct SettingsDocument {
     pub player_speed: String,
     /// The pitch the player starts with (2.1.8, not in Python).
     pub player_pitch: String,
+    /// My `YouTube` (2.2.0): played videos join the account's history.
+    pub youtube_mark_watched: bool,
     pub speed_audio_mode: String,
     pub show_video_details_by_default: bool,
     pub direct_link_enter_action: String,
@@ -202,6 +204,7 @@ impl Default for SettingsDocument {
             enable_background_playback: false,
             player_speed: "1.0".to_owned(),
             player_pitch: "1.0".to_owned(),
+            youtube_mark_watched: true,
             speed_audio_mode: RUBBERBAND_SPEED_MODE.to_owned(),
             show_video_details_by_default: false,
             direct_link_enter_action: "play".to_owned(),
@@ -450,6 +453,19 @@ impl SettingsDocument {
             100
         };
         self.default_volume = self.default_volume.clamp(0, volume_max);
+        // 2.2.0 (Urh): Customize main menu hides "Resume last playback
+        // session"; the former separate setting folds into it.
+        if !self.show_resume_in_menu {
+            if !self
+                .main_menu_hidden_actions
+                .iter()
+                .any(|id| id == "resume_last_session")
+            {
+                self.main_menu_hidden_actions
+                    .push("resume_last_session".to_owned());
+            }
+            self.show_resume_in_menu = true;
+        }
         self.main_menu_hidden_actions = normalize_hidden_menu(&self.main_menu_hidden_actions);
         "apple".clone_into(&mut self.podcast_search_provider);
         self.podcast_search_country = self.podcast_search_country.trim().to_uppercase();

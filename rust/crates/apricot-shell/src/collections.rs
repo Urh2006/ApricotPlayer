@@ -123,7 +123,8 @@ impl Shell {
         let suffix = |key: &str| format!("{} - {}", item.title, catalog.text(key));
         let title = match kind {
             YoutubeCollectionKind::PlaylistVideos
-            | YoutubeCollectionKind::SoundcloudArtistTracks => item.title.clone(),
+            | YoutubeCollectionKind::SoundcloudArtistTracks
+            | YoutubeCollectionKind::Account(_) => item.title.clone(),
             YoutubeCollectionKind::ChannelVideos | YoutubeCollectionKind::ChannelUploads => {
                 suffix("channel_videos")
             }
@@ -232,6 +233,10 @@ impl Shell {
                 let shuffle = *shuffle;
                 self.finish_playlist_playback(ui, token, items, shuffle);
             }
+            Some(PendingList::ImportSubscriptions { .. }) => {
+                self.youtube.pending_list = None;
+                self.my_youtube_channels_read(ui, items);
+            }
             None => {}
         }
     }
@@ -289,9 +294,11 @@ impl Shell {
         let count = collection.items().len();
         let (rows, selected, status) =
             if collection.phase() == YoutubeCollectionPhase::LoadingInitial {
-                let loading = self
-                    .text("loading_playlist")
-                    .replace("{title}", collection.title());
+                let loading = apricot_app::youtube_account::collection_loading_text(
+                    &self.catalog(),
+                    collection.kind(),
+                    collection.title(),
+                );
                 (vec![loading.clone()], 0, loading)
             } else if count == 0 {
                 let none = self.text("no_results");
@@ -383,6 +390,41 @@ impl Shell {
                 ui.set_status(&message, true);
                 ui.show_error(&message);
                 ui.focus_primary_control();
+            }
+        }
+    }
+
+    /// Reads a whole `YouTube` list for My `YouTube`'s import (Windows
+    /// `load_all_youtube_collection`).
+    pub(crate) fn load_all_youtube_collection(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        url: String,
+        kind: YoutubeCollectionKind,
+    ) {
+        self.cancel_youtube_work();
+        let token = self.youtube.next_token();
+        let Some(components) = components_directory() else {
+            ui.show_error("Application path is unavailable");
+            return;
+        };
+        let config = self.youtube_session_config();
+        match self.youtube.search.start_collection_all(
+            YoutubeBackend::YtDlp,
+            &components,
+            config,
+            token,
+            url,
+            kind,
+        ) {
+            Ok(()) => {
+                self.youtube.pending_list = Some(PendingList::ImportSubscriptions { token });
+                ui.set_background_polling(true);
+            }
+            Err(error) => {
+                let message = error.to_string();
+                ui.set_status(&message, true);
+                ui.show_error(&message);
             }
         }
     }

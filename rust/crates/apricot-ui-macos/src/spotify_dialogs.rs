@@ -528,25 +528,9 @@ pub fn run_settings(
     window.center();
     window.makeKeyAndOrderFront(None);
     window.makeFirstResponder(Some(&quality));
-    loop {
-        app.runModalForWindow(&window);
-        if !this.ivars().accepted.get()
-            || current.listening_history
-            || !history.checked()
-            || confirm_history(
-                mtm,
-                &texts.experimental_warning,
-                &texts.yes,
-                &texts.no,
-                &texts.cancel,
-            )
-        {
-            break;
-        }
-        history.set_checked(false);
-        this.ivars().accepted.set(false);
-        window.makeFirstResponder(Some(&history));
-    }
+    // 2.2.0 (Urh): listening history is no longer experimental, so it is
+    // not confirmed.
+    app.runModalForWindow(&window);
     window.setDelegate(None);
     window.orderOut(None);
     if let Some(previous) = previous_window {

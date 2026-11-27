@@ -21,6 +21,10 @@ use crate::{ChoiceDialog, ListScreen, ScreenControl, Shell, ShellUi, View, unix_
 /// being read and what came back.
 struct PendingCheck {
     manual: bool,
+    /// 2.2.0: the uploads feeds are read first; yt-dlp then checks only
+    /// the channels in `queue` that changed (all of them when the feeds
+    /// could not be read).
+    prefilter: Option<std::sync::mpsc::Receiver<apricot_app::SubscriptionPrefilter>>,
     queue: VecDeque<(String, String)>,
     current: Option<(u64, String)>,
     results: Vec<SubscriptionCheckResult>,
@@ -148,8 +152,16 @@ impl Shell {
             self.application
                 .navigate_to(RouteFrame::new(Route::Subscriptions));
         }
+        // From another screen the list starts at the top: the previous
+        // screen's selection is not a subscription (Urh, 2.2.0).
+        let first = (self.view != View::Subscriptions)
+            .then(|| {
+                let index = *self.application.visible_subscription_indices().first()?;
+                Some(self.application.subscriptions().get(index)?.url.clone())
+            })
+            .flatten();
         self.view = View::Subscriptions;
-        self.refresh_subscriptions(ui, true, None);
+        self.refresh_subscriptions(ui, true, first.as_deref());
         self.prewarm_for_saved_list(apricot_app::SavedList::Subscriptions);
     }
 
@@ -719,8 +731,10 @@ impl Shell {
             }
             return;
         }
+        let subscriptions = self.application.subscriptions().to_vec();
         self.subscriptions.pending = Some(PendingCheck {
             manual,
+            prefilter: Some(start_subscription_prefilter(subscriptions)),
             queue,
             current: None,
             results: Vec::new(),
@@ -729,8 +743,8 @@ impl Shell {
         if manual {
             ui.set_status(&self.text("subscription_checking"), true);
         }
+        // The feeds answer on the poll, then yt-dlp starts.
         ui.set_background_polling(true);
-        self.start_next_subscription_check(ui);
     }
 
     /// Windows `start_next_subscription_check`.
@@ -785,8 +799,30 @@ impl Shell {
 
     /// Windows `poll_subscription_runtime`; `true` while a check runs.
     pub(crate) fn poll_subscription_check(&mut self, ui: &mut dyn ShellUi) -> bool {
-        if self.subscriptions.pending.is_none() {
+        let Some(pending) = self.subscriptions.pending.as_mut() else {
             return false;
+        };
+        let prefiltered = match pending
+            .prefilter
+            .as_ref()
+            .map(std::sync::mpsc::Receiver::try_recv)
+        {
+            None => false,
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => return true,
+            Some(Ok(prefilter)) => {
+                pending.prefilter = None;
+                pending.results.extend(prefilter.results);
+                pending.queue = prefilter.remaining.into();
+                true
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                pending.prefilter = None;
+                true
+            }
+        };
+        if prefiltered {
+            self.start_next_subscription_check(ui);
+            return self.subscriptions.pending.is_some();
         }
         let (token, result) = match self.subscriptions.search.poll() {
             Ok(None) => return true,
@@ -926,6 +962,29 @@ impl Shell {
             ui.set_status(&message, true);
         }
     }
+}
+
+/// Windows `start_subscription_prefilter`: every channel's uploads feed in
+/// the background.
+fn start_subscription_prefilter(
+    subscriptions: Vec<apricot_storage::Subscription>,
+) -> std::sync::mpsc::Receiver<apricot_app::SubscriptionPrefilter> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let client = apricot_platform::youtube_uploads_feed::client();
+        let fetch = |channel_id: &str| match &client {
+            Ok(client) => {
+                apricot_platform::youtube_uploads_feed::latest_video_ids(client, channel_id)
+            }
+            Err(error) => Err(error.clone()),
+        };
+        let _ = sender.send(apricot_app::prefilter_subscription_checks(
+            &subscriptions,
+            &fetch,
+            16,
+        ));
+    });
+    receiver
 }
 
 #[cfg(test)]

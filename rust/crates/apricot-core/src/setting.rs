@@ -148,6 +148,7 @@ define_setting_ids! {
     MediaAssociationPromptedVersion => "media_association_prompted_version",
     LanguagePrompted => "language_prompted",
     PlayerPitch => "player_pitch",
+    YoutubeMarkWatched => "youtube_mark_watched",
 }
 
 #[cfg(test)]
@@ -157,9 +158,9 @@ mod tests {
     use super::SettingId;
 
     #[test]
-    fn baseline_contains_128_unique_settings() {
+    fn baseline_contains_129_unique_settings() {
         let keys: HashSet<_> = SettingId::ALL.iter().map(|id| id.key()).collect();
-        assert_eq!(SettingId::ALL.len(), 128);
+        assert_eq!(SettingId::ALL.len(), 129);
         assert_eq!(keys.len(), SettingId::ALL.len());
     }
 }

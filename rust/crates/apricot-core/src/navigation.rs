@@ -39,6 +39,8 @@ pub enum Route {
     SpotifyDevices,
     SpotifyBrowse,
     SpotifySearch,
+    /// My `YouTube` (2.2.0): the lists of the signed-in `YouTube` account.
+    MyYoutube,
     DownloadQueue,
     PlaybackQueue,
     Settings,
@@ -77,6 +79,7 @@ impl Route {
         Self::SpotifyDevices,
         Self::SpotifyBrowse,
         Self::SpotifySearch,
+        Self::MyYoutube,
         Self::DownloadQueue,
         Self::PlaybackQueue,
         Self::Settings,

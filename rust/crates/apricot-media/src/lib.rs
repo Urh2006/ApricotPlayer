@@ -22,10 +22,11 @@ pub use xml_text::{XmlTextError, decode_xml};
 
 pub use youtube_protocol::{
     MAX_YOUTUBE_MESSAGE_BYTES, MAX_YOUTUBE_METADATA_ITEMS, RUSTY_YTDL_REVISION,
-    YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeBackend, YoutubeCapability, YoutubeCollectionKind,
-    YoutubeCommand, YoutubeErrorCode, YoutubeFormat, YoutubeFormatTracks, YoutubeFormatTransport,
-    YoutubeHelperError, YoutubeRequest, YoutubeResponse, YoutubeResponsePayload, YoutubeSearchKind,
-    YoutubeSessionConfig, YoutubeStreamPreference, select_youtube_playback_formats,
+    YOUTUBE_HELPER_PROTOCOL_VERSION, YoutubeAccountFeed, YoutubeBackend, YoutubeCapability,
+    YoutubeCollectionKind, YoutubeCommand, YoutubeErrorCode, YoutubeFormat, YoutubeFormatTracks,
+    YoutubeFormatTransport, YoutubeHelperError, YoutubeRequest, YoutubeResponse,
+    YoutubeResponsePayload, YoutubeSearchKind, YoutubeSessionConfig, YoutubeStreamPreference,
+    select_youtube_playback_formats,
 };
 pub use youtube_related::parse_related_videos;
 pub use youtube_runtime::{

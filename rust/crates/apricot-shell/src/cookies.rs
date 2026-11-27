@@ -32,6 +32,8 @@ pub(crate) enum CookieExportOrigin {
     Repair,
     /// Python `prompt_cookie_refresh_for_playback`, for one resolve token.
     Playback(u64),
+    /// My `YouTube`'s sign-in from the user's own browser (2.2.0).
+    MyYoutube,
 }
 
 pub(crate) enum CookieEvent {
@@ -368,7 +370,30 @@ impl Shell {
         while let Ok(event) = self.cookies.receiver.try_recv() {
             self.handle_cookie_event(ui, event);
         }
-        self.cookies.pending_playback.is_some() || self.settings_cookie_export_running
+        self.cookies.pending_playback.is_some()
+            || self.settings_cookie_export_running
+            || self.my_youtube.exporting
+    }
+
+    /// My `YouTube`'s sign-in from the user's browser (the user agreed to
+    /// close it when it runs): the export worker closes it and reads its
+    /// cookies; the answer is a cookie event.
+    pub(crate) fn start_my_youtube_browser_export(
+        &mut self,
+        ui: &mut dyn ShellUi,
+        browser: String,
+    ) {
+        let settings = self.application.settings();
+        self.my_youtube.exporting = true;
+        spawn_export(
+            self.cookies.sender.clone(),
+            CookieExportOrigin::MyYoutube,
+            settings.language.clone(),
+            browser,
+            settings.cookies_browser_profile.clone(),
+            self.application.cached_cookies_file(),
+        );
+        ui.set_background_polling(true);
     }
 
     fn handle_cookie_event(&mut self, ui: &mut dyn ShellUi, event: CookieEvent) {
@@ -405,6 +430,10 @@ impl Shell {
                         ui.set_status(&text, true);
                     }
                     CookieExportOrigin::Repair => {}
+                    CookieExportOrigin::MyYoutube => {
+                        self.my_youtube.exporting = false;
+                        self.my_youtube_browser_read(ui, &browser, true);
+                    }
                     CookieExportOrigin::Playback(token) => {
                         let Some(pending) = self
                             .cookies
@@ -432,6 +461,13 @@ impl Shell {
                         ui.show_error(&text);
                     }
                     CookieExportOrigin::Repair => {}
+                    CookieExportOrigin::MyYoutube => {
+                        self.my_youtube.exporting = false;
+                        let browser = apricot_app::cookies::normalized_cookies_browser(
+                            self.application.settings(),
+                        );
+                        self.my_youtube_browser_read(ui, &browser, false);
+                    }
                     CookieExportOrigin::Playback(token) => {
                         if self
                             .cookies

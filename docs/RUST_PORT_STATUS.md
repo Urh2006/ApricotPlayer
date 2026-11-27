@@ -1706,3 +1706,22 @@ Urhove zahteve z dne 2. 10. 2026:
   premiku. Predvajalnik se že prej začne točno z vrednostjo drsnika, obseg 300 z boostom in
   100 brez ostane. Mac je že prej bral dejansko vrednost. Preverjeno v živo (MSAA name in
   value za 100 z boostom, 300 z boostom, 80 brez boosta in po premiku na 50).
+
+### My YouTube, 2.2.0 (26. in 27. 11. 2026)
+
+- **O-27.** Urh je 26. 11. 2026 izbral: seznami računa prek yt-dlp (`youtube:recommended`,
+  `subscriptions`, `history`, `watchlater`, `favorites`, `feed/channels`, `feed/playlists`), z
+  piškotki od prvega klica (`account_collection`); vnos My YouTube pod Spotify, skrivljiv;
+  prijava najprej iz brskalnika v Settings, Cookies, sicer lastno okno z lastnim profilom
+  (`youtube_sign_in_with_own_profile`, DevTools piškotki, konča se ob `LOGIN_INFO` ali
+  `SAPISID` za youtube.com); enkraten uvoz naročnin; ime računa z enim bralnim klicem
+  `account/account_menu` (SAPISIDHASH). Python tega nima.
+- **O-28.** Nastavitev `show_resume_in_menu` ni več v Settings; Customize main menu skrije vnos,
+  stara izbira false se ob branju prenese v `main_menu_hidden_actions`.
+- Neobvezno `youtube_mark_watched` (yt-dlp `--mark-watched --simulate` v ozadju ob začetku
+  predvajanja) in About na strani Spotify izvajalca (biografija v oknu za besedilo).
+- Shorts v iskanju niso narejeni: yt-dlp z YouTubovim filtrom Shorts vrne samo en zadetek.
+- Preverjeno na ločenem namizju: My YouTube je takoj pod Spotify, Ctrl+Alt+U odpre zaslon z
+  vrstico Sign in with Google account, Enter odpre Edge z lastnim profilom in izgovori navodilo,
+  ob izhodu aplikacije se okno za prijavo zapre. Prijava, seznami, ime računa in uvoz čakajo na
+  Urhov preizkus s pravim računom.

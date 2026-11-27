@@ -1669,11 +1669,30 @@ impl Shell {
     }
 
     /// Opens an album, playlist, artist, show, folder or Liked Songs row.
+    /// About on an artist page (2.2.0): the biography in the lyrics window.
+    fn browse_show_artist_about(&self, ui: &mut dyn ShellUi, artist: &str, title: String) {
+        let catalog = self.catalog();
+        match apricot_spotify::catalog::artist_about(artist) {
+            Some(about) => ui.open_lyrics(crate::LyricsDialog::text(
+                title,
+                &apricot_app::spotify::artist_about_text(&catalog, &about),
+                catalog.text("spotify_artist_about_copy").to_owned(),
+                catalog.text("spotify_artist_about_copied").to_owned(),
+                catalog.text("back").to_owned(),
+            )),
+            None => ui.set_status(catalog.text("spotify_artist_no_about"), true),
+        }
+    }
+
     fn browse_open_item(&mut self, ui: &mut dyn ShellUi, item: &CatalogItem) {
         if let Some((artist, section)) =
             apricot_spotify::catalog::parse_artist_section_uri(&item.uri)
         {
             let title = apricot_app::spotify::artist_section_title(&self.catalog(), item);
+            if section == ArtistSection::About {
+                self.browse_show_artist_about(ui, &artist, title);
+                return;
+            }
             self.browse_open(ui, Source::ArtistSection { artist, section }, title);
             return;
         }
@@ -1732,7 +1751,8 @@ impl Shell {
             ItemKind::Album => Source::Album(item.uri.clone()),
             ItemKind::Playlist => Source::Playlist(item.uri.clone()),
             ItemKind::Artist => Source::Artist(item.uri.clone()),
-            ItemKind::Show => Source::Show(item.uri.clone()),
+            // An audiobook opens like a show: its chapters (2.2.0).
+            ItemKind::Show | ItemKind::Audiobook => Source::Show(item.uri.clone()),
             ItemKind::LikedSongs => Source::LikedSongs,
             ItemKind::Folder => Source::Library {
                 filter: LibraryFilter::All,
@@ -1743,7 +1763,7 @@ impl Shell {
                 ui.set_status(&self.text("spotify_unplayable"), true);
                 return;
             }
-            _ => {
+            ItemKind::Genre => {
                 let texts = self.catalog();
                 let text = texts
                     .text("rust_feature_unavailable")

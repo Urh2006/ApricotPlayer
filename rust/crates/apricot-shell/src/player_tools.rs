@@ -154,7 +154,8 @@ impl Shell {
             | View::AudiovaultSearch
             | View::AudiovaultResults
             | View::SpotifyHub
-            | View::SpotifyAccounts => None,
+            | View::SpotifyAccounts
+            | View::MyYoutube => None,
             View::SpotifyBrowse => self.spotify_selected_media(ui),
             View::Subscriptions | View::NotificationCenter => self.subscription_selected_media(ui),
         }

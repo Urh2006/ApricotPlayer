@@ -2694,22 +2694,8 @@ unsafe fn sync_bound_control(
 
 unsafe fn sync_listening_history_control(state: &mut SettingsWindowState, bound: &BoundControl) {
     let app = &mut *state.application;
-    let checked = checkbox_is_checked(bound.control);
-    if checked && !app.spotify_settings().listening_history {
-        let texts = apricot_app::embedded_catalog(&app.settings().language);
-        let owner = windows::Win32::UI::WindowsAndMessaging::GetParent(bound.control)
-            .unwrap_or(state.owner);
-        if !crate::spotify_settings_win32::confirm_listening_history(
-            owner,
-            texts.text("spotify_settings"),
-            texts.text("spotify_listening_history_warning"),
-        ) {
-            SendMessageW(bound.control, BM_SETCHECK, Some(WPARAM(0)), None);
-            let _ = SetFocus(Some(bound.control));
-            return;
-        }
-    }
-    app.set_spotify_listening_history(checked);
+    // 2.2.0 (Urh): no longer experimental, so it is not confirmed.
+    app.set_spotify_listening_history(checkbox_is_checked(bound.control));
 }
 
 unsafe extern "system" fn section_list_proc(

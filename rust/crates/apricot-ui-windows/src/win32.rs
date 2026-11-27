@@ -123,6 +123,8 @@ mod playlist_tools;
 mod spotify;
 #[path = "spotify_browse_win32.rs"]
 mod spotify_browse;
+#[path = "youtube_account_win32.rs"]
+mod youtube_account;
 
 const ID_MENU_LIST: usize = 1001;
 const ID_OPEN: usize = 1002;
@@ -359,6 +361,8 @@ enum MainView {
     SpotifyAccounts,
     /// Spotify lists: search, library, albums, playlists, artists, shows.
     SpotifyBrowse,
+    /// My `YouTube` (2.2.0).
+    MyYoutube,
     Player,
 }
 
@@ -413,6 +417,16 @@ struct PendingYoutubeResolve {
 struct PendingYoutubePlaylistPlayback {
     token: u64,
     shuffle: bool,
+    /// The whole list is read for something else than playing it.
+    purpose: AllCollectionPurpose,
+}
+
+/// Why a whole `YouTube` list is read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AllCollectionPurpose {
+    Play,
+    /// My `YouTube`'s import of the account's subscriptions (2.2.0).
+    ImportSubscriptions,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -454,6 +468,10 @@ struct PendingYoutubeTrendingApi {
 
 struct PendingSubscriptionCheck {
     manual: bool,
+    /// 2.2.0: the uploads feeds are read first; yt-dlp then checks only
+    /// the channels in `queue` that changed (all of them when the feeds
+    /// could not be read).
+    prefilter: Option<Receiver<apricot_app::SubscriptionPrefilter>>,
     queue: VecDeque<(String, String)>,
     current: Option<(u64, String, String)>,
     results: Vec<SubscriptionCheckResult>,
@@ -783,6 +801,7 @@ struct WindowState {
     audiovault_controls: audiovault::Controls,
     spotify_search_controls: spotify_browse::SearchControls,
     audiovault: audiovault::AudiovaultState,
+    my_youtube: youtube_account::MyYoutubeState,
     spotify: spotify::SpotifyState,
     spotify_browse: spotify_browse::BrowseState,
 }
@@ -1486,6 +1505,9 @@ unsafe extern "system" fn window_proc(
         WM_DESTROY => {
             remove_tray_icon(window);
             spotify::shutdown(window);
+            if let Some(state) = state_mut(window) {
+                youtube_account::shutdown(state);
+            }
             let pointer = GetWindowLongPtrW(window, WINDOW_LONG_PTR_INDEX(0)) as *mut WindowState;
             if !pointer.is_null() {
                 let mut state = Box::from_raw(pointer);
@@ -2412,6 +2434,7 @@ unsafe fn create_controls(
         audiovault_controls,
         spotify_search_controls,
         audiovault: audiovault::AudiovaultState::default(),
+        my_youtube: youtube_account::MyYoutubeState::default(),
         spotify: spotify::SpotifyState::default(),
         spotify_browse: spotify_browse::BrowseState::default(),
     })
@@ -3597,6 +3620,7 @@ unsafe fn set_view_visibility(state: &mut WindowState) {
             | MainView::AudiovaultSearch
             | MainView::AudiovaultResults
             | MainView::SpotifyHub
+            | MainView::MyYoutube
             | MainView::SpotifyAccounts
             | MainView::SpotifyBrowse
     );
@@ -3774,6 +3798,7 @@ const fn view_has_back_button(view: MainView) -> bool {
             | MainView::AudiovaultSearch
             | MainView::AudiovaultResults
             | MainView::SpotifyHub
+            | MainView::MyYoutube
             | MainView::SpotifyAccounts
             | MainView::SpotifyBrowse
     )
@@ -4004,6 +4029,7 @@ unsafe fn activate_selection(window: HWND) {
             MainView::AudiovaultMenu | MainView::AudiovaultSearch | MainView::AudiovaultResults,
         ) => audiovault::activate(window),
         Some(MainView::SpotifyHub | MainView::SpotifyAccounts) => spotify::activate(window),
+        Some(MainView::MyYoutube) => youtube_account::activate(window),
         Some(MainView::SpotifyBrowse) => spotify_browse::activate(window),
         // Python `play_selected` on the empty result list.
         Some(MainView::Search) => {
@@ -4035,6 +4061,7 @@ unsafe fn activate_main_menu_selection(window: HWND) {
             | "current_downloads"
             | "audiovault"
             | "spotify"
+            | "my_youtube"
     );
     let parked = if screen {
         state(window).and_then(|state| park_focus(window, state))
@@ -4142,6 +4169,10 @@ unsafe fn activate_main_menu_item(window: HWND) {
     }
     if item_id == "spotify" {
         spotify::show_hub(window);
+        return;
+    }
+    if item_id == "my_youtube" {
+        youtube_account::show(window);
         return;
     }
     if item_id == "sleep_timer" {
@@ -4324,7 +4355,8 @@ unsafe fn open_youtube_collection(
         let catalog = apricot_app::embedded_catalog(&state.application.settings().language);
         let title = match kind {
             YoutubeCollectionKind::PlaylistVideos
-            | YoutubeCollectionKind::SoundcloudArtistTracks => item.title,
+            | YoutubeCollectionKind::SoundcloudArtistTracks
+            | YoutubeCollectionKind::Account(_) => item.title,
             YoutubeCollectionKind::ChannelVideos | YoutubeCollectionKind::ChannelUploads => {
                 format!("{} - {}", item.title, catalog.text("channel_videos"))
             }
@@ -4362,6 +4394,54 @@ unsafe fn open_youtube_collection(
     start_youtube_collection_work(window, work);
 }
 
+/// Reads a whole `YouTube` list on the worker, for `purpose`.
+unsafe fn load_all_youtube_collection(
+    window: HWND,
+    url: &str,
+    kind: YoutubeCollectionKind,
+    purpose: AllCollectionPurpose,
+) {
+    let Some(state) = state_mut(window) else {
+        return;
+    };
+    state.next_youtube_operation_token = state.next_youtube_operation_token.wrapping_add(1).max(1);
+    let token = state.next_youtube_operation_token;
+    let Some(components) = application_directory().map(|path| path.join("components")) else {
+        show_error_message(window, "Application path is unavailable");
+        return;
+    };
+    let config = youtube_session_config(state);
+    match state.youtube_search.start_collection_all(
+        collection_backend(YOUTUBE_BACKEND, kind),
+        &components,
+        config,
+        token,
+        url.to_owned(),
+        kind,
+    ) {
+        Ok(()) => {
+            state.pending_youtube_work = Some(PendingYoutubeListWork::PlaylistPlayback(
+                PendingYoutubePlaylistPlayback {
+                    token,
+                    shuffle: false,
+                    purpose,
+                },
+            ));
+            let _ = SetTimer(
+                Some(window),
+                YOUTUBE_TIMER_ID,
+                YOUTUBE_TIMER_INTERVAL_MS,
+                None,
+            );
+        }
+        Err(error) => {
+            let message = error.to_string();
+            set_status(state, &message, true);
+            show_error_message(window, &message);
+        }
+    }
+}
+
 unsafe fn play_youtube_playlist(window: HWND, item: &apricot_core::MediaItem, shuffle: bool) {
     let Some(url) = item.url.as_ref().map(ToString::to_string) else {
         if let Some(state) = state(window) {
@@ -4394,7 +4474,11 @@ unsafe fn play_youtube_playlist(window: HWND, item: &apricot_core::MediaItem, sh
     ) {
         Ok(()) => {
             state.pending_youtube_work = Some(PendingYoutubeListWork::PlaylistPlayback(
-                PendingYoutubePlaylistPlayback { token, shuffle },
+                PendingYoutubePlaylistPlayback {
+                    token,
+                    shuffle,
+                    purpose: AllCollectionPurpose::Play,
+                },
             ));
             let message = catalog_text(&state.application, "loading_playlist")
                 .replace("{title}", &item.title);
@@ -5838,6 +5922,9 @@ unsafe fn show_subscriptions(window: HWND) {
     );
     set_control_text(state, state.subscription_filter, "filter_category");
     set_control_text(state, state.subscription_set_category, "set_category");
+    // The list still holds the previous screen's rows; its selection is not
+    // a subscription, so the list starts at the top (Urh, 2.2.0).
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
     refresh_subscriptions(state, true, None);
     layout_controls_state(window, state);
     prewarm_for_saved_list(state, apricot_app::SavedList::Subscriptions);
@@ -7831,8 +7918,10 @@ unsafe fn check_subscriptions(window: HWND, manual: bool) {
         }
         return;
     }
+    let subscriptions = state.application.subscriptions().to_vec();
     state.pending_subscription_check = Some(PendingSubscriptionCheck {
         manual,
+        prefilter: Some(start_subscription_prefilter(subscriptions)),
         queue,
         current: None,
         results: Vec::new(),
@@ -7851,7 +7940,29 @@ unsafe fn check_subscriptions(window: HWND, manual: bool) {
         YOUTUBE_TIMER_INTERVAL_MS,
         None,
     );
-    start_next_subscription_check(window);
+    // The feeds answer on the timer, then yt-dlp starts.
+}
+
+/// Reads every channel's uploads feed in the background.
+fn start_subscription_prefilter(
+    subscriptions: Vec<apricot_storage::Subscription>,
+) -> Receiver<apricot_app::SubscriptionPrefilter> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let client = apricot_platform::youtube_uploads_feed::client();
+        let fetch = |channel_id: &str| match &client {
+            Ok(client) => {
+                apricot_platform::youtube_uploads_feed::latest_video_ids(client, channel_id)
+            }
+            Err(error) => Err(error.clone()),
+        };
+        let _ = sender.send(apricot_app::prefilter_subscription_checks(
+            &subscriptions,
+            &fetch,
+            16,
+        ));
+    });
+    receiver
 }
 
 unsafe fn configure_subscription_timer(window: HWND) {
@@ -7995,6 +8106,31 @@ unsafe fn start_next_subscription_check(window: HWND) {
 }
 
 unsafe fn poll_subscription_runtime(window: HWND) {
+    let prefiltered = {
+        let Some(pending) =
+            state_mut(window).and_then(|state| state.pending_subscription_check.as_mut())
+        else {
+            return;
+        };
+        match pending.prefilter.as_ref().map(Receiver::try_recv) {
+            None => false,
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => return,
+            Some(Ok(prefilter)) => {
+                pending.prefilter = None;
+                pending.results.extend(prefilter.results);
+                pending.queue = prefilter.remaining.into();
+                true
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                pending.prefilter = None;
+                true
+            }
+        }
+    };
+    if prefiltered {
+        start_next_subscription_check(window);
+        return;
+    }
     let update = {
         let Some(state) = state_mut(window) else {
             return;
@@ -8272,6 +8408,10 @@ unsafe fn navigate_back_impl(window: HWND, keep_playing: bool) {
         spotify::back(window);
         return;
     }
+    if state(window).is_some_and(|state| youtube_account::is_view(state.view)) {
+        youtube_account::back(window);
+        return;
+    }
     let Some(state) = state_mut(window) else {
         return;
     };
@@ -8355,7 +8495,9 @@ unsafe fn navigate_back_impl(window: HWND, keep_playing: bool) {
         }
         Route::Subscriptions => {
             state.view = MainView::Subscriptions;
+            SendMessageW(state.list, LB_RESETCONTENT, None, None);
             refresh_subscriptions(state, true, None);
+            select_list_index(state.list, saved_index);
             layout_controls_state(window, state);
         }
         Route::RssFeeds => {
@@ -8414,6 +8556,7 @@ unsafe fn navigate_back_impl(window: HWND, keep_playing: bool) {
         Route::SpotifyBrowse => spotify_browse::restore(window),
         Route::SpotifyHub => spotify::show_hub(window),
         Route::SpotifyAccounts => spotify::show_accounts(window, None),
+        Route::MyYoutube => youtube_account::show(window),
         _ => {
             state.application.navigate_main_menu();
             state.view = MainView::MainMenu;
@@ -11136,6 +11279,19 @@ unsafe fn poll_playback_runtime(window: HWND) {
                 let Some(state) = state_mut(window) else {
                     return;
                 };
+                if let Some(item) = current_item.as_ref().filter(|item| {
+                    apricot_shell::my_youtube::wants_mark_watched(&state.application, item)
+                }) && let Some(components) =
+                    application_directory().map(|path| path.join("components"))
+                {
+                    let config = youtube_session_config(state);
+                    apricot_shell::my_youtube::mark_youtube_watched(
+                        &state.application,
+                        item,
+                        &components,
+                        &config,
+                    );
+                }
                 if let Some(item) = current_item {
                     let timestamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -11477,20 +11633,24 @@ unsafe fn finish_youtube_playlist_playback(
         let Some(state) = state_mut(window) else {
             return;
         };
-        let shuffle = state
+        let pending = state
             .pending_youtube_work
             .as_ref()
             .and_then(|work| match work {
                 PendingYoutubeListWork::PlaylistPlayback(work) if work.token == token => {
-                    Some(work.shuffle)
+                    Some((work.shuffle, work.purpose))
                 }
                 _ => None,
             });
-        let Some(shuffle) = shuffle else {
+        let Some((shuffle, purpose)) = pending else {
             return;
         };
         state.pending_youtube_work = None;
         stop_youtube_timer(window);
+        if purpose == AllCollectionPurpose::ImportSubscriptions {
+            youtube_account::channels_read(window, items);
+            return;
+        }
         state
             .application
             .prepare_youtube_playlist_playback(token, items, shuffle)
@@ -12283,9 +12443,11 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
     // result list.
     crate::accessibility_win32::set_control_name(state.list, catalog.text("result_list"));
     if collection.phase() == YoutubeCollectionPhase::LoadingInitial {
-        let loading = catalog
-            .text("loading_playlist")
-            .replace("{title}", collection.title());
+        let loading = apricot_app::youtube_account::collection_loading_text(
+            &catalog,
+            collection.kind(),
+            collection.title(),
+        );
         add_list_string(state.list, &loading);
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
         set_status(state, &loading, false);
@@ -13355,6 +13517,7 @@ unsafe fn prompt_cookie_refresh_for_playback(
 
 /// Results of cookie workers: Python's `ui_queue` announcements,
 /// `finish_browser_cookies_export` and the playback retry.
+#[allow(clippy::too_many_lines)] // One arm per cookie event and origin.
 unsafe fn handle_cookie_event(window: HWND, event: crate::cookies_win32::CookieEvent) {
     use crate::cookies_win32::{CookieEvent, CookieExportOrigin};
     let Some(state) = state_mut(window) else {
@@ -13394,6 +13557,9 @@ unsafe fn handle_cookie_event(window: HWND, event: crate::cookies_win32::CookieE
                     set_status(state, &text, true);
                 }
                 CookieExportOrigin::Repair => {}
+                CookieExportOrigin::MyYoutube => {
+                    youtube_account::browser_read(window, &browser, true);
+                }
                 CookieExportOrigin::Playback(token) => {
                     let Some(pending) = state
                         .pending_cookie_playback
@@ -13417,6 +13583,12 @@ unsafe fn handle_cookie_event(window: HWND, event: crate::cookies_win32::CookieE
                 }
             }
         }
+        CookieEvent::YoutubeSignIn { browser, result } => {
+            youtube_account::sign_in_window_ended(window, &browser, *result);
+        }
+        CookieEvent::YoutubeAccountChecked(answer) => {
+            youtube_account::account_checked(window, answer);
+        }
         CookieEvent::Failed { origin, error } => {
             let friendly = apricot_app::comments::friendly_error(&catalog, &error);
             match origin {
@@ -13432,6 +13604,12 @@ unsafe fn handle_cookie_event(window: HWND, event: crate::cookies_win32::CookieE
                     );
                 }
                 CookieExportOrigin::Repair => {}
+                CookieExportOrigin::MyYoutube => {
+                    let browser = apricot_app::cookies::normalized_cookies_browser(
+                        state.application.settings(),
+                    );
+                    youtube_account::browser_read(window, &browser, false);
+                }
                 CookieExportOrigin::Playback(token) => {
                     if state
                         .pending_cookie_playback
@@ -13863,6 +14041,7 @@ fn view_shortcut_scope(view: MainView) -> (ActionScope, bool) {
         | MainView::AudiovaultSearch
         | MainView::AudiovaultResults
         | MainView::SpotifyHub
+        | MainView::MyYoutube
         | MainView::SpotifyAccounts
         | MainView::SpotifyBrowse => (ActionScope::List, false),
         MainView::Player => (ActionScope::Player, false),
@@ -14003,6 +14182,7 @@ unsafe fn leave_player_for_global_navigation(window: HWND, action_id: &str) {
             | "new_subscription_videos"
             | "open_audiovault"
             | "open_spotify"
+            | "open_my_youtube"
             | "spotify_accounts"
             | "spotify_search"
             | "spotify_library"
@@ -14259,6 +14439,7 @@ unsafe fn activate_action(window: HWND, action_id: &str) {
         "open_playlists" => show_user_playlists(window),
         "open_audiovault" => audiovault::show_menu(window),
         "open_spotify" => spotify::show_hub(window),
+        "open_my_youtube" => youtube_account::show(window),
         "spotify_accounts" => spotify::show_accounts(window, None),
         "spotify_queue" => spotify::show_queue(window),
         "spotify_search" => spotify::show_search(window),
@@ -14738,6 +14919,7 @@ unsafe fn active_media_item(window: HWND) -> Option<apricot_core::MediaItem> {
         | MainView::AudiovaultSearch
         | MainView::AudiovaultResults
         | MainView::SpotifyHub
+        | MainView::MyYoutube
         | MainView::SpotifyAccounts
         | MainView::SpotifyBrowse => None,
     }
@@ -20388,6 +20570,7 @@ unsafe fn open_settings(window: HWND) {
         | MainView::AudiovaultSearch
         | MainView::AudiovaultResults
         | MainView::SpotifyHub
+        | MainView::MyYoutube
         | MainView::SpotifyAccounts
         | MainView::SpotifyBrowse => {}
         MainView::Player => refresh_player(window, state, false, true),
@@ -20555,6 +20738,7 @@ fn active_primary_control(state: &WindowState) -> HWND {
         | MainView::UserPlaylistItems
         | MainView::DownloadQueue
         | MainView::SpotifyHub
+        | MainView::MyYoutube
         | MainView::SpotifyAccounts => state.list,
         MainView::SpotifyBrowse => spotify_browse::primary_control(state),
         MainView::AudiovaultMenu | MainView::AudiovaultSearch | MainView::AudiovaultResults => {

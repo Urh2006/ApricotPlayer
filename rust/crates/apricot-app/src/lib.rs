@@ -46,12 +46,13 @@ pub mod subscription_controller;
 pub mod transcript;
 pub mod unavailable;
 pub mod user_playlist_controller;
+pub mod youtube_account;
 pub mod youtube_collection;
 pub mod youtube_extras;
 pub mod youtube_trending;
 
 use apricot_core::NavigationStack;
-pub use apricot_media::{YoutubeCollectionKind, YoutubeSearchKind};
+pub use apricot_media::{YoutubeAccountFeed, YoutubeCollectionKind, YoutubeSearchKind};
 pub use apricot_storage::{AppNotification, RssFeed, Subscription};
 
 pub use action_finder::{
@@ -110,8 +111,9 @@ pub use settings_model::{
 pub use settings_session::{SettingsDraft, SettingsDraftError};
 pub use subscription_controller::{
     SubscriptionAddOutcome, SubscriptionCheckResult, SubscriptionCheckSummary,
-    SubscriptionController, SubscriptionControllerError, SubscriptionRemoveOutcome,
-    canonical_channel_url, normalize_category,
+    SubscriptionController, SubscriptionControllerError, SubscriptionPrefilter,
+    SubscriptionRemoveOutcome, canonical_channel_url, normalize_category,
+    prefilter_subscription_checks, subscription_channel_id,
 };
 pub use unavailable::{unavailable_action_message, unavailable_feature_message};
 pub use user_playlist_controller::{

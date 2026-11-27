@@ -17,10 +17,11 @@ use crate::soundcloud_search::{SoundcloudCollectionSearch, search_soundcloud_col
 use apricot_core::{MediaId, MediaItem, MediaKind, MediaSource};
 use apricot_media::cookie_errors::{is_age_or_js_playback_error, is_cookie_auth_error};
 use apricot_media::{
-    MAX_YOUTUBE_METADATA_ITEMS, YoutubeBackend, YoutubeCapability, YoutubeCollectionKind,
-    YoutubeCommand, YoutubeEngine, YoutubeEngineError, YoutubeErrorCode, YoutubeFormat,
-    YoutubeFormatTracks, YoutubeFormatTransport, YoutubeResponsePayload, YoutubeRuntime,
-    YoutubeRuntimeError, YoutubeSearchKind, YoutubeSessionConfig, YoutubeStreamPreference,
+    MAX_YOUTUBE_METADATA_ITEMS, YoutubeAccountFeed, YoutubeBackend, YoutubeCapability,
+    YoutubeCollectionKind, YoutubeCommand, YoutubeEngine, YoutubeEngineError, YoutubeErrorCode,
+    YoutubeFormat, YoutubeFormatTracks, YoutubeFormatTransport, YoutubeResponsePayload,
+    YoutubeRuntime, YoutubeRuntimeError, YoutubeSearchKind, YoutubeSessionConfig,
+    YoutubeStreamPreference,
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -574,6 +575,9 @@ impl YtDlpYoutubeEngine {
             ));
         }
         let target = collection_target(collection_url, kind)?;
+        if let YoutubeCollectionKind::Account(_) = kind {
+            return self.account_collection(&target, kind, limit);
+        }
         if kind == YoutubeCollectionKind::ChannelPopular
             && let Some(cache) = self
                 .popular_cache
@@ -611,6 +615,52 @@ impl YtDlpYoutubeEngine {
                 items: items.clone(),
             });
         }
+        Ok(collection_response(&items, limit))
+    }
+
+    /// My `YouTube` (2.2.0): an account list needs the cookies from the start;
+    /// without a sign-in yt-dlp only says that it needs one.
+    fn account_collection(
+        &self,
+        target: &str,
+        kind: YoutubeCollectionKind,
+        limit: Option<u32>,
+    ) -> Result<YoutubeResponsePayload, YtDlpError> {
+        let cookies_file = self
+            .config
+            .cookies_file
+            .as_deref()
+            .filter(|path| Path::new(path).is_file())
+            .ok_or_else(|| {
+                YtDlpError::InvalidConfiguration("youtube_account_signed_out".to_owned())
+            })?;
+        let arguments = with_cookies(
+            &self.config,
+            cookies_file,
+            &self.flat_arguments(target.to_owned(), limit, &[]),
+        );
+        let mut output = run_executable(&self.executable, &arguments)?;
+        if !output.success {
+            // Expired or revoked cookies: the usual cookie refresh from the
+            // chosen browser (or ApricotPlayer's own sign-in profile), once.
+            let error = process_error_text(&output);
+            if is_cookie_auth_error(&error)
+                && let Some(repaired) = crate::browser_cookies::repair_cookies_for_error(&error)
+            {
+                output = run_executable(
+                    &self.executable,
+                    with_cookies(
+                        &self.config,
+                        &repaired.to_string_lossy(),
+                        &self.flat_arguments(target.to_owned(), limit, &[]),
+                    ),
+                )?;
+            }
+        }
+        let items: Vec<MediaItem> = flat_items_from_output(output, "account entries")?
+            .into_iter()
+            .filter(|item| collection_kind_accepts(kind, item.kind))
+            .collect();
         Ok(collection_response(&items, limit))
     }
 
@@ -850,6 +900,42 @@ pub fn prewarm_search(executable: &Path, config: YoutubeSessionConfig, requested
     {
         engine.prewarm_search(search_fetch_limit(YoutubeSearchKind::All, requested));
     }
+}
+
+/// My `YouTube` (2.2.0, optional): adds a played video to the account's
+/// `YouTube` history with yt-dlp's `--mark-watched`, on its own thread, so
+/// playback never waits for it. Nothing happens without a cookies file.
+pub fn mark_watched(executable: &Path, config: &YoutubeSessionConfig, media_url: &str) {
+    let Some(cookies_file) = config
+        .cookies_file
+        .as_deref()
+        .filter(|path| Path::new(path).is_file())
+    else {
+        return;
+    };
+    let mut arguments = vec![
+        OsString::from("--ignore-config"),
+        OsString::from("--no-plugin-dirs"),
+        OsString::from("--no-warnings"),
+        OsString::from("--quiet"),
+    ];
+    if let Some(proxy) = config.proxy_url.as_deref() {
+        arguments.push(OsString::from("--proxy"));
+        arguments.push(OsString::from(proxy));
+    }
+    arguments.extend(js_runtime_arguments());
+    arguments.extend([
+        OsString::from("--mark-watched"),
+        OsString::from("--simulate"),
+        OsString::from("--no-playlist"),
+        OsString::from("--"),
+        OsString::from(media_url),
+    ]);
+    let arguments = with_cookies(config, cookies_file, &arguments);
+    let executable = executable.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = run_executable(&executable, &arguments);
+    });
 }
 
 /// Stops the waiting yt-dlp processes; the application calls this when it
@@ -1161,6 +1247,9 @@ impl YoutubeEngine for YtDlpYoutubeEngine {
 }
 
 fn collection_target(value: &str, kind: YoutubeCollectionKind) -> Result<String, YtDlpError> {
+    if let YoutubeCollectionKind::Account(feed) = kind {
+        return Ok(feed.ytdlp_target().to_owned());
+    }
     if kind == YoutubeCollectionKind::PlaylistVideos {
         // SoundCloud sets open like YouTube playlists in Python.
         validate_media_url(value)?;
@@ -1186,7 +1275,9 @@ fn collection_target(value: &str, kind: YoutubeCollectionKind) -> Result<String,
         }
     }
     let suffix = match kind {
-        YoutubeCollectionKind::PlaylistVideos | YoutubeCollectionKind::SoundcloudArtistTracks => {
+        YoutubeCollectionKind::PlaylistVideos
+        | YoutubeCollectionKind::SoundcloudArtistTracks
+        | YoutubeCollectionKind::Account(_) => {
             unreachable!("handled above")
         }
         YoutubeCollectionKind::ChannelVideos
@@ -1253,7 +1344,14 @@ fn popular_numeric_value(item: &MediaItem, key: &str) -> u64 {
 
 fn collection_kind_accepts(kind: YoutubeCollectionKind, item: MediaKind) -> bool {
     match kind {
-        YoutubeCollectionKind::ChannelPlaylists => item == MediaKind::Playlist,
+        YoutubeCollectionKind::ChannelPlaylists
+        | YoutubeCollectionKind::Account(YoutubeAccountFeed::Playlists) => {
+            item == MediaKind::Playlist
+        }
+        YoutubeCollectionKind::Account(YoutubeAccountFeed::Channels) => item == MediaKind::Channel,
+        YoutubeCollectionKind::Account(_) => {
+            matches!(item, MediaKind::Video | MediaKind::LiveStream)
+        }
         YoutubeCollectionKind::PlaylistVideos
         | YoutubeCollectionKind::ChannelVideos
         | YoutubeCollectionKind::ChannelUploads

@@ -73,7 +73,8 @@ impl ItemKind {
     fn from_typename(typename: &str) -> Option<Self> {
         Some(match typename {
             "Track" => Self::Track,
-            "Episode" => Self::Episode,
+            // An audiobook's chapters are episodes (`spotify:episode:`).
+            "Episode" | "Chapter" => Self::Episode,
             "Album" => Self::Album,
             "Artist" => Self::Artist,
             "Playlist" => Self::Playlist,
@@ -170,6 +171,19 @@ fn text<'a>(value: &'a Value, pointer: &str) -> &'a str {
     value.pointer(pointer).and_then(Value::as_str).unwrap_or("")
 }
 
+/// The authors of an audiobook (`authorsV2: [{name}]`).
+fn author_names(list: &Value) -> String {
+    list.as_array()
+        .map(|authors| {
+            authors
+                .iter()
+                .filter_map(|author| author.get("name").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
 fn names(list: &Value) -> String {
     list.pointer("/items")
         .and_then(Value::as_array)
@@ -237,6 +251,7 @@ fn wrapper_uri(value: &Value) -> String {
 }
 
 /// One row from any search, library, album, playlist or show entry.
+#[allow(clippy::too_many_lines)] // One field after another, in `CatalogItem` order.
 pub fn parse_item(value: &Value) -> CatalogItem {
     let Some(node) = entity(value) else {
         return CatalogItem::unavailable(wrapper_uri(value));
@@ -288,9 +303,20 @@ pub fn parse_item(value: &Value) -> CatalogItem {
         ItemKind::Show => text(node, "/publisher/name").to_owned(),
         ItemKind::Episode => {
             let show = text(node, "/podcastV2/data/name");
-            show.to_owned()
+            if show.is_empty() {
+                text(node, "/audiobookV2/data/name").to_owned()
+            } else {
+                show.to_owned()
+            }
         }
-        ItemKind::Audiobook => names(&node["authors"]),
+        ItemKind::Audiobook => {
+            let authors = names(&node["authors"]);
+            if authors.is_empty() {
+                author_names(&node["authorsV2"])
+            } else {
+                authors
+            }
+        }
         _ => String::new(),
     };
     let duration_ms = node
@@ -1301,11 +1327,13 @@ pub enum ArtistSection {
     AppearsOn,
     Playlists,
     Related,
+    /// The artist's biography, shown as text (2.2.0).
+    About,
 }
 
 impl ArtistSection {
     /// Page order.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Popular,
         Self::Songs,
         Self::Albums,
@@ -1314,6 +1342,7 @@ impl ArtistSection {
         Self::AppearsOn,
         Self::Playlists,
         Self::Related,
+        Self::About,
     ];
 
     const fn key(self) -> &'static str {
@@ -1326,6 +1355,7 @@ impl ArtistSection {
             Self::AppearsOn => "appears_on",
             Self::Playlists => "playlists",
             Self::Related => "related",
+            Self::About => "about",
         }
     }
 
@@ -1341,6 +1371,7 @@ impl ArtistSection {
             Self::AppearsOn => "spotify_artist_appears_on",
             Self::Playlists => "spotify_artist_playlists",
             Self::Related => "spotify_artist_related",
+            Self::About => "spotify_artist_about",
         }
     }
 }
@@ -1446,6 +1477,11 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
     let releases = total("/discography/albums")
         + total("/discography/singles")
         + total("/discography/compilations");
+    let about = artist_about_of(&artist);
+    let has_about = !about.is_empty();
+    if let Ok(mut texts) = ARTIST_ABOUT.lock() {
+        texts.insert(uri.to_owned(), about);
+    }
     let items = ArtistSection::ALL
         .into_iter()
         .filter_map(|section| {
@@ -1459,6 +1495,8 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
                 ArtistSection::AppearsOn => Some(total("/relatedContent/appearsOn")),
                 ArtistSection::Playlists => Some(total("/profile/playlistsV2")),
                 ArtistSection::Related => Some(total("/relatedContent/relatedArtists")),
+                // A text, not a list: no count.
+                ArtistSection::About => return has_about.then_some((section, None)),
             };
             count
                 .filter(|count| *count > 0)
@@ -1482,6 +1520,134 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
             next_offset: None,
         },
     })
+}
+
+/// What Spotify's About shows for an artist (2.2.0): the listeners,
+/// followers and world rank, where people listen, the biography and the
+/// artist's links.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ArtistAbout {
+    pub monthly_listeners: Option<u64>,
+    pub followers: Option<u64>,
+    pub world_rank: Option<u64>,
+    /// City, country and listeners, most listeners first.
+    pub top_cities: Vec<(String, String, u64)>,
+    pub biography: String,
+    /// Name and address.
+    pub links: Vec<(String, String)>,
+}
+
+impl ArtistAbout {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.monthly_listeners.is_none()
+            && self.followers.is_none()
+            && self.world_rank.is_none()
+            && self.top_cities.is_empty()
+            && self.biography.is_empty()
+            && self.links.is_empty()
+    }
+}
+
+/// `artistUnion` of `queryArtistOverview` as About.
+fn artist_about_of(artist: &Value) -> ArtistAbout {
+    let number = |pointer: &str| {
+        artist
+            .pointer(pointer)
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+    };
+    let top_cities = artist
+        .pointer("/stats/topCities/items")
+        .and_then(Value::as_array)
+        .map(|cities| {
+            cities
+                .iter()
+                .filter_map(|city| {
+                    let name = text(city, "/city").trim().to_owned();
+                    let listeners = city.get("numberOfListeners").and_then(Value::as_u64)?;
+                    (!name.is_empty())
+                        .then(|| (name, text(city, "/country").trim().to_owned(), listeners))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let links = artist
+        .pointer("/profile/externalLinks/items")
+        .and_then(Value::as_array)
+        .map(|links| {
+            links
+                .iter()
+                .filter_map(|link| {
+                    let url = text(link, "/url").trim().to_owned();
+                    // Spotify writes FACEBOOK; About says Facebook.
+                    let name = text(link, "/name").trim().to_lowercase();
+                    let mut letters = name.chars();
+                    let name = letters.next().map_or_else(String::new, |first| {
+                        first.to_uppercase().chain(letters).collect()
+                    });
+                    (!url.is_empty()).then_some((name, url))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ArtistAbout {
+        monthly_listeners: number("/stats/monthlyListeners"),
+        followers: number("/stats/followers"),
+        world_rank: number("/stats/worldRank"),
+        top_cities,
+        biography: plain_text(text(artist, "/profile/biography/text")),
+        links,
+    }
+}
+
+/// About of artist pages opened in this run.
+static ARTIST_ABOUT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, ArtistAbout>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// About of an artist whose page was opened, when Spotify gave anything.
+#[must_use]
+pub fn artist_about(artist: &str) -> Option<ArtistAbout> {
+    ARTIST_ABOUT
+        .lock()
+        .ok()?
+        .get(artist)
+        .filter(|about| !about.is_empty())
+        .cloned()
+}
+
+/// Spotify's biography markup as plain text: links keep their words, tags
+/// go, the usual entities become characters.
+fn plain_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for character in html.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => text.push(character),
+            _ => {}
+        }
+    }
+    let text = [
+        ("&nbsp;", " "),
+        ("&quot;", "\""),
+        ("&#39;", "'"),
+        ("&#x27;", "'"),
+        ("&lt;", "<"),
+        ("&gt;", ">"),
+        ("&amp;", "&"),
+    ]
+    .into_iter()
+    .fold(text, |text, (entity, character)| {
+        text.replace(entity, character)
+    });
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A page of release groups (`{items: [{releases: {items}}], totalCount}`):
@@ -1558,6 +1724,12 @@ pub async fn artist_section(
             &paged("queryArtistPlaylists").await?["artistUnion"]["profile"]["playlistsV2"],
             offset,
         ),
+        // About is shown from the page's text and has no list.
+        ArtistSection::About => CatalogPage {
+            items: Vec::new(),
+            total: Some(0),
+            next_offset: None,
+        },
         ArtistSection::Related => {
             let data = api
                 .pathfinder(
@@ -1738,6 +1910,9 @@ pub async fn show(
     let show = data
         .get("podcastUnionV2")
         .ok_or_else(|| ApiError::Shape("queryPodcastEpisodes".into()))?;
+    if text(show, "/__typename") == "Audiobook" {
+        return audiobook(api, session, uri, offset).await;
+    }
     Ok(Collection {
         uri: uri.to_owned(),
         name: text(show, "/name").to_owned(),
@@ -1749,6 +1924,38 @@ pub async fn show(
         revision: String::new(),
         format: String::new(),
         page: parse_page(&show["episodesV2"], offset),
+    })
+}
+
+/// An audiobook (2.2.0): its chapters, which play like podcast episodes
+/// when the account has access to the book.
+pub async fn audiobook(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    offset: u64,
+) -> Result<Collection, ApiError> {
+    let data = api
+        .pathfinder(
+            session,
+            "queryBookChapters",
+            json!({ "uri": uri, "offset": offset, "limit": PAGE }),
+        )
+        .await?;
+    let book = data
+        .get("podcastUnionV2")
+        .ok_or_else(|| ApiError::Shape("queryBookChapters".into()))?;
+    Ok(Collection {
+        uri: uri.to_owned(),
+        name: text(book, "/name").to_owned(),
+        subtitle: author_names(&book["authorsV2"]),
+        description: String::new(),
+        can_edit_items: false,
+        can_edit_metadata: false,
+        saved: None,
+        revision: String::new(),
+        format: String::new(),
+        page: parse_page(&book["chaptersV2"], offset),
     })
 }
 
@@ -1901,6 +2108,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn audiobook_chapters_are_episodes_and_say_when_they_are_locked() {
+        let chapter = serde_json::json!({
+            "__typename": "ContextChapterV2",
+            "entity": {
+                "__typename": "ChapterResponseWrapper",
+                "_uri": "spotify:episode:0bnJ",
+                "data": {
+                    "__typename": "Chapter",
+                    "uri": "spotify:episode:0bnJ",
+                    "name": "Opening Credits",
+                    "duration": { "totalMilliseconds": 23000 },
+                    "audiobookV2": { "data": { "name": "The Book" } },
+                    "playability": { "playable": false, "reason": "PAYMENT_REQUIRED" }
+                }
+            }
+        });
+        let item = parse_item(&chapter);
+        assert_eq!(item.kind, ItemKind::Episode);
+        assert_eq!(item.name, "Opening Credits");
+        assert_eq!(item.subtitle, "The Book");
+        assert_eq!(item.duration_ms, Some(23000));
+        assert!(!item.playable);
+        let book = serde_json::json!({
+            "__typename": "AudiobookResponseWrapper",
+            "data": {
+                "__typename": "Audiobook",
+                "uri": "spotify:show:6SJQ",
+                "name": "The Book",
+                "authorsV2": [{ "name": "A. Author" }, { "name": "B. Author" }]
+            }
+        });
+        let item = parse_item(&book);
+        assert_eq!(item.kind, ItemKind::Audiobook);
+        assert_eq!(item.subtitle, "A. Author, B. Author");
+    }
+
+    #[test]
     fn artist_page_rows_open_their_part_and_stand_for_the_artist() {
         let artist = "spotify:artist:6UOk7DmvqlzWmo6gjhZvn6";
         for section in ArtistSection::ALL {
@@ -1932,6 +2176,17 @@ mod tests {
         let mut other = row.clone();
         other.uri = "spotify:section:home".into();
         assert!(artist_of_section_row(&other).is_none());
+    }
+
+    #[test]
+    fn a_biography_reads_as_plain_text() {
+        assert_eq!(
+            plain_text(
+                "<p>Da Tweekaz &amp; friends</p>\n  <a href=\"spotify:artist:x\">Sub Zero</a> &quot;live&quot;  "
+            ),
+            "Da Tweekaz & friends\nSub Zero \"live\""
+        );
+        assert_eq!(plain_text(""), "");
     }
 
     #[test]

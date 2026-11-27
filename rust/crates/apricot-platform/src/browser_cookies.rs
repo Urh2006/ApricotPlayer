@@ -624,6 +624,219 @@ pub fn devtools_browser_cookies(
     result.map(|cookies| (label, cookies))
 }
 
+/// Where the `YouTube` sign-in window of My `YouTube` starts (2.2.0).
+pub const YOUTUBE_SIGN_IN_URL: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F";
+
+/// The Chromium browsers `ApricotPlayer` can open for its own `YouTube` sign-in,
+/// the preferred one first.
+#[must_use]
+pub fn youtube_sign_in_browser(preferred: &str) -> Option<String> {
+    let preferred = preferred.trim().to_lowercase();
+    let default = default_browser().unwrap_or_default();
+    [preferred.as_str(), default.as_str()]
+        .into_iter()
+        .chain(["edge", "chrome", "brave", "chromium", "vivaldi", "opera"])
+        .filter(|browser| !browser.is_empty() && *browser != "firefox" && *browser != "none")
+        .find(|browser| cookie_browser_executable(browser).is_some())
+        .map(str::to_owned)
+}
+
+/// The system's default web browser as a cookie browser name (Windows reads
+/// the https handler the user chose; elsewhere `None`).
+#[must_use]
+pub fn default_browser() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let reg = windows_system_executable("reg.exe")?;
+        let output = hidden_command(&reg)
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+                "/v",
+                "ProgId",
+            ])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let prog_id = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("ProgId"))?
+            .split_whitespace()
+            .last()?
+            .to_ascii_lowercase();
+        browser_of_prog_id(&prog_id).map(str::to_owned)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/bin/defaults")
+            .args([
+                "read",
+                "com.apple.LaunchServices/com.apple.launchservices.secure",
+                "LSHandlers",
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        browser_of_launch_services(&String::from_utf8_lossy(&output.stdout)).map(str::to_owned)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// The cookie browser that handles `https` in macOS's Launch Services
+/// handlers (`defaults read ... LSHandlers`).
+#[must_use]
+pub fn browser_of_launch_services(handlers: &str) -> Option<&'static str> {
+    let entry = handlers
+        .split('}')
+        .find(|entry| entry.contains("LSHandlerURLScheme = https;"))?;
+    let bundle = entry
+        .lines()
+        .find(|line| line.trim_start().starts_with("LSHandlerRoleAll"))?
+        .split('=')
+        .nth(1)?
+        .trim()
+        .trim_end_matches(';')
+        .trim_matches('"')
+        .to_ascii_lowercase();
+    [
+        ("com.brave.browser", "brave"),
+        ("com.google.chrome", "chrome"),
+        ("com.microsoft.edgemac", "edge"),
+        ("org.chromium.chromium", "chromium"),
+        ("com.vivaldi.vivaldi", "vivaldi"),
+        ("com.operasoftware.opera", "opera"),
+        ("org.mozilla.firefox", "firefox"),
+    ]
+    .into_iter()
+    .find(|(id, _)| bundle.starts_with(id))
+    .map(|(_, browser)| browser)
+}
+
+/// The cookie browser of a Windows `ProgId` such as `BraveHTML`.
+#[must_use]
+pub fn browser_of_prog_id(prog_id: &str) -> Option<&'static str> {
+    let prog_id = prog_id.to_ascii_lowercase();
+    [
+        ("brave", "brave"),
+        ("msedge", "edge"),
+        ("chromium", "chromium"),
+        ("chrome", "chrome"),
+        ("opera", "opera"),
+        ("vivaldi", "vivaldi"),
+        ("firefox", "firefox"),
+    ]
+    .into_iter()
+    .find(|(prefix, _)| prog_id.starts_with(prefix))
+    .map(|(_, browser)| browser)
+}
+
+/// Why the own sign-in window ended without cookies.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SignInEnd {
+    /// The user closed the browser window first.
+    Closed,
+    /// No sign-in within the time limit.
+    TimedOut,
+    /// The browser could not start or answer.
+    Failed(String),
+}
+
+/// My `YouTube` (2.2.0): opens `browser` with `ApricotPlayer`'s own profile in
+/// `user_data_dir` at the Google sign-in, waits until `signed_in` accepts the
+/// profile's cookies, then closes the window and returns them. The user's own
+/// browser and profiles stay untouched. `cancel` ends the wait.
+///
+/// # Errors
+/// [`SignInEnd`] when the window closes, the time runs out or the browser
+/// cannot be driven.
+pub fn youtube_sign_in_with_own_profile(
+    browser: &str,
+    user_data_dir: &Path,
+    timeout: Duration,
+    cancel: &std::sync::atomic::AtomicBool,
+    signed_in: impl Fn(&[Value]) -> bool,
+) -> Result<Vec<Value>, SignInEnd> {
+    let executable = cookie_browser_executable(browser)
+        .ok_or_else(|| SignInEnd::Failed(format!("{browser} executable not found")))?;
+    std::fs::create_dir_all(user_data_dir).map_err(|error| SignInEnd::Failed(error.to_string()))?;
+    let port = free_local_port().map_err(|error| SignInEnd::Failed(error.to_string()))?;
+    let mut process = Command::new(&executable)
+        .arg(format!("--remote-debugging-port={port}"))
+        .arg("--remote-debugging-address=127.0.0.1")
+        .arg("--remote-allow-origins=*")
+        .arg(format!("--user-data-dir={}", user_data_dir.display()))
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--new-window")
+        .arg(YOUTUBE_SIGN_IN_URL)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| SignInEnd::Failed(error.to_string()))?;
+    let deadline = Instant::now() + timeout;
+    let result = loop {
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            break Err(SignInEnd::Closed);
+        }
+        if matches!(process.try_wait(), Ok(Some(_))) {
+            break Err(SignInEnd::Closed);
+        }
+        if Instant::now() >= deadline {
+            break Err(SignInEnd::TimedOut);
+        }
+        std::thread::sleep(Duration::from_millis(1_500));
+        let Ok(version) = fetch_devtools_json(port, "/json/version", Duration::from_secs(2)) else {
+            continue;
+        };
+        let websocket = version
+            .get("webSocketDebuggerUrl")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let Ok(websocket) = validate_devtools_websocket_url(websocket, port) else {
+            continue;
+        };
+        if let Ok(cookies) = devtools_browser_storage_cookies(&websocket)
+            && signed_in(&cookies)
+        {
+            // YouTube sets its own cookies right after the Google page.
+            std::thread::sleep(Duration::from_secs(2));
+            break Ok(devtools_browser_storage_cookies(&websocket).unwrap_or(cookies));
+        }
+    };
+    let _ = process.kill();
+    let _ = process.wait();
+    result
+}
+
+/// Every cookie of the browser through its own `DevTools` target, which
+/// has the Storage domain (the Network domain belongs to page targets);
+/// `Network.getCookies` is the fallback for older browsers.
+fn devtools_browser_storage_cookies(websocket: &Url) -> Result<Vec<Value>, String> {
+    let request = serde_json::json!({ "id": 1, "method": "Storage.getCookies", "params": {} });
+    let mut socket = WebSocket::connect(websocket)?;
+    socket.send_text(&request.to_string())?;
+    loop {
+        let payload: Value =
+            serde_json::from_str(&socket.receive_text()?).map_err(|error| error.to_string())?;
+        if payload.get("id").and_then(Value::as_i64) != Some(1) {
+            continue;
+        }
+        if payload.get("error").is_some_and(|error| !error.is_null()) {
+            return devtools_get_all_cookies(websocket);
+        }
+        return Ok(payload
+            .pointer("/result/cookies")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default());
+    }
+}
+
 /// Python `devtools_get_all_cookies`.
 fn devtools_get_all_cookies(websocket: &Url) -> Result<Vec<Value>, String> {
     let request = serde_json::json!({
@@ -904,6 +1117,39 @@ mod tests {
         assert_eq!(
             names,
             ["Default", "Profile 2", "Profile 10", "Guest Profile"]
+        );
+    }
+
+    #[test]
+    fn the_mac_default_browser_is_read_from_launch_services() {
+        let handlers = r#"(
+        {
+        LSHandlerContentType = "public.html";
+        LSHandlerRoleAll = "com.apple.safari";
+    },
+        {
+        LSHandlerPreferredVersions = { LSHandlerRoleAll = "-"; };
+        LSHandlerRoleAll = "com.brave.browser";
+        LSHandlerURLScheme = https;
+    }
+)"#;
+        assert_eq!(browser_of_launch_services(handlers), Some("brave"));
+        assert_eq!(browser_of_launch_services("()"), None);
+    }
+
+    #[test]
+    fn the_default_browser_is_read_from_its_prog_id() {
+        assert_eq!(browser_of_prog_id("BraveHTML"), Some("brave"));
+        assert_eq!(browser_of_prog_id("MSEdgeHTM"), Some("edge"));
+        assert_eq!(browser_of_prog_id("ChromeHTML"), Some("chrome"));
+        assert_eq!(browser_of_prog_id("ChromiumHTM"), Some("chromium"));
+        assert_eq!(
+            browser_of_prog_id("FirefoxURL-308046B0AF4A39CB"),
+            Some("firefox")
+        );
+        assert_eq!(
+            browser_of_prog_id("AppXq0fevzme2pys62n3e0fbqa7peapykr8v"),
+            None
         );
     }
 
