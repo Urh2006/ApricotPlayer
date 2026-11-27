@@ -130,23 +130,64 @@ pub fn load_account_name(app_data: &Path) -> Option<String> {
 /// Whether a sign-in through My `YouTube` was confirmed by `YouTube`. Cookies
 /// that only carry sign-in names (for example an old `cookies.txt`) are not
 /// a sign-in (Urh, 2.2.0).
+/// The confirmation belongs to the cookies it was made with: other cookies
+/// (another account imported in Settings, Cookies) are not confirmed.
 #[must_use]
-pub fn account_confirmed(app_data: &Path) -> bool {
+pub fn account_confirmed(app_data: &Path, fingerprint: Option<&str>) -> bool {
+    let Some(fingerprint) = fingerprint else {
+        return false;
+    };
     std::fs::read_to_string(app_data.join(ACCOUNT_FILE))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|value| value.get("signed_in").and_then(Value::as_bool))
-        .unwrap_or(false)
+        .is_some_and(|value| {
+            value.get("signed_in").and_then(Value::as_bool) == Some(true)
+                && value.get("cookie").and_then(Value::as_str) == Some(fingerprint)
+        })
 }
 
-/// Records the confirmed sign-in with its name, when `YouTube` gave one.
+/// A short digest of the `YouTube` session in a `cookies.txt` (its
+/// `SAPISID`), so a confirmation stays tied to the cookies that made it.
+#[must_use]
+pub fn sign_in_fingerprint(cookies_text: &str) -> Option<String> {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let session = cookies_text.lines().find_map(|line| {
+        let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [domain, _, _, _, _, name, value] = fields.as_slice() else {
+            return None;
+        };
+        let domain = domain.trim_start_matches('.').to_ascii_lowercase();
+        let youtube = domain == "youtube.com" || domain.ends_with(".youtube.com");
+        (youtube && matches!(*name, "SAPISID" | "__Secure-3PAPISID") && !value.is_empty())
+            .then_some(*value)
+    })?;
+    let digest = sha2::Sha256::digest(session.as_bytes());
+    Some(
+        digest
+            .iter()
+            .take(12)
+            .fold(String::new(), |mut text, byte| {
+                let _ = write!(text, "{byte:02x}");
+                text
+            }),
+    )
+}
+
+/// Records the confirmed sign-in with its name, when `YouTube` gave one,
+/// and the cookies it belongs to.
 ///
 /// # Errors
 /// The write error.
-pub fn save_account(app_data: &Path, name: Option<&str>) -> std::io::Result<()> {
+pub fn save_account(app_data: &Path, name: Option<&str>, fingerprint: &str) -> std::io::Result<()> {
     std::fs::write(
         app_data.join(ACCOUNT_FILE),
-        serde_json::to_vec(&serde_json::json!({ "signed_in": true, "name": name }))?,
+        serde_json::to_vec(&serde_json::json!({
+            "signed_in": true,
+            "name": name,
+            "cookie": fingerprint,
+        }))?,
     )
 }
 
@@ -239,20 +280,31 @@ mod tests {
     #[test]
     fn only_a_confirmed_sign_in_counts_and_it_is_forgotten() {
         let folder = tempfile::tempdir().unwrap();
-        assert!(!account_confirmed(folder.path()));
+        let cookies = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsession-a\n";
+        let a = sign_in_fingerprint(cookies).unwrap();
+        let b = sign_in_fingerprint(&cookies.replace("session-a", "session-b")).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(
+            sign_in_fingerprint(".google.com\tTRUE\t/\tTRUE\t0\tSAPISID\tx\n"),
+            None
+        );
+        assert!(!account_confirmed(folder.path(), Some(&a)));
         assert_eq!(load_account_name(folder.path()), None);
-        save_account(folder.path(), Some("Urh")).unwrap();
-        assert!(account_confirmed(folder.path()));
+        save_account(folder.path(), Some("Urh"), &a).unwrap();
+        assert!(account_confirmed(folder.path(), Some(&a)));
+        // Other cookies (another account) are not confirmed.
+        assert!(!account_confirmed(folder.path(), Some(&b)));
+        assert!(!account_confirmed(folder.path(), None));
         assert_eq!(load_account_name(folder.path()).as_deref(), Some("Urh"));
-        save_account(folder.path(), None).unwrap();
-        assert!(account_confirmed(folder.path()));
+        save_account(folder.path(), None, &a).unwrap();
+        assert!(account_confirmed(folder.path(), Some(&a)));
         assert_eq!(load_account_name(folder.path()), None);
         forget_account(folder.path()).unwrap();
         forget_account(folder.path()).unwrap();
-        assert!(!account_confirmed(folder.path()));
+        assert!(!account_confirmed(folder.path(), Some(&a)));
         // 2.2.0 test builds wrote only the name.
         std::fs::write(folder.path().join(ACCOUNT_FILE), r#"{"name":"Urh"}"#).unwrap();
-        assert!(!account_confirmed(folder.path()));
+        assert!(!account_confirmed(folder.path(), Some(&a)));
     }
 
     #[test]

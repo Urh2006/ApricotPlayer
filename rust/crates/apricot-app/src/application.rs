@@ -3483,7 +3483,10 @@ impl Application {
     }
 
     pub fn youtube_signed_in(&self) -> bool {
-        crate::youtube_account::account_confirmed(&self.app_data_folder())
+        let fingerprint = self
+            .youtube_cookies_text()
+            .and_then(|text| crate::youtube_account::sign_in_fingerprint(&text));
+        crate::youtube_account::account_confirmed(&self.app_data_folder(), fingerprint.as_deref())
             && crate::cookies::cookies_file_has_youtube_login(&self.youtube_cookies_path())
     }
 
@@ -3499,7 +3502,13 @@ impl Application {
 
     /// `YouTube` confirmed the sign-in; `name` when it gave one.
     pub fn confirm_youtube_sign_in(&self, name: Option<&str>) {
-        let _ = crate::youtube_account::save_account(&self.app_data_folder(), name);
+        if let Some(fingerprint) = self
+            .youtube_cookies_text()
+            .and_then(|text| crate::youtube_account::sign_in_fingerprint(&text))
+        {
+            let _ =
+                crate::youtube_account::save_account(&self.app_data_folder(), name, &fingerprint);
+        }
     }
 
     /// My `YouTube`: keeps the cookies of `ApricotPlayer`'s own sign-in window

@@ -41,6 +41,9 @@ pub(super) struct MyYoutubeState {
     /// The user's browser the cookies came from, until `YouTube` confirms
     /// them; when it does not, the own window follows.
     from_browser: Option<String>,
+    /// A sign-in runs: the browser export, the own window or `YouTube`'s
+    /// answer. A second one does not start meanwhile.
+    busy: bool,
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -152,10 +155,11 @@ unsafe fn sign_in(window: HWND) {
     let Some(state) = state(window) else {
         return;
     };
-    if state.my_youtube.signing_in.is_some() {
+    let catalog = catalog(state);
+    if state.my_youtube.busy {
+        set_status(state, catalog.text("my_youtube_signing_in"), true);
         return;
     }
-    let catalog = catalog(state);
     // The browser chosen in Settings, otherwise the default browser.
     let mut browser =
         apricot_app::cookies::normalized_cookies_browser(state.application.settings());
@@ -178,6 +182,7 @@ unsafe fn sign_in(window: HWND) {
             let Some(state) = state_mut(window) else {
                 return;
             };
+            state.my_youtube.busy = true;
             set_status(state, catalog.text("my_youtube_signing_in"), true);
             let settings = state.application.settings();
             crate::cookies_win32::spawn_export(
@@ -202,6 +207,7 @@ unsafe fn open_sign_in_window(window: HWND, preferred: &str) {
     let catalog = catalog(state);
     let Some(browser) = apricot_platform::browser_cookies::youtube_sign_in_browser(preferred)
     else {
+        state.my_youtube.busy = false;
         show_error_message(window, catalog.text("my_youtube_no_browser"));
         return;
     };
@@ -209,6 +215,7 @@ unsafe fn open_sign_in_window(window: HWND, preferred: &str) {
         apricot_app::youtube_account::sign_in_user_data_dir(&state.application.app_data_folder());
     let cancel = Arc::new(AtomicBool::new(false));
     state.my_youtube.signing_in = Some(cancel.clone());
+    state.my_youtube.busy = true;
     set_status(state, catalog.text("my_youtube_own_window"), true);
     let target = window.0 as isize;
     state.my_youtube.worker = Some(std::thread::spawn(move || {
@@ -256,6 +263,8 @@ pub(super) unsafe fn sign_in_window_ended(
         return;
     };
     state.my_youtube.signing_in = None;
+    // Signed in cookies go on to YouTube's answer, which is busy again.
+    state.my_youtube.busy = false;
     let catalog = catalog(state);
     restore_from_tray(window);
     let _ = SetForegroundWindow(window);
@@ -298,6 +307,7 @@ unsafe fn signed_in_now(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
+    state.my_youtube.busy = true;
     let cookies = state.application.youtube_cookies_text().unwrap_or_default();
     let target = window.0 as isize;
     std::thread::spawn(move || {
@@ -315,6 +325,8 @@ pub(super) unsafe fn account_checked(window: HWND, answer: Result<Option<String>
     let Some(state) = state_mut(window) else {
         return;
     };
+    // The own window that may follow is busy again.
+    state.my_youtube.busy = false;
     let catalog = catalog(state);
     let from_browser = state.my_youtube.from_browser.take();
     let name = match answer {

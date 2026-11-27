@@ -666,10 +666,54 @@ pub fn default_browser() -> Option<String> {
             .to_ascii_lowercase();
         browser_of_prog_id(&prog_id).map(str::to_owned)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/bin/defaults")
+            .args([
+                "read",
+                "com.apple.LaunchServices/com.apple.launchservices.secure",
+                "LSHandlers",
+            ])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        browser_of_launch_services(&String::from_utf8_lossy(&output.stdout)).map(str::to_owned)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         None
     }
+}
+
+/// The cookie browser that handles `https` in macOS's Launch Services
+/// handlers (`defaults read ... LSHandlers`).
+#[must_use]
+pub fn browser_of_launch_services(handlers: &str) -> Option<&'static str> {
+    let entry = handlers
+        .split('}')
+        .find(|entry| entry.contains("LSHandlerURLScheme = https;"))?;
+    let bundle = entry
+        .lines()
+        .find(|line| line.trim_start().starts_with("LSHandlerRoleAll"))?
+        .split('=')
+        .nth(1)?
+        .trim()
+        .trim_end_matches(';')
+        .trim_matches('"')
+        .to_ascii_lowercase();
+    [
+        ("com.brave.browser", "brave"),
+        ("com.google.chrome", "chrome"),
+        ("com.microsoft.edgemac", "edge"),
+        ("org.chromium.chromium", "chromium"),
+        ("com.vivaldi.vivaldi", "vivaldi"),
+        ("com.operasoftware.opera", "opera"),
+        ("org.mozilla.firefox", "firefox"),
+    ]
+    .into_iter()
+    .find(|(id, _)| bundle.starts_with(id))
+    .map(|(_, browser)| browser)
 }
 
 /// The cookie browser of a Windows `ProgId` such as `BraveHTML`.
@@ -1074,6 +1118,23 @@ mod tests {
             names,
             ["Default", "Profile 2", "Profile 10", "Guest Profile"]
         );
+    }
+
+    #[test]
+    fn the_mac_default_browser_is_read_from_launch_services() {
+        let handlers = r#"(
+        {
+        LSHandlerContentType = "public.html";
+        LSHandlerRoleAll = "com.apple.safari";
+    },
+        {
+        LSHandlerPreferredVersions = { LSHandlerRoleAll = "-"; };
+        LSHandlerRoleAll = "com.brave.browser";
+        LSHandlerURLScheme = https;
+    }
+)"#;
+        assert_eq!(browser_of_launch_services(handlers), Some("brave"));
+        assert_eq!(browser_of_launch_services("()"), None);
     }
 
     #[test]

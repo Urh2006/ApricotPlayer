@@ -166,11 +166,20 @@ impl Shell {
         self.start_youtube_collection_work(ui, work);
     }
 
+    /// A sign-in runs: the browser export, the own window or `YouTube`'s
+    /// answer. A second one does not start meanwhile.
+    const fn my_youtube_busy(&self) -> bool {
+        self.my_youtube.exporting
+            || self.my_youtube.signing_in.is_some()
+            || self.my_youtube.receiver.is_some()
+    }
+
     fn my_youtube_sign_in(&mut self, ui: &mut dyn ShellUi) {
-        if self.my_youtube.signing_in.is_some() {
+        let catalog = self.catalog();
+        if self.my_youtube_busy() {
+            ui.set_status(catalog.text("my_youtube_signing_in"), true);
             return;
         }
-        let catalog = self.catalog();
         // The browser chosen in Settings, otherwise the default browser.
         let mut browser =
             apricot_app::cookies::normalized_cookies_browser(self.application.settings());
