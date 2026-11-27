@@ -632,11 +632,62 @@ pub const YOUTUBE_SIGN_IN_URL: &str = "https://accounts.google.com/ServiceLogin?
 #[must_use]
 pub fn youtube_sign_in_browser(preferred: &str) -> Option<String> {
     let preferred = preferred.trim().to_lowercase();
-    std::iter::once(preferred.as_str())
+    let default = default_browser().unwrap_or_default();
+    [preferred.as_str(), default.as_str()]
+        .into_iter()
         .chain(["edge", "chrome", "brave", "chromium", "vivaldi", "opera"])
         .filter(|browser| !browser.is_empty() && *browser != "firefox" && *browser != "none")
         .find(|browser| cookie_browser_executable(browser).is_some())
         .map(str::to_owned)
+}
+
+/// The system's default web browser as a cookie browser name (Windows reads
+/// the https handler the user chose; elsewhere `None`).
+#[must_use]
+pub fn default_browser() -> Option<String> {
+    #[cfg(windows)]
+    {
+        let reg = windows_system_executable("reg.exe")?;
+        let output = hidden_command(&reg)
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice",
+                "/v",
+                "ProgId",
+            ])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let prog_id = text
+            .lines()
+            .find(|line| line.trim_start().starts_with("ProgId"))?
+            .split_whitespace()
+            .last()?
+            .to_ascii_lowercase();
+        browser_of_prog_id(&prog_id).map(str::to_owned)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// The cookie browser of a Windows `ProgId` such as `BraveHTML`.
+#[must_use]
+pub fn browser_of_prog_id(prog_id: &str) -> Option<&'static str> {
+    let prog_id = prog_id.to_ascii_lowercase();
+    [
+        ("brave", "brave"),
+        ("msedge", "edge"),
+        ("chromium", "chromium"),
+        ("chrome", "chrome"),
+        ("opera", "opera"),
+        ("vivaldi", "vivaldi"),
+        ("firefox", "firefox"),
+    ]
+    .into_iter()
+    .find(|(prefix, _)| prog_id.starts_with(prefix))
+    .map(|(_, browser)| browser)
 }
 
 /// Why the own sign-in window ended without cookies.
@@ -1022,6 +1073,22 @@ mod tests {
         assert_eq!(
             names,
             ["Default", "Profile 2", "Profile 10", "Guest Profile"]
+        );
+    }
+
+    #[test]
+    fn the_default_browser_is_read_from_its_prog_id() {
+        assert_eq!(browser_of_prog_id("BraveHTML"), Some("brave"));
+        assert_eq!(browser_of_prog_id("MSEdgeHTM"), Some("edge"));
+        assert_eq!(browser_of_prog_id("ChromeHTML"), Some("chrome"));
+        assert_eq!(browser_of_prog_id("ChromiumHTM"), Some("chromium"));
+        assert_eq!(
+            browser_of_prog_id("FirefoxURL-308046B0AF4A39CB"),
+            Some("firefox")
+        );
+        assert_eq!(
+            browser_of_prog_id("AppXq0fevzme2pys62n3e0fbqa7peapykr8v"),
+            None
         );
     }
 

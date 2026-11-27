@@ -3477,8 +3477,14 @@ impl Application {
     }
 
     /// My `YouTube` (2.2.0): the cookies hold a `YouTube` sign-in.
-    pub fn youtube_signed_in(&self) -> bool {
+    /// The cookies carry `YouTube`'s sign-in cookies, not yet confirmed.
+    pub fn youtube_cookies_have_sign_in(&self) -> bool {
         crate::cookies::cookies_file_has_youtube_login(&self.youtube_cookies_path())
+    }
+
+    pub fn youtube_signed_in(&self) -> bool {
+        crate::youtube_account::account_confirmed(&self.app_data_folder())
+            && crate::cookies::cookies_file_has_youtube_login(&self.youtube_cookies_path())
     }
 
     /// The cookies text for the account name request.
@@ -3491,8 +3497,9 @@ impl Application {
         crate::youtube_account::load_account_name(&self.app_data_folder())
     }
 
-    pub fn set_youtube_account_name(&self, name: Option<&str>) {
-        let _ = crate::youtube_account::save_account_name(&self.app_data_folder(), name);
+    /// `YouTube` confirmed the sign-in; `name` when it gave one.
+    pub fn confirm_youtube_sign_in(&self, name: Option<&str>) {
+        let _ = crate::youtube_account::save_account(&self.app_data_folder(), name);
     }
 
     /// My `YouTube`: keeps the cookies of `ApricotPlayer`'s own sign-in window
@@ -3546,7 +3553,7 @@ impl Application {
             .map_err(|error| error.to_string())?;
         let _ = std::fs::remove_file(&cache);
         let _ = std::fs::remove_dir_all(&own_profile);
-        self.set_youtube_account_name(None);
+        let _ = crate::youtube_account::forget_account(&app_data);
         Ok(())
     }
 

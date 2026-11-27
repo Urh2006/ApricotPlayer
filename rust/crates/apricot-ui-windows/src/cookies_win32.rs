@@ -59,8 +59,9 @@ pub(crate) enum CookieEvent {
         browser: String,
         result: Box<Result<Vec<Value>, apricot_platform::browser_cookies::SignInEnd>>,
     },
-    /// The signed-in account's name, when `YouTube` gave it.
-    YoutubeAccountName(Option<String>),
+    /// `YouTube`'s answer about the sign-in: the name, `None` when `YouTube`
+    /// does not accept it, an error when it could not be asked.
+    YoutubeAccountChecked(Result<Option<String>, String>),
 }
 
 /// Posts `event` to the main window; it is dropped when the window is gone.

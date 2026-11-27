@@ -127,21 +127,37 @@ pub fn load_account_name(app_data: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Remembers the account name, or forgets it with `None`.
+/// Whether a sign-in through My `YouTube` was confirmed by `YouTube`. Cookies
+/// that only carry sign-in names (for example an old `cookies.txt`) are not
+/// a sign-in (Urh, 2.2.0).
+#[must_use]
+pub fn account_confirmed(app_data: &Path) -> bool {
+    std::fs::read_to_string(app_data.join(ACCOUNT_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.get("signed_in").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
+/// Records the confirmed sign-in with its name, when `YouTube` gave one.
 ///
 /// # Errors
 /// The write error.
-pub fn save_account_name(app_data: &Path, name: Option<&str>) -> std::io::Result<()> {
-    let path = app_data.join(ACCOUNT_FILE);
-    match name {
-        Some(name) => std::fs::write(
-            path,
-            serde_json::to_vec(&serde_json::json!({ "name": name }))?,
-        ),
-        None => match std::fs::remove_file(path) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
-            _ => Ok(()),
-        },
+pub fn save_account(app_data: &Path, name: Option<&str>) -> std::io::Result<()> {
+    std::fs::write(
+        app_data.join(ACCOUNT_FILE),
+        serde_json::to_vec(&serde_json::json!({ "signed_in": true, "name": name }))?,
+    )
+}
+
+/// Forgets the sign-in.
+///
+/// # Errors
+/// The delete error.
+pub fn forget_account(app_data: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(app_data.join(ACCOUNT_FILE)) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
     }
 }
 
@@ -221,14 +237,22 @@ mod tests {
     }
 
     #[test]
-    fn the_account_name_is_remembered_and_forgotten() {
+    fn only_a_confirmed_sign_in_counts_and_it_is_forgotten() {
         let folder = tempfile::tempdir().unwrap();
+        assert!(!account_confirmed(folder.path()));
         assert_eq!(load_account_name(folder.path()), None);
-        save_account_name(folder.path(), Some("Urh")).unwrap();
+        save_account(folder.path(), Some("Urh")).unwrap();
+        assert!(account_confirmed(folder.path()));
         assert_eq!(load_account_name(folder.path()).as_deref(), Some("Urh"));
-        save_account_name(folder.path(), None).unwrap();
-        save_account_name(folder.path(), None).unwrap();
+        save_account(folder.path(), None).unwrap();
+        assert!(account_confirmed(folder.path()));
         assert_eq!(load_account_name(folder.path()), None);
+        forget_account(folder.path()).unwrap();
+        forget_account(folder.path()).unwrap();
+        assert!(!account_confirmed(folder.path()));
+        // 2.2.0 test builds wrote only the name.
+        std::fs::write(folder.path().join(ACCOUNT_FILE), r#"{"name":"Urh"}"#).unwrap();
+        assert!(!account_confirmed(folder.path()));
     }
 
     #[test]

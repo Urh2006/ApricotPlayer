@@ -57,7 +57,7 @@ pub(crate) enum MyYoutubeEvent {
         browser: String,
         result: Result<Vec<serde_json::Value>, apricot_platform::browser_cookies::SignInEnd>,
     },
-    AccountName(Option<String>),
+    AccountChecked(Result<Option<String>, String>),
 }
 
 #[derive(Default)]
@@ -65,6 +65,8 @@ pub(crate) struct MyYoutubeState {
     rows: Vec<MyYoutubeEntry>,
     selected: Option<MyYoutubeEntry>,
     signing_in: Option<Arc<AtomicBool>>,
+    /// The user's browser the cookies came from, until `YouTube` confirms them.
+    from_browser: Option<String>,
     /// The worker that drives the sign-in window and closes it.
     worker: Option<std::thread::JoinHandle<()>>,
     receiver: Option<Receiver<MyYoutubeEvent>>,
@@ -169,7 +171,12 @@ impl Shell {
             return;
         }
         let catalog = self.catalog();
-        let browser = apricot_app::cookies::normalized_cookies_browser(self.application.settings());
+        // The browser chosen in Settings, otherwise the default browser.
+        let mut browser =
+            apricot_app::cookies::normalized_cookies_browser(self.application.settings());
+        if browser.is_empty() {
+            browser = apricot_platform::browser_cookies::default_browser().unwrap_or_default();
+        }
         if !browser.is_empty() && crate::cookies::ytdlp_available() {
             let title = apricot_app::cookies::browser_title(&browser);
             let running = apricot_platform::browser_cookies::cookie_browser_is_running(&browser);
@@ -225,7 +232,8 @@ impl Shell {
         browser: &str,
         succeeded: bool,
     ) {
-        if succeeded && self.application.youtube_signed_in() {
+        if succeeded && self.application.youtube_cookies_have_sign_in() {
+            self.my_youtube.from_browser = Some(browser.to_owned());
             self.my_youtube_signed_in(ui);
         } else {
             let chromium = apricot_app::cookies::CHROMIUM_COOKIE_BROWSERS.contains(&browser);
@@ -233,21 +241,16 @@ impl Shell {
         }
     }
 
+    /// The cookies hold a sign-in: `YouTube` is asked whether it accepts it.
     fn my_youtube_signed_in(&mut self, ui: &mut dyn ShellUi) {
-        self.my_youtube.selected = Some(MyYoutubeEntry::Feed(YoutubeAccountFeed::Home));
         let cookies = self.application.youtube_cookies_text().unwrap_or_default();
         let (sender, receiver) = mpsc::channel();
         self.my_youtube.receiver = Some(receiver);
         std::thread::spawn(move || {
-            let name = apricot_platform::youtube_account::account_name(&cookies)
-                .ok()
-                .flatten();
-            let _ = sender.send(MyYoutubeEvent::AccountName(name));
+            let answer = apricot_platform::youtube_account::account_name(&cookies);
+            let _ = sender.send(MyYoutubeEvent::AccountChecked(answer));
         });
         ui.set_background_polling(true);
-        if is_view(self.view) {
-            self.show_my_youtube(ui);
-        }
     }
 
     /// Worker answers; `true` while one may still come.
@@ -301,16 +304,45 @@ impl Shell {
                     self.show_my_youtube(ui);
                 }
             }
-            MyYoutubeEvent::AccountName(name) => {
-                // The rows already show the lists; the name appears in the
-                // sign-out row the next time My YouTube opens, so the
-                // selection and focus stay where the user is.
-                self.application.set_youtube_account_name(name.as_deref());
+            MyYoutubeEvent::AccountChecked(answer) => {
+                let from_browser = self.my_youtube.from_browser.take();
+                let name = match answer {
+                    Ok(Some(name)) => Some(name),
+                    Err(_) => None,
+                    Ok(None) => {
+                        let _ = self.application.sign_out_of_youtube();
+                        crate::cookies::update_repair_settings(self.application.settings());
+                        if let Some(browser) = from_browser {
+                            ui.set_status(
+                                &catalog.text("my_youtube_browser_not_signed_in").replace(
+                                    "{browser}",
+                                    &apricot_app::cookies::browser_title(&browser),
+                                ),
+                                true,
+                            );
+                            let chromium = apricot_app::cookies::CHROMIUM_COOKIE_BROWSERS
+                                .contains(&browser.as_str());
+                            self.my_youtube_open_sign_in_window(
+                                ui,
+                                if chromium { &browser } else { "" },
+                            );
+                        } else {
+                            ui.show_error(catalog.text("my_youtube_not_accepted"));
+                        }
+                        return self.my_youtube.receiver.is_some();
+                    }
+                };
+                self.application.confirm_youtube_sign_in(name.as_deref());
                 let text = name.as_deref().map_or_else(
                     || catalog.text("my_youtube_signed_in_noname").to_owned(),
                     |name| catalog.text("my_youtube_signed_in").replace("{name}", name),
                 );
                 ui.set_status(&text, true);
+                // The sign-in the user started has just finished.
+                self.my_youtube.selected = Some(MyYoutubeEntry::Feed(YoutubeAccountFeed::Home));
+                if is_view(self.view) {
+                    self.show_my_youtube(ui);
+                }
             }
         }
         self.my_youtube.receiver.is_some()

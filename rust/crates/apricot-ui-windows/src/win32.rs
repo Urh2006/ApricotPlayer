@@ -13526,8 +13526,8 @@ unsafe fn handle_cookie_event(window: HWND, event: crate::cookies_win32::CookieE
         CookieEvent::YoutubeSignIn { browser, result } => {
             youtube_account::sign_in_window_ended(window, &browser, *result);
         }
-        CookieEvent::YoutubeAccountName(name) => {
-            youtube_account::account_name_read(window, name.as_deref());
+        CookieEvent::YoutubeAccountChecked(answer) => {
+            youtube_account::account_checked(window, answer);
         }
         CookieEvent::Failed { origin, error } => {
             let friendly = apricot_app::comments::friendly_error(&catalog, &error);

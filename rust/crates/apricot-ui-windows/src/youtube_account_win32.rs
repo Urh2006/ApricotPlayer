@@ -38,6 +38,9 @@ pub(super) struct MyYoutubeState {
     signing_in: Option<Arc<AtomicBool>>,
     /// The worker that drives the sign-in window and closes it.
     worker: Option<std::thread::JoinHandle<()>>,
+    /// The user's browser the cookies came from, until `YouTube` confirms
+    /// them; when it does not, the own window follows.
+    from_browser: Option<String>,
 }
 
 pub(super) const fn is_view(view: MainView) -> bool {
@@ -153,7 +156,12 @@ unsafe fn sign_in(window: HWND) {
         return;
     }
     let catalog = catalog(state);
-    let browser = apricot_app::cookies::normalized_cookies_browser(state.application.settings());
+    // The browser chosen in Settings, otherwise the default browser.
+    let mut browser =
+        apricot_app::cookies::normalized_cookies_browser(state.application.settings());
+    if browser.is_empty() {
+        browser = apricot_platform::browser_cookies::default_browser().unwrap_or_default();
+    }
     let chromium = apricot_app::cookies::CHROMIUM_COOKIE_BROWSERS.contains(&browser.as_str());
     // Urh (2.2.0): first the user's own browser, then the own window.
     if !browser.is_empty() && crate::cookies_win32::ytdlp_available() {
@@ -224,8 +232,12 @@ unsafe fn open_sign_in_window(window: HWND, preferred: &str) {
 /// The user's browser was read (or could not be): signed in, or on to the
 /// own sign-in window.
 pub(super) unsafe fn browser_read(window: HWND, browser: &str, succeeded: bool) {
-    let signed_in = state(window).is_some_and(|state| state.application.youtube_signed_in());
+    let signed_in =
+        state(window).is_some_and(|state| state.application.youtube_cookies_have_sign_in());
     if succeeded && signed_in {
+        if let Some(state) = state_mut(window) {
+            state.my_youtube.from_browser = Some(browser.to_owned());
+        }
         signed_in_now(window);
     } else {
         let chromium = apricot_app::cookies::CHROMIUM_COOKIE_BROWSERS.contains(&browser);
@@ -279,43 +291,64 @@ pub(super) unsafe fn sign_in_window_ended(
     }
 }
 
-/// Signed in: the name is read in the background and announced.
+/// The cookies hold a sign-in: `YouTube` is asked whether it accepts it and
+/// for the name, in the background. Only its answer makes the account
+/// signed in.
 unsafe fn signed_in_now(window: HWND) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    state.my_youtube.selected = Some(MyYoutubeEntry::Feed(apricot_app::YoutubeAccountFeed::Home));
     let cookies = state.application.youtube_cookies_text().unwrap_or_default();
     let target = window.0 as isize;
     std::thread::spawn(move || {
-        let name = apricot_platform::youtube_account::account_name(&cookies)
-            .ok()
-            .flatten();
+        let answer = apricot_platform::youtube_account::account_name(&cookies);
         crate::cookies_win32::post_event(
             target,
-            crate::cookies_win32::CookieEvent::YoutubeAccountName(name),
+            crate::cookies_win32::CookieEvent::YoutubeAccountChecked(answer),
         );
     });
-    if is_view(state.view) {
-        show(window);
-    }
 }
 
-/// The account name arrived.
-pub(super) unsafe fn account_name_read(window: HWND, name: Option<&str>) {
+/// `YouTube` answered: the sign-in is confirmed (also when `YouTube` could not
+/// be asked), or refused, and then the own window follows a browser sign-in.
+pub(super) unsafe fn account_checked(window: HWND, answer: Result<Option<String>, String>) {
     let Some(state) = state_mut(window) else {
         return;
     };
-    // The rows already show the lists; the name appears in the sign-out row
-    // the next time My YouTube opens, so the selection and focus stay where
-    // the user is.
-    state.application.set_youtube_account_name(name);
     let catalog = catalog(state);
-    let text = name.map_or_else(
+    let from_browser = state.my_youtube.from_browser.take();
+    let name = match answer {
+        Ok(Some(name)) => Some(name),
+        Err(_) => None,
+        Ok(None) => {
+            let _ = state.application.sign_out_of_youtube();
+            crate::cookies_win32::update_repair_settings(state.application.settings());
+            if let Some(browser) = from_browser {
+                let text = catalog
+                    .text("my_youtube_browser_not_signed_in")
+                    .replace("{browser}", &apricot_app::cookies::browser_title(&browser));
+                set_status(state, &text, true);
+                let chromium =
+                    apricot_app::cookies::CHROMIUM_COOKIE_BROWSERS.contains(&browser.as_str());
+                open_sign_in_window(window, if chromium { &browser } else { "" });
+            } else {
+                show_error_message(window, catalog.text("my_youtube_not_accepted"));
+            }
+            return;
+        }
+    };
+    state.application.confirm_youtube_sign_in(name.as_deref());
+    let text = name.as_deref().map_or_else(
         || catalog.text("my_youtube_signed_in_noname").to_owned(),
         |name| catalog.text("my_youtube_signed_in").replace("{name}", name),
     );
     set_status(state, &text, true);
+    // The sign-in the user started has just finished: the lists appear
+    // with Home selected.
+    state.my_youtube.selected = Some(MyYoutubeEntry::Feed(apricot_app::YoutubeAccountFeed::Home));
+    if is_view(state.view) {
+        show(window);
+    }
 }
 
 unsafe fn sign_out(window: HWND) {
