@@ -1451,9 +1451,10 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
     let releases = total("/discography/albums")
         + total("/discography/singles")
         + total("/discography/compilations");
-    let biography = plain_text(text(&artist, "/profile/biography/text"));
-    if let Ok(mut texts) = ARTIST_BIOGRAPHIES.lock() {
-        texts.insert(uri.to_owned(), biography.clone());
+    let about = artist_about_of(&artist);
+    let has_about = !about.is_empty();
+    if let Ok(mut texts) = ARTIST_ABOUT.lock() {
+        texts.insert(uri.to_owned(), about);
     }
     let items = ArtistSection::ALL
         .into_iter()
@@ -1469,7 +1470,7 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
                 ArtistSection::Playlists => Some(total("/profile/playlistsV2")),
                 ArtistSection::Related => Some(total("/relatedContent/relatedArtists")),
                 // A text, not a list: no count.
-                ArtistSection::About => return (!biography.is_empty()).then_some((section, None)),
+                ArtistSection::About => return has_about.then_some((section, None)),
             };
             count
                 .filter(|count| *count > 0)
@@ -1495,19 +1496,92 @@ pub async fn artist(api: &Api, session: &Session, uri: &str) -> Result<Collectio
     })
 }
 
-/// Biographies of artist pages opened in this run, for About.
-static ARTIST_BIOGRAPHIES: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, String>>,
+/// What Spotify's About shows for an artist (2.2.0): the listeners,
+/// followers and world rank, where people listen, the biography and the
+/// artist's links.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ArtistAbout {
+    pub monthly_listeners: Option<u64>,
+    pub followers: Option<u64>,
+    pub world_rank: Option<u64>,
+    /// City, country and listeners, most listeners first.
+    pub top_cities: Vec<(String, String, u64)>,
+    pub biography: String,
+    /// Name and address.
+    pub links: Vec<(String, String)>,
+}
+
+impl ArtistAbout {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.monthly_listeners.is_none()
+            && self.followers.is_none()
+            && self.world_rank.is_none()
+            && self.top_cities.is_empty()
+            && self.biography.is_empty()
+            && self.links.is_empty()
+    }
+}
+
+/// `artistUnion` of `queryArtistOverview` as About.
+fn artist_about_of(artist: &Value) -> ArtistAbout {
+    let number = |pointer: &str| {
+        artist
+            .pointer(pointer)
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+    };
+    let top_cities = artist
+        .pointer("/stats/topCities/items")
+        .and_then(Value::as_array)
+        .map(|cities| {
+            cities
+                .iter()
+                .filter_map(|city| {
+                    let name = text(city, "/city").trim().to_owned();
+                    let listeners = city.get("numberOfListeners").and_then(Value::as_u64)?;
+                    (!name.is_empty())
+                        .then(|| (name, text(city, "/country").trim().to_owned(), listeners))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let links = artist
+        .pointer("/profile/externalLinks/items")
+        .and_then(Value::as_array)
+        .map(|links| {
+            links
+                .iter()
+                .filter_map(|link| {
+                    let url = text(link, "/url").trim().to_owned();
+                    (!url.is_empty()).then(|| (text(link, "/name").trim().to_owned(), url))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ArtistAbout {
+        monthly_listeners: number("/stats/monthlyListeners"),
+        followers: number("/stats/followers"),
+        world_rank: number("/stats/worldRank"),
+        top_cities,
+        biography: plain_text(text(artist, "/profile/biography/text")),
+        links,
+    }
+}
+
+/// About of artist pages opened in this run.
+static ARTIST_ABOUT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, ArtistAbout>>,
 > = std::sync::LazyLock::new(Default::default);
 
-/// The biography of an artist whose page was opened, as plain text.
+/// About of an artist whose page was opened, when Spotify gave anything.
 #[must_use]
-pub fn artist_biography(artist: &str) -> Option<String> {
-    ARTIST_BIOGRAPHIES
+pub fn artist_about(artist: &str) -> Option<ArtistAbout> {
+    ARTIST_ABOUT
         .lock()
         .ok()?
         .get(artist)
-        .filter(|text| !text.is_empty())
+        .filter(|about| !about.is_empty())
         .cloned()
 }
 

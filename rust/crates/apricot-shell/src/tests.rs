@@ -2126,6 +2126,33 @@ mod subscriptions {
     }
 
     #[test]
+    fn subscriptions_start_at_the_top_from_the_main_menu() {
+        let mut shell = super::keyboard::shell();
+        let mut ui = Ui::default();
+        for title in [
+            "#tag",
+            "4 channel",
+            "Alpha",
+            "Beta",
+            "Gamma",
+            "Delta",
+            "Omega",
+        ] {
+            shell
+                .application
+                .subscribe_to_item(&channel(title), 1.0)
+                .unwrap();
+        }
+        shell.show_main_menu(&mut ui);
+        // The main menu row of Subscriptions is not a subscription.
+        ui.selected = Some(5);
+        shell.activate_action(&mut ui, "open_subscriptions");
+        let screen = ui.screens.last().unwrap();
+        assert_eq!(screen.selected, Some(0));
+        assert!(screen.rows[0].starts_with("#tag"));
+    }
+
+    #[test]
     fn delete_removes_the_selected_subscription() {
         let mut shell = super::keyboard::shell();
         let mut ui = Ui::default();

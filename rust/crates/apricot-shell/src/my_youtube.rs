@@ -159,10 +159,7 @@ impl Shell {
                 return;
             }
         };
-        ui.set_status(
-            &catalog.text("loading_playlist").replace("{title}", &title),
-            false,
-        );
+        ui.set_status(catalog.text("my_youtube_loading"), false);
         self.start_youtube_collection_work(ui, work);
     }
 

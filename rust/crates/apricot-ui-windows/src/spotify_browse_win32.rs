@@ -1733,17 +1733,19 @@ pub(super) unsafe fn open_item(window: HWND, item: &CatalogItem) {
     open(window, source, title);
 }
 
-/// About on an artist page (2.2.0): the biography in the read-only text
-/// window of lyrics, with Copy and Back.
+/// About on an artist page (2.2.0): listeners, followers, world rank, top
+/// cities, the biography and links in the read-only text window of lyrics,
+/// with Copy and Back.
 unsafe fn show_artist_about(window: HWND, artist: &str, row: &CatalogItem) {
     let Some(state) = state_mut(window) else {
         return;
     };
     let texts = super::spotify::catalog(state);
-    let Some(text) = apricot_spotify::catalog::artist_biography(artist) else {
+    let Some(about) = apricot_spotify::catalog::artist_about(artist) else {
         set_status(state, texts.text("spotify_artist_no_about"), true);
         return;
     };
+    let text = apricot_app::spotify::artist_about_text(&texts, &about);
     let title = apricot_app::spotify::artist_section_title(&texts, row);
     let labels = crate::details_win32::DetailsDialogLabels {
         title: title.clone(),

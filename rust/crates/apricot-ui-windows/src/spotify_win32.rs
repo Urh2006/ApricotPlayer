@@ -1122,7 +1122,6 @@ unsafe fn show_settings(window: HWND) {
         normalisation: texts.text("spotify_normalisation"),
         listening_history: texts.text("spotify_listening_history"),
         key_cache: texts.text("spotify_key_cache"),
-        experimental_warning: texts.text("spotify_listening_history_warning"),
         autoplay: texts.text("spotify_autoplay"),
         autoplays: [
             texts.text("spotify_autoplay_account"),

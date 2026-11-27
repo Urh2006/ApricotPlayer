@@ -204,7 +204,7 @@ impl Default for SettingsDocument {
             enable_background_playback: false,
             player_speed: "1.0".to_owned(),
             player_pitch: "1.0".to_owned(),
-            youtube_mark_watched: false,
+            youtube_mark_watched: true,
             speed_audio_mode: RUBBERBAND_SPEED_MODE.to_owned(),
             show_video_details_by_default: false,
             direct_link_enter_action: "play".to_owned(),

@@ -408,6 +408,110 @@ pub fn canonical_channel_url(value: &str) -> Option<String> {
     Some(url.as_str().trim_end_matches('/').to_owned())
 }
 
+/// The channels a subscription check already knows about from the uploads
+/// feeds, and the ones yt-dlp still checks (2.2.0).
+#[derive(Debug, Default)]
+pub struct SubscriptionPrefilter {
+    /// Channels whose newest videos did not change: the same result yt-dlp
+    /// would give, without new videos.
+    pub results: Vec<SubscriptionCheckResult>,
+    /// `(url, title)` of the channels yt-dlp checks: new videos, no feed or
+    /// a feed that could not be read.
+    pub remaining: Vec<(String, String)>,
+}
+
+/// The `UC...` id of a `/channel/UC...` subscription.
+#[must_use]
+pub fn subscription_channel_id(url: &str) -> Option<String> {
+    let canonical = canonical_channel_url(url)?;
+    let id = canonical.split("/channel/").nth(1)?;
+    (id.starts_with("UC") && !id.contains('/')).then(|| id.to_owned())
+}
+
+/// Reads the uploads feed of every channel with `fetch` (its newest video
+/// ids) on `workers` threads. A channel whose newest five videos are all
+/// known, or that is checked for the first time, is done; the rest go to
+/// yt-dlp, so new videos keep yt-dlp's titles, durations and views.
+pub fn prefilter_subscription_checks(
+    subscriptions: &[Subscription],
+    fetch: &(dyn Fn(&str) -> Result<Vec<String>, String> + Sync),
+    workers: usize,
+) -> SubscriptionPrefilter {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let outcomes = std::sync::Mutex::new(vec![None; subscriptions.len()]);
+    std::thread::scope(|scope| {
+        for _ in 0..workers.clamp(1, 16) {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(subscription) = subscriptions.get(index) else {
+                        break;
+                    };
+                    let outcome = prefilter_one(subscription, fetch);
+                    if let Ok(mut outcomes) = outcomes.lock() {
+                        outcomes[index] = outcome;
+                    }
+                }
+            });
+        }
+    });
+    let outcomes = outcomes.into_inner().unwrap_or_default();
+    let mut prefilter = SubscriptionPrefilter::default();
+    for (subscription, outcome) in subscriptions.iter().zip(outcomes) {
+        match outcome {
+            Some(result) => prefilter.results.push(SubscriptionCheckResult {
+                url: subscription.url.clone(),
+                result,
+            }),
+            None => prefilter
+                .remaining
+                .push((subscription.url.clone(), subscription.title.clone())),
+        }
+    }
+    prefilter
+}
+
+/// The feed's newest five videos when nothing is new, yt-dlp's earlier
+/// error for a channel without videos (no feed, HTTP 404), otherwise `None`.
+fn prefilter_one(
+    subscription: &Subscription,
+    fetch: &(dyn Fn(&str) -> Result<Vec<String>, String> + Sync),
+) -> Option<Result<Vec<MediaItem>, String>> {
+    let channel_id = subscription_channel_id(&subscription.url)?;
+    let ids = match fetch(&channel_id) {
+        Ok(ids) => ids,
+        Err(error) if error == "HTTP 404" && !subscription.last_error.is_empty() => {
+            return Some(Err(subscription.last_error.clone()));
+        }
+        Err(_) => return None,
+    };
+    let urls = ids
+        .iter()
+        .take(5)
+        .map(|id| format!("https://www.youtube.com/watch?v={id}"))
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        return None;
+    }
+    let known: HashSet<&str> = subscription
+        .latest_urls
+        .iter()
+        .map(String::as_str)
+        .collect();
+    if !known.is_empty() && !urls.iter().all(|url| known.contains(url.as_str())) {
+        return None;
+    }
+    urls.into_iter()
+        .map(|url| {
+            let mut item = MediaItem::from_direct_link(&url)?;
+            item.source = apricot_core::MediaSource::Youtube;
+            item.kind = MediaKind::Video;
+            Some(item)
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(Ok)
+}
+
 fn subscription_target(item: &MediaItem) -> Option<(String, String, Option<String>)> {
     let mut channel_url = if item.kind == MediaKind::Channel {
         item.url.as_ref().map(Url::to_string).unwrap_or_default()
@@ -458,6 +562,69 @@ fn sort_subscriptions(subscriptions: &mut [Subscription]) {
 #[cfg(test)]
 mod tests {
     use std::fs;
+
+    #[test]
+    fn the_uploads_feeds_leave_only_changed_channels_to_ytdlp() {
+        let channel = |id: &str, latest: &[&str]| {
+            let mut subscription =
+                Subscription::new(id, format!("https://www.youtube.com/channel/{id}"), 0.0);
+            subscription.latest_urls = latest
+                .iter()
+                .map(|video| format!("https://www.youtube.com/watch?v={video}"))
+                .collect();
+            subscription
+        };
+        let subscriptions = [
+            channel("UCsame", &["a", "b", "c", "d", "e", "f"]),
+            channel("UCnew", &["a", "b", "c", "d", "e"]),
+            channel("UCfirst", &[]),
+            channel("UCbroken", &["a"]),
+            {
+                let mut empty = channel("UCempty", &[]);
+                empty.last_error = "This channel does not have a videos tab".to_owned();
+                empty
+            },
+            Subscription::new("handle", "https://www.youtube.com/@handle", 0.0),
+        ];
+        let fetch = |id: &str| match id {
+            "UCsame" | "UCfirst" => Ok(["a", "b", "c", "d", "e", "f"].map(str::to_owned).to_vec()),
+            "UCnew" => Ok(["z", "a", "b", "c", "d"].map(str::to_owned).to_vec()),
+            "UCempty" => Err("HTTP 404".to_owned()),
+            _ => Err("timed out".to_owned()),
+        };
+        let prefilter = super::prefilter_subscription_checks(&subscriptions, &fetch, 3);
+        let done = prefilter
+            .results
+            .iter()
+            .map(|result| result.url.rsplit('/').next().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(done, ["UCsame", "UCfirst", "UCempty"]);
+        assert_eq!(
+            prefilter.results[2].result.as_ref().unwrap_err(),
+            "This channel does not have a videos tab"
+        );
+        let items = prefilter.results[0].result.as_ref().unwrap();
+        assert_eq!(items.len(), 5);
+        assert_eq!(
+            items[0].url.as_ref().unwrap().as_str(),
+            "https://www.youtube.com/watch?v=a"
+        );
+        let remaining = prefilter
+            .remaining
+            .iter()
+            .map(|(_, title)| title.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(remaining, ["UCnew", "UCbroken", "handle"]);
+        assert_eq!(
+            super::subscription_channel_id("https://www.youtube.com/channel/UCabc/videos")
+                .as_deref(),
+            Some("UCabc")
+        );
+        assert_eq!(
+            super::subscription_channel_id("https://www.youtube.com/@abc"),
+            None
+        );
+    }
 
     use apricot_core::{MediaId, MediaKind, MediaSource};
     use apricot_storage::{Subscription, SubscriptionFile};

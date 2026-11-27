@@ -438,22 +438,6 @@ impl Shell {
         Ok(())
     }
 
-    /// Called before applying a newly checked experimental history control.
-    pub fn settings_confirm_spotify_history(
-        &mut self,
-        ui: &mut dyn ShellUi,
-        checked: bool,
-    ) -> bool {
-        !checked
-            || self.application.spotify_settings().listening_history
-            || ui.confirm_spotify_history(
-                &self.text("spotify_listening_history_warning"),
-                &self.text("yes"),
-                &self.text("no"),
-                &self.text("cancel"),
-            )
-    }
-
     /// Windows `sync_bound_control`: applies one visible value. `gains`
     /// are the visible equalizer sliders.
     ///
@@ -1123,48 +1107,6 @@ mod tests {
         assert_eq!(super::canonical_shortcut_text(" ctrl-f8 "), "Ctrl+F8");
         assert_eq!(super::canonical_shortcut_text("f8"), "F8");
         assert_eq!(super::canonical_shortcut_text("not a key"), "not a key");
-    }
-
-    #[test]
-    fn experimental_history_requires_yes_and_reprompts_after_disabling() {
-        let mut shell = crate::tests::keyboard::shell();
-        let mut ui = crate::tests::equalizer::Ui::default();
-        assert!(!shell.application.spotify_settings().listening_history);
-        assert!(!shell.settings_confirm_spotify_history(&mut ui, true));
-        assert!(!shell.application.spotify_settings().listening_history);
-        assert_eq!(ui.questions.len(), 1);
-        assert!(ui.questions[0].contains("experimental"));
-        assert!(ui.questions[0].contains("Spotify account"));
-        ui.answer_yes = true;
-        assert!(shell.settings_confirm_spotify_history(&mut ui, true));
-        shell
-            .settings_apply(
-                &SettingsBinding::SpotifyListeningHistory,
-                &SettingsInput::Checked(true),
-                &EqualizerGains::new(),
-            )
-            .unwrap();
-        assert!(shell.application.spotify_settings().listening_history);
-        assert!(shell.settings_confirm_spotify_history(&mut ui, true));
-        assert_eq!(
-            ui.questions.len(),
-            2,
-            "already accepted draft must not ask twice"
-        );
-        shell
-            .settings_apply(
-                &SettingsBinding::SpotifyListeningHistory,
-                &SettingsInput::Checked(false),
-                &EqualizerGains::new(),
-            )
-            .unwrap();
-        assert!(shell.settings_confirm_spotify_history(&mut ui, true));
-        assert_eq!(ui.questions.len(), 3);
-        shell.application.cancel_settings();
-        assert!(
-            !shell.application.spotify_settings().listening_history,
-            "Cancel must not save opt-in"
-        );
     }
 
     #[test]

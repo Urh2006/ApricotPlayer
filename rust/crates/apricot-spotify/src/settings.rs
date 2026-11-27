@@ -99,6 +99,10 @@ pub struct SpotifySettings {
     pub library_order: LibraryOrder,
     /// Keep audio keys between sessions ([`crate::key_cache`], beta 24).
     pub key_cache: bool,
+    /// The defaults the file has seen: 2.2.0 turns listening history and
+    /// the key cache on once, also in older files (Urh).
+    #[serde(default)]
+    pub defaults: u8,
 }
 
 impl SpotifySettings {
@@ -113,13 +117,17 @@ impl Default for SpotifySettings {
         Self {
             quality: Quality::VeryHigh,
             normalisation: false,
-            listening_history: false,
+            listening_history: true,
             autoplay: Autoplay::Account,
             library_order: LibraryOrder::Recents,
-            key_cache: false,
+            key_cache: true,
+            defaults: CURRENT_DEFAULTS,
         }
     }
 }
+
+/// 1: 2.2.0 listening history and key cache on.
+const CURRENT_DEFAULTS: u8 = 1;
 
 static FILE: OnceLock<PathBuf> = OnceLock::new();
 
@@ -132,8 +140,22 @@ pub fn set_folder(app_data: &Path) {
 pub fn load() -> SpotifySettings {
     FILE.get()
         .and_then(|file| std::fs::read(file).ok())
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .and_then(|bytes| serde_json::from_slice::<SpotifySettings>(&bytes).ok())
+        .map(SpotifySettings::with_current_defaults)
         .unwrap_or_default()
+}
+
+impl SpotifySettings {
+    /// Older files get 2.2.0's defaults once; later choices stay.
+    #[must_use]
+    pub const fn with_current_defaults(mut self) -> Self {
+        if self.defaults < 1 {
+            self.listening_history = true;
+            self.key_cache = true;
+        }
+        self.defaults = CURRENT_DEFAULTS;
+        self
+    }
 }
 
 /// Saves the settings.
@@ -164,15 +186,23 @@ mod tests {
             serde_json::from_str(r#"{"library_order":"recently_added"}"#).unwrap();
         assert_eq!(sorted.library_order.id(), "Recently Added");
         assert!(!partial.normalisation);
-        assert!(!partial.listening_history);
-        assert!(!SpotifySettings::default().listening_history);
-        let opt_in: SpotifySettings =
-            serde_json::from_str(r#"{"listening_history":true}"#).unwrap();
-        assert!(opt_in.listening_history);
+        assert!(partial.listening_history);
+        assert!(SpotifySettings::default().listening_history);
+        assert!(SpotifySettings::default().key_cache);
+        // A file from before 2.2.0 gets both on once; a later choice stays.
+        let old: SpotifySettings =
+            serde_json::from_str(r#"{"listening_history":false,"key_cache":false}"#).unwrap();
+        assert_eq!(old.defaults, 0);
+        let old = old.with_current_defaults();
+        assert!(old.listening_history && old.key_cache);
+        let off: SpotifySettings =
+            serde_json::from_str(r#"{"listening_history":false,"key_cache":false,"defaults":1}"#)
+                .unwrap();
+        let off = off.with_current_defaults();
+        assert!(!off.listening_history && !off.key_cache);
         assert_eq!(
-            serde_json::from_str::<SpotifySettings>(&serde_json::to_string(&opt_in).unwrap())
-                .unwrap(),
-            opt_in
+            serde_json::from_str::<SpotifySettings>(&serde_json::to_string(&off).unwrap()).unwrap(),
+            off
         );
         assert_eq!(Quality::VeryHigh.kbps(), 320);
         assert_eq!(Autoplay::Off.session_value(), Some(false));

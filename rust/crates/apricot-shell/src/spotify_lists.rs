@@ -1672,10 +1672,10 @@ impl Shell {
     /// About on an artist page (2.2.0): the biography in the lyrics window.
     fn browse_show_artist_about(&self, ui: &mut dyn ShellUi, artist: &str, title: String) {
         let catalog = self.catalog();
-        match apricot_spotify::catalog::artist_biography(artist) {
-            Some(text) => ui.open_lyrics(crate::LyricsDialog::text(
+        match apricot_spotify::catalog::artist_about(artist) {
+            Some(about) => ui.open_lyrics(crate::LyricsDialog::text(
                 title,
-                &text,
+                &apricot_app::spotify::artist_about_text(&catalog, &about),
                 catalog.text("spotify_artist_about_copy").to_owned(),
                 catalog.text("spotify_artist_about_copied").to_owned(),
                 catalog.text("back").to_owned(),

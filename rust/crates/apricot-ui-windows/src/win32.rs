@@ -468,6 +468,10 @@ struct PendingYoutubeTrendingApi {
 
 struct PendingSubscriptionCheck {
     manual: bool,
+    /// 2.2.0: the uploads feeds are read first; yt-dlp then checks only
+    /// the channels in `queue` that changed (all of them when the feeds
+    /// could not be read).
+    prefilter: Option<Receiver<apricot_app::SubscriptionPrefilter>>,
     queue: VecDeque<(String, String)>,
     current: Option<(u64, String, String)>,
     results: Vec<SubscriptionCheckResult>,
@@ -5918,6 +5922,9 @@ unsafe fn show_subscriptions(window: HWND) {
     );
     set_control_text(state, state.subscription_filter, "filter_category");
     set_control_text(state, state.subscription_set_category, "set_category");
+    // The list still holds the previous screen's rows; its selection is not
+    // a subscription, so the list starts at the top (Urh, 2.2.0).
+    SendMessageW(state.list, LB_RESETCONTENT, None, None);
     refresh_subscriptions(state, true, None);
     layout_controls_state(window, state);
     prewarm_for_saved_list(state, apricot_app::SavedList::Subscriptions);
@@ -7911,8 +7918,10 @@ unsafe fn check_subscriptions(window: HWND, manual: bool) {
         }
         return;
     }
+    let subscriptions = state.application.subscriptions().to_vec();
     state.pending_subscription_check = Some(PendingSubscriptionCheck {
         manual,
+        prefilter: Some(start_subscription_prefilter(subscriptions)),
         queue,
         current: None,
         results: Vec::new(),
@@ -7931,7 +7940,29 @@ unsafe fn check_subscriptions(window: HWND, manual: bool) {
         YOUTUBE_TIMER_INTERVAL_MS,
         None,
     );
-    start_next_subscription_check(window);
+    // The feeds answer on the timer, then yt-dlp starts.
+}
+
+/// Reads every channel's uploads feed in the background.
+fn start_subscription_prefilter(
+    subscriptions: Vec<apricot_storage::Subscription>,
+) -> Receiver<apricot_app::SubscriptionPrefilter> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let client = apricot_platform::youtube_uploads_feed::client();
+        let fetch = |channel_id: &str| match &client {
+            Ok(client) => {
+                apricot_platform::youtube_uploads_feed::latest_video_ids(client, channel_id)
+            }
+            Err(error) => Err(error.clone()),
+        };
+        let _ = sender.send(apricot_app::prefilter_subscription_checks(
+            &subscriptions,
+            &fetch,
+            16,
+        ));
+    });
+    receiver
 }
 
 unsafe fn configure_subscription_timer(window: HWND) {
@@ -8075,6 +8106,31 @@ unsafe fn start_next_subscription_check(window: HWND) {
 }
 
 unsafe fn poll_subscription_runtime(window: HWND) {
+    let prefiltered = {
+        let Some(pending) =
+            state_mut(window).and_then(|state| state.pending_subscription_check.as_mut())
+        else {
+            return;
+        };
+        match pending.prefilter.as_ref().map(Receiver::try_recv) {
+            None => false,
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => return,
+            Some(Ok(prefilter)) => {
+                pending.prefilter = None;
+                pending.results.extend(prefilter.results);
+                pending.queue = prefilter.remaining.into();
+                true
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                pending.prefilter = None;
+                true
+            }
+        }
+    };
+    if prefiltered {
+        start_next_subscription_check(window);
+        return;
+    }
     let update = {
         let Some(state) = state_mut(window) else {
             return;
@@ -8439,7 +8495,9 @@ unsafe fn navigate_back_impl(window: HWND, keep_playing: bool) {
         }
         Route::Subscriptions => {
             state.view = MainView::Subscriptions;
+            SendMessageW(state.list, LB_RESETCONTENT, None, None);
             refresh_subscriptions(state, true, None);
+            select_list_index(state.list, saved_index);
             layout_controls_state(window, state);
         }
         Route::RssFeeds => {
@@ -12385,9 +12443,11 @@ unsafe fn refresh_youtube_collection(state: &mut WindowState, focus: bool) {
     // result list.
     crate::accessibility_win32::set_control_name(state.list, catalog.text("result_list"));
     if collection.phase() == YoutubeCollectionPhase::LoadingInitial {
-        let loading = catalog
-            .text("loading_playlist")
-            .replace("{title}", collection.title());
+        let loading = apricot_app::youtube_account::collection_loading_text(
+            &catalog,
+            collection.kind(),
+            collection.title(),
+        );
         add_list_string(state.list, &loading);
         SendMessageW(state.list, LB_SETCURSEL, Some(WPARAM(0)), None);
         set_status(state, &loading, false);

@@ -218,6 +218,22 @@ pub fn channels_to_import(
         .collect()
 }
 
+/// The loading text of a `YouTube` list: My `YouTube` lists say only
+/// "Loading.", since the user has just heard the list's name (Urh, 2.2.0);
+/// playlists and channels keep Python's `loading_playlist`.
+#[must_use]
+pub fn collection_loading_text(
+    catalog: &TranslationCatalog,
+    kind: apricot_media::YoutubeCollectionKind,
+    title: &str,
+) -> String {
+    if matches!(kind, apricot_media::YoutubeCollectionKind::Account(_)) {
+        catalog.text("my_youtube_loading").to_owned()
+    } else {
+        catalog.text("loading_playlist").replace("{title}", title)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

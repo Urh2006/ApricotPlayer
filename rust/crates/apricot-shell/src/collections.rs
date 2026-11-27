@@ -294,9 +294,11 @@ impl Shell {
         let count = collection.items().len();
         let (rows, selected, status) =
             if collection.phase() == YoutubeCollectionPhase::LoadingInitial {
-                let loading = self
-                    .text("loading_playlist")
-                    .replace("{title}", collection.title());
+                let loading = apricot_app::youtube_account::collection_loading_text(
+                    &self.catalog(),
+                    collection.kind(),
+                    collection.title(),
+                );
                 (vec![loading.clone()], 0, loading)
             } else if count == 0 {
                 let none = self.text("no_results");

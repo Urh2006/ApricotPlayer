@@ -534,6 +534,71 @@ pub fn name_artist_sections(catalog: &TranslationCatalog, items: &mut [CatalogIt
     }
 }
 
+/// About as text, one fact per line, in Spotify's order: monthly
+/// listeners, followers, world rank, where people listen, the biography and
+/// the links (2.2.0).
+#[must_use]
+pub fn artist_about_text(
+    catalog: &TranslationCatalog,
+    about: &apricot_spotify::catalog::ArtistAbout,
+) -> String {
+    let count = |key: &str, value: u64| catalog.text(key).replace("{count}", &grouped(value));
+    let mut lines = Vec::new();
+    if let Some(value) = about.monthly_listeners {
+        lines.push(count("spotify_artist_monthly_listeners", value));
+    }
+    if let Some(value) = about.followers {
+        lines.push(count("spotify_artist_followers", value));
+    }
+    if let Some(rank) = about.world_rank {
+        lines.push(
+            catalog
+                .text("spotify_artist_world_rank")
+                .replace("{rank}", &grouped(rank)),
+        );
+    }
+    if !about.top_cities.is_empty() {
+        lines.push(catalog.text("spotify_artist_top_cities").to_owned());
+        for (city, country, listeners) in &about.top_cities {
+            let place = if country.is_empty() {
+                city.clone()
+            } else {
+                format!("{city}, {country}")
+            };
+            lines.push(
+                catalog
+                    .text("spotify_artist_city_listeners")
+                    .replace("{place}", &place)
+                    .replace("{count}", &grouped(*listeners)),
+            );
+        }
+    }
+    if !about.biography.is_empty() {
+        lines.push(about.biography.clone());
+    }
+    for (name, url) in &about.links {
+        lines.push(if name.is_empty() {
+            url.clone()
+        } else {
+            format!("{name}: {url}")
+        });
+    }
+    lines.join("\n")
+}
+
+/// `1234567` as `1,234,567`, the way Spotify writes it.
+fn grouped(value: u64) -> String {
+    let digits = value.to_string();
+    let mut text = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    text
+}
+
 /// The name of an artist page part's list: the part, then the artist.
 pub fn artist_section_title(catalog: &TranslationCatalog, row: &CatalogItem) -> String {
     let Some((_, section)) = apricot_spotify::catalog::parse_artist_section_uri(&row.uri) else {
@@ -747,6 +812,30 @@ mod tests {
         marks.clear();
         assert!(marks.is_empty());
         assert!(!marks.is_all());
+    }
+
+    #[test]
+    fn artist_about_lists_spotify_facts_before_the_biography() {
+        let about = apricot_spotify::catalog::ArtistAbout {
+            monthly_listeners: Some(12_345_678),
+            followers: Some(987),
+            world_rank: Some(42),
+            top_cities: vec![("Ljubljana".into(), "SI".into(), 1_000)],
+            biography: "Line one\nLine two".into(),
+            links: vec![("Instagram".into(), "https://instagram.com/x".into())],
+        };
+        let catalog = crate::embedded_catalog("en");
+        let text = artist_about_text(&catalog, &about);
+        let lines = text.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], "12,345,678 monthly listeners");
+        assert_eq!(lines[1], "987 followers");
+        assert_eq!(lines[2], "#42 in the world");
+        assert_eq!(lines[3], "Where people listen:");
+        assert_eq!(lines[4], "Ljubljana, SI: 1,000 listeners");
+        assert_eq!(&lines[5..7], ["Line one", "Line two"]);
+        assert_eq!(lines[7], "Instagram: https://instagram.com/x");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1_000), "1,000");
     }
 
     #[test]

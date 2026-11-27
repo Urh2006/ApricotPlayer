@@ -135,8 +135,8 @@ unsafe fn open_feed(window: HWND, feed: apricot_app::YoutubeAccountFeed) {
             YoutubeCollectionKind::Account(feed),
         ) {
             Ok(work) => {
-                let message = catalog.text("loading_playlist").replace("{title}", &title);
-                set_status(state, &message, false);
+                let message = catalog.text("my_youtube_loading");
+                set_status(state, message, false);
                 work
             }
             Err(error) => {

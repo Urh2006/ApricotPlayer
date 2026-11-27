@@ -2559,6 +2559,7 @@ mod tests {
             autoplay: Autoplay::Off,
             library_order: LibraryOrder::Alphabetical,
             key_cache: true,
+            defaults: 1,
         };
         let model = SettingsScreenModel::build_with_spotify(
             &english_catalog(),
