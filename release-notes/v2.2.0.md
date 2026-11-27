@@ -8,6 +8,7 @@
 - Sign out of YouTube in My YouTube forgets the sign-in on this computer. Your own browser stays signed in.
 - Settings, Cookies has a new choice, Mark played videos as watched on YouTube. When it is on and you are signed in, every YouTube video you play is also added to your YouTube history. It is on by default.
 - A Spotify artist page has a new part at the end, About, the way Spotify shows it: monthly listeners, followers, the rank in the world, the cities where people listen, the biography and the artist's links, one per line in a text window with Copy and Back.
+- Spotify audiobooks open. Enter on an audiobook lists its chapters, which play like podcast episodes. A chapter your Spotify account has no access to says so, as other unavailable Spotify items do; Spotify sells audiobooks only in some countries.
 
 ## Changed
 

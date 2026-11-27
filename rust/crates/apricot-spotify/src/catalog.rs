@@ -73,7 +73,8 @@ impl ItemKind {
     fn from_typename(typename: &str) -> Option<Self> {
         Some(match typename {
             "Track" => Self::Track,
-            "Episode" => Self::Episode,
+            // An audiobook's chapters are episodes (`spotify:episode:`).
+            "Episode" | "Chapter" => Self::Episode,
             "Album" => Self::Album,
             "Artist" => Self::Artist,
             "Playlist" => Self::Playlist,
@@ -170,6 +171,19 @@ fn text<'a>(value: &'a Value, pointer: &str) -> &'a str {
     value.pointer(pointer).and_then(Value::as_str).unwrap_or("")
 }
 
+/// The authors of an audiobook (`authorsV2: [{name}]`).
+fn author_names(list: &Value) -> String {
+    list.as_array()
+        .map(|authors| {
+            authors
+                .iter()
+                .filter_map(|author| author.get("name").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
 fn names(list: &Value) -> String {
     list.pointer("/items")
         .and_then(Value::as_array)
@@ -237,6 +251,7 @@ fn wrapper_uri(value: &Value) -> String {
 }
 
 /// One row from any search, library, album, playlist or show entry.
+#[allow(clippy::too_many_lines)] // One field after another, in `CatalogItem` order.
 pub fn parse_item(value: &Value) -> CatalogItem {
     let Some(node) = entity(value) else {
         return CatalogItem::unavailable(wrapper_uri(value));
@@ -288,9 +303,20 @@ pub fn parse_item(value: &Value) -> CatalogItem {
         ItemKind::Show => text(node, "/publisher/name").to_owned(),
         ItemKind::Episode => {
             let show = text(node, "/podcastV2/data/name");
-            show.to_owned()
+            if show.is_empty() {
+                text(node, "/audiobookV2/data/name").to_owned()
+            } else {
+                show.to_owned()
+            }
         }
-        ItemKind::Audiobook => names(&node["authors"]),
+        ItemKind::Audiobook => {
+            let authors = names(&node["authors"]);
+            if authors.is_empty() {
+                author_names(&node["authorsV2"])
+            } else {
+                authors
+            }
+        }
         _ => String::new(),
     };
     let duration_ms = node
@@ -1554,7 +1580,13 @@ fn artist_about_of(artist: &Value) -> ArtistAbout {
                 .iter()
                 .filter_map(|link| {
                     let url = text(link, "/url").trim().to_owned();
-                    (!url.is_empty()).then(|| (text(link, "/name").trim().to_owned(), url))
+                    // Spotify writes FACEBOOK; About says Facebook.
+                    let name = text(link, "/name").trim().to_lowercase();
+                    let mut letters = name.chars();
+                    let name = letters.next().map_or_else(String::new, |first| {
+                        first.to_uppercase().chain(letters).collect()
+                    });
+                    (!url.is_empty()).then_some((name, url))
                 })
                 .collect()
         })
@@ -1878,6 +1910,9 @@ pub async fn show(
     let show = data
         .get("podcastUnionV2")
         .ok_or_else(|| ApiError::Shape("queryPodcastEpisodes".into()))?;
+    if text(show, "/__typename") == "Audiobook" {
+        return audiobook(api, session, uri, offset).await;
+    }
     Ok(Collection {
         uri: uri.to_owned(),
         name: text(show, "/name").to_owned(),
@@ -1889,6 +1924,38 @@ pub async fn show(
         revision: String::new(),
         format: String::new(),
         page: parse_page(&show["episodesV2"], offset),
+    })
+}
+
+/// An audiobook (2.2.0): its chapters, which play like podcast episodes
+/// when the account has access to the book.
+pub async fn audiobook(
+    api: &Api,
+    session: &Session,
+    uri: &str,
+    offset: u64,
+) -> Result<Collection, ApiError> {
+    let data = api
+        .pathfinder(
+            session,
+            "queryBookChapters",
+            json!({ "uri": uri, "offset": offset, "limit": PAGE }),
+        )
+        .await?;
+    let book = data
+        .get("podcastUnionV2")
+        .ok_or_else(|| ApiError::Shape("queryBookChapters".into()))?;
+    Ok(Collection {
+        uri: uri.to_owned(),
+        name: text(book, "/name").to_owned(),
+        subtitle: author_names(&book["authorsV2"]),
+        description: String::new(),
+        can_edit_items: false,
+        can_edit_metadata: false,
+        saved: None,
+        revision: String::new(),
+        format: String::new(),
+        page: parse_page(&book["chaptersV2"], offset),
     })
 }
 
@@ -2039,6 +2106,43 @@ pub fn parse_saved_states(data: &Value, uris: &[String]) -> Result<Vec<bool>, Ap
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audiobook_chapters_are_episodes_and_say_when_they_are_locked() {
+        let chapter = serde_json::json!({
+            "__typename": "ContextChapterV2",
+            "entity": {
+                "__typename": "ChapterResponseWrapper",
+                "_uri": "spotify:episode:0bnJ",
+                "data": {
+                    "__typename": "Chapter",
+                    "uri": "spotify:episode:0bnJ",
+                    "name": "Opening Credits",
+                    "duration": { "totalMilliseconds": 23000 },
+                    "audiobookV2": { "data": { "name": "The Book" } },
+                    "playability": { "playable": false, "reason": "PAYMENT_REQUIRED" }
+                }
+            }
+        });
+        let item = parse_item(&chapter);
+        assert_eq!(item.kind, ItemKind::Episode);
+        assert_eq!(item.name, "Opening Credits");
+        assert_eq!(item.subtitle, "The Book");
+        assert_eq!(item.duration_ms, Some(23000));
+        assert!(!item.playable);
+        let book = serde_json::json!({
+            "__typename": "AudiobookResponseWrapper",
+            "data": {
+                "__typename": "Audiobook",
+                "uri": "spotify:show:6SJQ",
+                "name": "The Book",
+                "authorsV2": [{ "name": "A. Author" }, { "name": "B. Author" }]
+            }
+        });
+        let item = parse_item(&book);
+        assert_eq!(item.kind, ItemKind::Audiobook);
+        assert_eq!(item.subtitle, "A. Author, B. Author");
+    }
 
     #[test]
     fn artist_page_rows_open_their_part_and_stand_for_the_artist() {

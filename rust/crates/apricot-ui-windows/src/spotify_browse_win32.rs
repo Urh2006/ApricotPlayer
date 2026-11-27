@@ -1698,7 +1698,8 @@ pub(super) unsafe fn open_item(window: HWND, item: &CatalogItem) {
         ItemKind::Album => Source::Album(item.uri.clone()),
         ItemKind::Playlist => Source::Playlist(item.uri.clone()),
         ItemKind::Artist => Source::Artist(item.uri.clone()),
-        ItemKind::Show => Source::Show(item.uri.clone()),
+        // An audiobook opens like a show: its chapters (2.2.0).
+        ItemKind::Show | ItemKind::Audiobook => Source::Show(item.uri.clone()),
         ItemKind::LikedSongs => Source::LikedSongs,
         ItemKind::Folder => Source::Library {
             filter: LibraryFilter::All,
@@ -1714,7 +1715,7 @@ pub(super) unsafe fn open_item(window: HWND, item: &CatalogItem) {
             }
             return;
         }
-        _ => {
+        ItemKind::Genre => {
             if let Some(state) = state(window) {
                 let texts = super::spotify::catalog(state);
                 let text = texts

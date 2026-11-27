@@ -1751,7 +1751,8 @@ impl Shell {
             ItemKind::Album => Source::Album(item.uri.clone()),
             ItemKind::Playlist => Source::Playlist(item.uri.clone()),
             ItemKind::Artist => Source::Artist(item.uri.clone()),
-            ItemKind::Show => Source::Show(item.uri.clone()),
+            // An audiobook opens like a show: its chapters (2.2.0).
+            ItemKind::Show | ItemKind::Audiobook => Source::Show(item.uri.clone()),
             ItemKind::LikedSongs => Source::LikedSongs,
             ItemKind::Folder => Source::Library {
                 filter: LibraryFilter::All,
@@ -1762,7 +1763,7 @@ impl Shell {
                 ui.set_status(&self.text("spotify_unplayable"), true);
                 return;
             }
-            _ => {
+            ItemKind::Genre => {
                 let texts = self.catalog();
                 let text = texts
                     .text("rust_feature_unavailable")
